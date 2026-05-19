@@ -134,6 +134,10 @@ class ExperimentRunner(tune.Trainable):
         with open(pickle_path, 'wb') as f:
             pickle.dump(self.picklables, f)
 
+        policy_weights_path = os.path.join(checkpoint_dir, 'policy_weights.pkl')
+        with open(policy_weights_path, 'wb') as f:
+            pickle.dump(self.policy.get_weights(), f)
+
         if self._variant['run_params'].get('checkpoint_replay_pool', False):
             self._save_replay_pool(checkpoint_dir)
 

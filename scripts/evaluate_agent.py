@@ -34,6 +34,7 @@ except ImportError:
 from softlearning.environments.utils import get_environment_from_params
 from softlearning.policies.utils import get_policy_from_variant
 from softlearning.samplers import rollouts
+from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
 
 
 def parse_args():
@@ -91,12 +92,23 @@ def load_variant(experiment_root, variant_file):
         return json.load(f)
 
 
-def load_checkpoint(checkpoint_dir):
+def load_policy_weights(checkpoint_dir):
+    """Load policy weights from the lightweight checkpoint file if present."""
+    weights_path = os.path.join(checkpoint_dir, 'policy_weights.pkl')
+    if os.path.exists(weights_path):
+        with open(weights_path, 'rb') as f:
+            return pickle.load(f)
+
     checkpoint_file = os.path.join(checkpoint_dir, 'checkpoint.pkl')
     if not os.path.exists(checkpoint_file):
-        raise FileNotFoundError('Checkpoint file not found: %s' % checkpoint_file)
+        raise FileNotFoundError(
+            'No policy_weights.pkl or checkpoint.pkl in: %s' % checkpoint_dir)
+    _apply_keras_hdf5_compat_patches()
     with open(checkpoint_file, 'rb') as f:
-        return pickle.load(f)
+        picklable = pickle.load(f)
+    if isinstance(picklable, dict) and 'policy_weights' in picklable:
+        return picklable['policy_weights']
+    raise KeyError('policy_weights not found in checkpoint.pkl')
 
 
 def deep_update(original, override):
@@ -126,12 +138,22 @@ def get_eval_environment(variant, override_path=None):
     return get_environment_from_params(eval_env_params)
 
 
-def get_policy(variant, environment, picklable):
+def get_policy(variant, environment, policy_weights):
     policy = get_policy_from_variant(variant, environment, Qs=[None])
-    if 'policy_weights' not in picklable:
-        raise KeyError('policy_weights not found in checkpoint.')
-    policy.set_weights(picklable['policy_weights'])
+    policy.set_weights(policy_weights)
     return policy
+
+
+def default_max_path_length(variant, cli_default):
+    """Use PV episode length when the config targets PVTracking."""
+    try:
+        domain = variant['environment_params']['training']['domain']
+        if domain == 'PVTracking':
+            return 63
+    except (KeyError, TypeError):
+        pass
+    sampler_kwargs = variant.get('sampler_params', {}).get('kwargs', {})
+    return sampler_kwargs.get('max_path_length', cli_default)
 
 
 def rollout_metrics(paths):
@@ -212,17 +234,21 @@ def main(args):
     tf.keras.backend.set_session(session)
 
     variant = load_variant(experiment_root, args.variant_file)
-    picklable = load_checkpoint(checkpoint_path)
+    policy_weights = load_policy_weights(checkpoint_path)
 
     environment = get_eval_environment(variant, args.eval_env_override)
-    policy = get_policy(variant, environment, picklable)
+    policy = get_policy(variant, environment, policy_weights)
+
+    path_length = args.max_path_length
+    if path_length == 1000:
+        path_length = default_max_path_length(variant, path_length)
 
     with policy.set_deterministic(args.deterministic):
         paths = rollouts(
             args.num_rollouts,
             environment,
             policy,
-            path_length=args.max_path_length,
+            path_length=path_length,
             render_mode=args.render_mode)
 
     rewards, lengths = rollout_metrics(paths)
@@ -232,7 +258,7 @@ def main(args):
         rewards,
         lengths,
         deterministic=args.deterministic,
-        max_path_length=args.max_path_length)
+        max_path_length=path_length)
     reward_plot = plot_rewards(args.outdir, rewards)
     length_plot = plot_lengths(args.outdir, lengths)
 

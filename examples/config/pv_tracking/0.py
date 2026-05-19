@@ -30,5 +30,7 @@ params = {
         'target_entropy': -2,
         'max_model_t': None,
         'rollout_schedule': [1, 10, 1, 1],
+        # ~10 full episodes (63 steps each) before policy training
+        'n_initial_exploration_steps': 630,
     }
 }

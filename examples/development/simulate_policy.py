@@ -44,10 +44,18 @@ def simulate_policy(args):
     with open(variant_path, 'r') as f:
         variant = json.load(f)
 
-    with session.as_default():
-        pickle_path = os.path.join(checkpoint_path, 'checkpoint.pkl')
-        with open(pickle_path, 'rb') as f:
-            picklable = pickle.load(f)
+    policy_weights = None
+    weights_path = os.path.join(checkpoint_path, 'policy_weights.pkl')
+    if os.path.exists(weights_path):
+        with open(weights_path, 'rb') as f:
+            policy_weights = pickle.load(f)
+
+    if policy_weights is None:
+        with session.as_default():
+            pickle_path = os.path.join(checkpoint_path, 'checkpoint.pkl')
+            with open(pickle_path, 'rb') as f:
+                picklable = pickle.load(f)
+            policy_weights = picklable['policy_weights']
 
     environment_params = (
         variant['environment_params']['evaluation']
@@ -57,13 +65,20 @@ def simulate_policy(args):
 
     policy = (
         get_policy_from_variant(variant, evaluation_environment, Qs=[None]))
-    policy.set_weights(picklable['policy_weights'])
+    policy.set_weights(policy_weights)
+
+    path_length = args.max_path_length
+    if path_length == 1000:
+        domain = variant.get('environment_params', {}).get(
+            'training', {}).get('domain')
+        if domain == 'PVTracking':
+            path_length = 63
 
     with policy.set_deterministic(args.deterministic):
         paths = rollouts(args.num_rollouts,
                          evaluation_environment,
                          policy,
-                         path_length=args.max_path_length,
+                         path_length=path_length,
                          render_mode=args.render_mode)
 
     if args.render_mode != 'human':
