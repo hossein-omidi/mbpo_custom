@@ -875,7 +875,6 @@ class MBPO(RLAlgorithm):
     def tf_saveables(self):
         saveables = {
             'policy': self._policy,
-            'model': self._model,
             **{
                 f'Q_{i}': Q
                 for i, Q in enumerate(self._Qs)

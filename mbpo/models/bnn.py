@@ -2,6 +2,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import absolute_import
 
+import glob
 import os
 import time
 import pdb
@@ -222,6 +223,27 @@ class BNN:
                 for i, var in enumerate(all_vars):
                     var.load(params_dict[str(i)])
         self.finalized = True
+
+    def load(self, savedir, timestep=None):
+        if timestep is None:
+            mat_files = sorted(glob.glob(os.path.join(savedir, '%s_*.mat' % self.name)))
+            if not mat_files:
+                raise ValueError('No saved BNN model files found in %s' % savedir)
+            mat_path = mat_files[-1]
+        else:
+            mat_path = os.path.join(savedir, '%s_%s.mat' % (self.name, timestep))
+            if not os.path.exists(mat_path):
+                raise ValueError('Saved BNN model file not found: %s' % mat_path)
+
+        with self.sess.as_default():
+            params_dict = loadmat(mat_path)
+            all_vars = self.nonoptvars + self.optvars
+            for i, var in enumerate(all_vars):
+                var.load(params_dict[str(i)], self.sess)
+
+        self.model_dir = savedir
+        self.finalized = True
+        return mat_path
 
     ##################
     # Custom Methods #

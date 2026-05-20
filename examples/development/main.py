@@ -155,10 +155,8 @@ class ExperimentRunner(tune.Trainable):
     def _tf_checkpoint_prefix(self, checkpoint_dir):
         return os.path.join(checkpoint_dir, 'checkpoint')
 
-    def _get_tf_checkpoint(self):
-        tf_checkpoint = tf.train.Checkpoint(**self.algorithm.tf_saveables)
-
-        return tf_checkpoint
+    def _get_tf_saver(self):
+        return tf.train.Saver()
 
     @property
     def picklables(self):
@@ -197,11 +195,16 @@ class ExperimentRunner(tune.Trainable):
         if self._variant['run_params'].get('checkpoint_replay_pool', False):
             self._save_replay_pool(checkpoint_dir)
 
-        tf_checkpoint = self._get_tf_checkpoint()
+        if hasattr(self.algorithm, '_model') and hasattr(self.algorithm._model, 'save'):
+            try:
+                self.algorithm._model.save(checkpoint_dir, getattr(self.algorithm, '_total_timestep', 0))
+            except Exception as e:
+                print('[ ExperimentRunner ] Warning: failed to save algorithm model: {}'.format(e))
 
-        tf_checkpoint.save(
-            file_prefix=self._tf_checkpoint_prefix(checkpoint_dir),
-            session=self._session)
+        saver = self._get_tf_saver()
+        # Use a distinct prefix for tf saver files to avoid name collisions
+        tf_save_path = os.path.join(checkpoint_dir, 'tf_checkpoint')
+        saver.save(self._session, tf_save_path)
 
         return os.path.join(checkpoint_dir, '')
 
@@ -264,18 +267,26 @@ class ExperimentRunner(tune.Trainable):
             session=self._session)
         self.algorithm.__setstate__(picklable['algorithm'].__getstate__())
 
-        tf_checkpoint = self._get_tf_checkpoint()
-        status = tf_checkpoint.restore(tf.train.latest_checkpoint(
+        saver = self._get_tf_saver()
+        saver.restore(self._session, tf.train.latest_checkpoint(
             os.path.split(self._tf_checkpoint_prefix(checkpoint_dir))[0]))
-
-        status.assert_consumed().run_restore_ops(self._session)
         initialize_tf_variables(self._session, only_uninitialized=True)
 
         # TODO(hartikainen): target Qs should either be checkpointed or pickled.
         for Q, Q_target in zip(self.algorithm._Qs, self.algorithm._Q_targets):
             Q_target.set_weights(Q.get_weights())
 
+        if hasattr(self.algorithm, '_model') and hasattr(self.algorithm._model, 'load'):
+            self._restore_model(checkpoint_dir)
+
         self._built = True
+
+    def _restore_model(self, checkpoint_dir):
+        if hasattr(self.algorithm, '_model') and hasattr(self.algorithm._model, 'load'):
+            try:
+                self.algorithm._model.load(checkpoint_dir)
+            except Exception as e:
+                print('[ ExperimentRunner ] Warning: failed to restore algorithm model from {}: {}'.format(checkpoint_dir, e))
 
 
 def main(argv=None):
