@@ -339,11 +339,12 @@ class MBPO(RLAlgorithm):
         if self._epoch <= min_epoch:
             y = min_length
         else:
-            dx = (self._epoch - min_epoch) / (max_epoch - min_epoch)
-            dx = min(dx, 1)
+            dx = (self._epoch - min_epoch) / max(float(max_epoch - min_epoch), 1.0)
+            dx = min(dx, 1.0)
             y = dx * (max_length - min_length) + min_length
 
-        self._rollout_length = int(y)
+        self._rollout_length = int(np.ceil(y))
+        self._rollout_length = max(min_length, min(self._rollout_length, max_length))
         print('[ Model Length ] Epoch: {} (min: {}, max: {}) | Length: {} (min: {} , max: {})'.format(
             self._epoch, min_epoch, max_epoch, self._rollout_length, min_length, max_length
         ))
@@ -402,9 +403,16 @@ class MBPO(RLAlgorithm):
             obs = next_obs[nonterm_mask]
 
         mean_rollout_length = sum(steps_added) / rollout_batch_size
-        rollout_stats = {'mean_rollout_length': mean_rollout_length}
-        print('[ Model Rollout ] Added: {:.1e} | Model pool: {:.1e} (max {:.1e}) | Length: {} | Train rep: {}'.format(
-            sum(steps_added), self._model_pool.size, self._model_pool._max_size, mean_rollout_length, self._n_train_repeat
+        rollout_stats = {
+            'mean_rollout_length': mean_rollout_length,
+            'rollout_length': self._rollout_length,
+            'model_pool_size': self._model_pool.size,
+            'mean_model_dev': float(np.mean(info['dev'])) if len(info['dev']) > 0 else np.nan,
+            'mean_model_log_prob': float(np.mean(info['log_prob'])) if len(info['log_prob']) > 0 else np.nan,
+            'model_rollout_samples': int(sum(steps_added)),
+        }
+        print('[ Model Rollout ] Added: {:.1e} | Model pool: {:.1e} (max {:.1e}) | Length: {} | Mean dev: {:.4f} | Train rep: {}'.format(
+            sum(steps_added), self._model_pool.size, self._model_pool._max_size, mean_rollout_length, rollout_stats['mean_model_dev'], self._n_train_repeat
         ))
         return rollout_stats
 
@@ -423,8 +431,10 @@ class MBPO(RLAlgorithm):
 
     def _training_batch(self, batch_size=None):
         batch_size = batch_size or self.sampler._batch_size
-        env_batch_size = int(batch_size*self._real_ratio)
+        env_batch_size = int(batch_size * self._real_ratio)
         model_batch_size = batch_size - env_batch_size
+        self._last_real_batch_size = env_batch_size
+        self._last_model_batch_size = model_batch_size
 
         ## can sample from the env pool even if env_batch_size == 0
         env_batch = self._pool.random_batch(env_batch_size)
@@ -712,6 +722,10 @@ class MBPO(RLAlgorithm):
             'Q-std': np.std(Q_values),
             'Q_loss': np.mean(Q_losses),
             'alpha': alpha,
+            'real_batch_size': int(getattr(self, '_last_real_batch_size', 0)),
+            'model_batch_size': int(getattr(self, '_last_model_batch_size', 0)),
+            'real_batch_ratio': float(getattr(self, '_last_real_batch_size', 0)) / max(1, batch['observations'].shape[0]),
+            'model_batch_ratio': float(getattr(self, '_last_model_batch_size', 0)) / max(1, batch['observations'].shape[0]),
         })
 
         policy_diagnostics = self._policy.get_diagnostics(

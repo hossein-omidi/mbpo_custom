@@ -227,16 +227,22 @@ class SoftlearningEnv(Serializable, metaclass=ABCMeta):
                 ] for k in keys
             }
             for info_key, info_values in path_results.items():
-                info_values = np.array(info_values)
+                try:
+                    info_values = np.asarray(info_values, dtype=np.float64)
+                except (TypeError, ValueError):
+                    continue
+                if info_values.size == 0:
+                    continue
+
                 results[info_key + '-first'].append(info_values[0])
                 results[info_key + '-last'].append(info_values[-1])
                 results[info_key + '-mean'].append(np.mean(info_values))
                 results[info_key + '-median'].append(np.median(info_values))
-                if np.array(info_values).dtype != np.dtype('bool'):
+                if info_values.dtype != np.dtype('bool'):
                     results[info_key + '-range'].append(np.ptp(info_values))
 
         aggregated_results = {}
         for key, value in results.items():
-            aggregated_results[key + '-mean'] = np.mean(value)
+            aggregated_results[key + '-mean'] = np.mean(value) if len(value) > 0 else np.nan
 
         return aggregated_results

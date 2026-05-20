@@ -57,7 +57,7 @@ def parse_args():
     parser.add_argument(
         '--num-rollouts', '-n',
         type=int,
-        default=5,
+        default=10,
         help='Number of evaluation rollouts to run.')
     parser.add_argument(
         '--max-path-length', '-l',

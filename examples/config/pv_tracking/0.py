@@ -15,7 +15,7 @@ params = {
         'train_every_n_steps': 1,
         'n_train_repeat': 10,
         'eval_render_mode': None,
-        'eval_n_episodes': 1,
+        'eval_n_episodes': 5,
         'eval_deterministic': True,
 
         'discount': 0.99,
@@ -24,16 +24,16 @@ params = {
 
         # Train dynamics model every 100 env steps; cap wall time if needed.
         'model_train_freq': 100,
-        'model_retain_epochs': 1,
+        'model_retain_epochs': 5,
         'max_model_t': 120,
 
-        'rollout_batch_size': 1000,
+        'rollout_batch_size': 500,
         'deterministic': False,
         'num_networks': 5,
         'num_elites': 3,
-        'real_ratio': 0.1,
+        'real_ratio': 0.2,
         'target_entropy': -2,
-        'rollout_schedule': [1, 20, 1, 1],
+        'rollout_schedule': [0, 100, 1, 10],
 
         # ~10 full PV episodes (63 steps) before SAC training starts.
         'n_initial_exploration_steps': 630,

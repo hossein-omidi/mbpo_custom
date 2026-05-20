@@ -67,13 +67,16 @@ cd mbpo
 # 1) Check the PV environment and action/observation shapes
 python scripts/check_pv_env.py
 
-# 2) Dry-run the training config and verify variant wiring
+# 2) Validate the PV rollout schedule and observation scaling
+python scripts/validate_pv_rollouts.py
+
+# 3) Dry-run the training config and verify variant wiring
 mbpo run_example_dry examples.development \
   --config=examples.config.pv_tracking.0 \
   --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
 ```
 
-Expect output showing the observation and action shapes and a dry-run variant summary.
+Expect output showing the observation and action shapes, rollout schedule, and a dry-run variant summary.
 
 ## Training PV tracking
 
@@ -117,9 +120,9 @@ mbpo run_local examples.development \
 | `epoch_length` | int | 64 | Real env steps per epoch | Keep at 63 for one full day; increase only if you want multi-day episodes |
 | `n_initial_exploration_steps` | int | 630 | Real exploration steps before learning | Use `max_path_length * 10` to ensure enough coverage before training |
 | `model_train_freq` | int | 100 | Train model every this many env steps | 100 is reasonable; lower if model needs faster adaptation |
-| `rollout_batch_size` | int | 1000 | Imagined samples per rollout phase | Increase if GPU and memory allow more model data |
-| `real_ratio` | float | 0.1 | Fraction of real data in SAC minibatch | 0.1 is standard; increase if the real model is weak |
-| `rollout_schedule` | list | `[1, 20, 1, 1]` | Imagined rollout length schedule | Keep short early, grow gradually to maintain model accuracy |
+| `rollout_batch_size` | int | 500 | Imagined samples per rollout phase | Use a smaller batch size for more stable PV training |
+| `real_ratio` | float | 0.2 | Fraction of real data in SAC minibatch | Increase if the real model is weak or policy is unstable |
+| `rollout_schedule` | list | `[0, 100, 1, 10]` | Imagined rollout length schedule | Start at 1, then ramp to 10 by epoch 100 for conservative use |
 | `target_entropy` | float | -2 | SAC exploration tuning | For 2D actions, -2 is a good starting value |
 
 ### PV environment settings
@@ -177,6 +180,22 @@ python scripts/evaluate_agent.py \
   --test-end-date 2020-12-31
 ```
 
+### Baseline comparison helper
+
+A lightweight helper script compares the learned policy against simple baselines using the same PV energy and movement-cost metrics.
+
+```bash
+python scripts/compare_baselines.py \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
+  --outdir evaluation/pv_tracking \
+  --num-rollouts 10 \
+  --max-path-length 63
+```
+
+This script evaluates the learned policy and the following baselines:
+- `fixed_no_motion` — keep the current tracker orientation unchanged
+- `sun_tracking` — incremental action toward the current sun direction
+
 ### Evaluation output
 
 - `evaluation_summary.txt` — includes reward, energy, season, and weather for every rollout
@@ -195,6 +214,8 @@ python scripts/evaluate_agent.py \
 | `scripts/plot_ray_results.py` | Plot Ray trial resource/status logs |
 | `scripts/evaluate_and_viskit.py` | Run evaluation and optionally launch viskit |
 | `scripts/export_policy_weights.py` | Export policy weights from older checkpoints |
+| `scripts/validate_pv_rollouts.py` | Validate PV rollout schedule and environment observation scaling |
+| `scripts/compare_baselines.py` | Compare a trained PV policy against fixed/sun-tracking baselines |
 
 ## Extending the project
 
