@@ -118,3 +118,8 @@ vendor/*
 
 .mujoco/
 .vscode/
+
+# Ignore evaluation outputs and generated rollout plots
+evaluation/
+*/rollout_plots/
+*/rollouts/

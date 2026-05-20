@@ -141,7 +141,9 @@ TensorFlow / NumPy / Gym deprecation messages are safe to ignore.
 After training, evaluate a checkpoint (no retraining):
 
 ```bash
-CKPT_DIR=~/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>
+# Replace <seed>, <timestamp>, and <N> with actual checkpoint values
+# and quote the path if it contains angle brackets.
+CKPT_DIR="~/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>"
 
 python scripts/evaluate_agent.py \
   "${CKPT_DIR}" \
@@ -151,11 +153,62 @@ python scripts/evaluate_agent.py \
   --deterministic
 ```
 
+If you already know the exact checkpoint, use that path directly:
+
+```bash
+python scripts/evaluate_agent.py \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51" \
+  --outdir evaluation/pv_tracking \
+  --num-rollouts 10 \
+  --max-path-length 63 \
+  --deterministic
+```
+
+This evaluation runs the trained policy in the PVTracking environment for one full day episode (63 timesteps) and exports the actual trajectory data.
+
 Outputs:
 
-- `evaluation_summary.txt` — per-rollout returns and lengths
+- `evaluation_summary.txt` — per-rollout rewards and lengths
 - `evaluation_rewards.png`
 - `evaluation_lengths.png`
+- `rollouts/rollout_<n>.csv` — full episode trajectory logs including observations, actions, rewards, time, tilt, azimuth, power, and other env info
+- `rollout_plots/rollout_<n>_combined.png` — combined rollout trajectory plot for power, tilt, azimuth, and reward vs time
+
+There is also a helper script for the same data:
+
+```bash
+python scripts/plot_rollout_trajectory.py \
+  --csv evaluation/pv_tracking/rollouts/rollout_1.csv \
+  --outdir evaluation/pv_tracking/rollout_plots \
+  --name rollout_1_combined
+```
+
+**Evaluation & Combined Plotting**
+
+Two small utilities streamline evaluation and inspection:
+
+- `scripts/evaluate_and_viskit.py`: runs evaluation, saves rollout CSVs and plots, optionally launches `viskit` for training curves.
+- `scripts/plot_rollout_trajectory.py`: reads a single `rollouts/rollout_<n>.csv` and creates a combined time-series figure (power, tilt, azimuth, reward).
+
+Quick end-to-end example (evaluate then view combined plot):
+
+```bash
+# 1) Evaluate checkpoint and generate rollouts + plots
+python scripts/evaluate_agent.py \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51" \
+  --outdir evaluation/pv_tracking \
+  --num-rollouts 1 \
+  --max-path-length 63 \
+  --deterministic
+
+# 2) (Optional) Recreate combined plot from CSV
+python scripts/plot_rollout_trajectory.py \
+  --csv evaluation/pv_tracking/rollouts/rollout_1.csv \
+  --outdir evaluation/pv_tracking/rollout_plots \
+  --name rollout_1_combined
+```
+
+> Note: `viskit ~/ray_mbpo/PVTracking --port 6008` shows training curves and experiment metrics, not the per-step PV day trajectory of a single evaluation rollout.
 
 ### Export policy weights (older checkpoints)
 
