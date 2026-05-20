@@ -16,6 +16,7 @@ import os
 import pickle
 import re
 from distutils.util import strtobool
+from datetime import datetime
 
 try:
     import matplotlib
@@ -37,7 +38,7 @@ except ImportError:
 
 from softlearning.environments.utils import get_environment_from_params
 from softlearning.policies.utils import get_policy_from_variant
-from softlearning.samplers import rollouts
+from softlearning.samplers import rollouts, rollout
 from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
 
 
@@ -85,6 +86,21 @@ def parse_args():
         type=str,
         default=None,
         help='Optional JSON file for overriding evaluation environment params.')
+    parser.add_argument(
+        '--test-start-date',
+        type=str,
+        default=None,
+        help='Optional evaluation start date (YYYY-MM-DD) for day sampling.')
+    parser.add_argument(
+        '--test-end-date',
+        type=str,
+        default=None,
+        help='Optional evaluation end date (YYYY-MM-DD) for day sampling.')
+    parser.add_argument(
+        '--compare-baselines',
+        action='store_true',
+        default=False,
+        help='Run baseline tracking methods for comparison.')
     return parser.parse_args()
 
 
@@ -127,7 +143,7 @@ def deep_update(original, override):
     return updated
 
 
-def get_eval_environment(variant, override_path=None):
+def get_eval_environment(variant, override_path=None, test_start_date=None, test_end_date=None):
     environment_params = variant['environment_params']
     eval_env_params = (
         environment_params.get('evaluation')
@@ -138,6 +154,14 @@ def get_eval_environment(variant, override_path=None):
         with open(override_path, 'r', encoding='utf-8') as f:
             override = json.load(f)
         eval_env_params = deep_update(eval_env_params, override)
+
+    if test_start_date or test_end_date:
+        eval_env_params = deep_update(eval_env_params, {'kwargs': {}})
+        if test_start_date:
+            eval_env_params['kwargs']['start_date'] = test_start_date
+        if test_end_date:
+            eval_env_params['kwargs']['end_date'] = test_end_date
+        eval_env_params['kwargs']['randomize_day'] = True
 
     return get_environment_from_params(eval_env_params)
 
@@ -175,6 +199,100 @@ def get_policy(variant, environment, policy_weights):
     return policy
 
 
+def season_from_day_of_year(day_of_year):
+    day = int(day_of_year)
+    if 80 <= day <= 171:
+        return 'spring'
+    if 172 <= day <= 263:
+        return 'summer'
+    if 264 <= day <= 354:
+        return 'fall'
+    return 'winter'
+
+
+def normalize_angle_diff(target, current):
+    diff = (target - current + 180.0) % 360.0 - 180.0
+    return diff
+
+
+def _extract_underlying_env(env):
+    if hasattr(env, 'unwrapped'):
+        return env.unwrapped
+    if hasattr(env, '_env'):
+        return env._env
+    return env
+
+
+def make_baseline_rollout(env, baseline_type, path_length):
+    underlying = _extract_underlying_env(env)
+    fixed_tilt = 30.0
+    fixed_azimuth = 180.0
+
+    observations = []
+    actions = []
+    rewards = []
+    terminals = []
+    next_observations = []
+    infos = []
+
+    obs = env.reset()
+    done = False
+    step = 0
+    while step < path_length and not done:
+        solar_zenith = float(obs[0])
+        solar_azimuth = float(obs[1])
+        current_tilt = float(obs[6])
+        current_azimuth = float(obs[7])
+
+        if baseline_type == 'fixed':
+            target_tilt = fixed_tilt
+            target_azimuth = fixed_azimuth
+        elif baseline_type == 'single_axis':
+            target_tilt = fixed_tilt
+            target_azimuth = solar_azimuth
+        else:
+            target_tilt = solar_zenith
+            target_azimuth = solar_azimuth
+
+        delta_tilt = np.clip(
+            target_tilt - current_tilt,
+            -underlying.max_delta_tilt,
+            underlying.max_delta_tilt,
+        )
+        delta_azimuth = np.clip(
+            normalize_angle_diff(target_azimuth, current_azimuth),
+            -underlying.max_delta_azimuth,
+            underlying.max_delta_azimuth,
+        )
+
+        action = np.array([
+            delta_tilt / underlying.max_delta_tilt,
+            delta_azimuth / underlying.max_delta_azimuth,
+        ], dtype=np.float32)
+
+        next_obs, reward, terminal, info = env.step(action)
+
+        observations.append(obs)
+        actions.append(action)
+        rewards.append(reward)
+        terminals.append(terminal)
+        next_observations.append(next_obs)
+        infos.append(info)
+
+        obs = next_obs
+        done = terminal
+        step += 1
+
+    return {
+        'observations': np.asarray(observations),
+        'actions': np.asarray(actions),
+        'rewards': np.asarray(rewards),
+        'terminals': np.asarray(terminals),
+        'next_observations': np.asarray(next_observations),
+        'infos': infos,
+    }
+
+
 def default_max_path_length(variant, cli_default):
     """Use PV episode length when the config targets PVTracking."""
     try:
@@ -198,7 +316,39 @@ def rollout_metrics(paths):
     return np.array(rewards), np.array(lengths)
 
 
-def save_summary(outdir, checkpoint_dir, rewards, lengths, deterministic, max_path_length):
+def compute_total_energy_kwh(path):
+    infos = path.get('infos', [])
+    if not infos:
+        return np.nan
+    power = np.array([info.get('power', np.nan) for info in infos], dtype=np.float64)
+    times = np.array([info.get('time', np.nan) for info in infos], dtype=np.float64)
+    if len(power) == 0:
+        return np.nan
+    if np.isfinite(times).all() and len(times) > 1:
+        dt_hours = np.diff(times) / 3600.0
+        energy = np.sum(power[:-1] * dt_hours / 1000.0)
+        energy += power[-1] * np.median(dt_hours) / 1000.0
+        return float(energy)
+    return float(np.sum(power) * 0.25 / 1000.0)
+
+
+def get_rollout_metadata(path):
+    info = path.get('infos', [{}])[0]
+    day_of_year = info.get('day_of_year')
+    season = info.get('season') or (
+        season_from_day_of_year(day_of_year)
+        if day_of_year is not None else 'unknown')
+    return {
+        'date': info.get('date', 'unknown'),
+        'day_of_year': day_of_year,
+        'season': season,
+        'weather_condition': info.get('weather_condition', 'unknown'),
+        'episode_length': len(path.get('rewards', [])),
+        'total_energy_kwh': compute_total_energy_kwh(path),
+    }
+
+
+def save_summary(outdir, checkpoint_dir, rewards, lengths, deterministic, max_path_length, paths=None, baseline_metrics=None):
     summary_path = os.path.join(outdir, 'evaluation_summary.txt')
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write('Checkpoint: %s\n' % checkpoint_dir)
@@ -206,6 +356,18 @@ def save_summary(outdir, checkpoint_dir, rewards, lengths, deterministic, max_pa
         f.write('Deterministic: %s\n' % str(deterministic))
         f.write('Max path length: %d\n' % max_path_length)
         f.write('\n')
+        if paths is not None:
+            f.write('Rollout conditions:\n')
+            for idx, path in enumerate(paths, 1):
+                metadata = get_rollout_metadata(path)
+                f.write('  rollout_%d:\n' % idx)
+                f.write('    date: %s\n' % metadata['date'])
+                f.write('    day_of_year: %s\n' % metadata['day_of_year'])
+                f.write('    season: %s\n' % metadata['season'])
+                f.write('    weather_condition: %s\n' % metadata['weather_condition'])
+                f.write('    episode_length: %d\n' % metadata['episode_length'])
+                f.write('    total_energy_kwh: %.6f\n' % metadata['total_energy_kwh'])
+            f.write('\n')
         f.write('Rollout rewards:\n')
         for idx, reward in enumerate(rewards, 1):
             f.write('  rollout_%d: %.6f\n' % (idx, reward))
@@ -213,8 +375,16 @@ def save_summary(outdir, checkpoint_dir, rewards, lengths, deterministic, max_pa
         f.write('Rollout lengths:\n')
         for idx, length in enumerate(lengths, 1):
             f.write('  rollout_%d: %d\n' % (idx, length))
+        if baseline_metrics:
+            f.write('\nBaseline comparisons:\n')
+            for baseline_name, baseline_data in baseline_metrics.items():
+                f.write('  %s average reward: %.6f\n' % (baseline_name, baseline_data['mean_reward']))
+                f.write('  %s average energy: %.6f kWh\n' % (baseline_name, baseline_data['mean_energy_kwh']))
+                f.write('  %s average length: %.2f\n' % (baseline_name, baseline_data['mean_length']))
         f.write('\n')
         f.write('Rollout trajectory CSV files are saved under the `rollouts/` subfolder.\n')
+        if baseline_metrics:
+            f.write('Baseline rollout CSV files are saved under the `baseline_rollouts/` subfolder.\n')
     return summary_path
 
 
@@ -416,30 +586,70 @@ def main(args):
     variant = load_variant(experiment_root, args.variant_file)
     policy_weights = load_policy_weights(checkpoint_path)
 
-    environment = get_eval_environment(variant, args.eval_env_override)
-    policy = get_policy(variant, environment, policy_weights)
+    eval_environment = get_eval_environment(
+        variant,
+        args.eval_env_override,
+        args.test_start_date,
+        args.test_end_date,
+    )
+    policy = get_policy(variant, eval_environment, policy_weights)
 
     path_length = args.max_path_length
     if path_length == 1000:
         path_length = default_max_path_length(variant, path_length)
 
+    paths = []
+    baseline_metrics = {}
     with policy.set_deterministic(args.deterministic):
-        paths = rollouts(
-            args.num_rollouts,
-            environment,
-            policy,
-            path_length=path_length,
-            render_mode=args.render_mode)
+        for idx in range(args.num_rollouts):
+            eval_environment.seed(idx)
+            path = rollout(
+                eval_environment,
+                policy,
+                path_length=path_length,
+                render_mode=args.render_mode)
+            paths.append(path)
 
     rewards, lengths = rollout_metrics(paths)
     rollouts_dir = save_rollout_paths(args.outdir, paths)
+
+    if args.compare_baselines:
+        baseline_dir = os.path.join(args.outdir, 'baseline_rollouts')
+        os.makedirs(baseline_dir, exist_ok=True)
+        baseline_paths = {}
+        for name in ('fixed', 'single_axis', 'sun_seeking'):
+            baseline_paths[name] = []
+            for idx in range(args.num_rollouts):
+                baseline_env = get_eval_environment(
+                    variant,
+                    args.eval_env_override,
+                    args.test_start_date,
+                    args.test_end_date,
+                )
+                baseline_env.seed(idx)
+                path = make_baseline_rollout(baseline_env, name, path_length)
+                baseline_paths[name].append(path)
+            baseline_rewards, baseline_lengths = rollout_metrics(baseline_paths[name])
+            baseline_energy = np.array([compute_total_energy_kwh(path)
+                                        for path in baseline_paths[name]])
+            baseline_metrics[name] = {
+                'mean_reward': float(np.mean(baseline_rewards)),
+                'mean_length': float(np.mean(baseline_lengths)),
+                'mean_energy_kwh': float(np.mean(baseline_energy)),
+            }
+            save_rollout_paths(
+                os.path.join(baseline_dir, name),
+                baseline_paths[name])
+
     summary_path = save_summary(
         args.outdir,
         checkpoint_path,
         rewards,
         lengths,
         deterministic=args.deterministic,
-        max_path_length=path_length)
+        max_path_length=path_length,
+        paths=paths,
+        baseline_metrics=baseline_metrics if args.compare_baselines else None)
     reward_plot = plot_rewards(args.outdir, rewards)
     length_plot = plot_lengths(args.outdir, lengths)
 
@@ -454,6 +664,8 @@ def main(args):
     print('  %s' % reward_plot)
     print('  %s' % length_plot)
     print('  %s' % rollouts_dir)
+    if args.compare_baselines:
+        print('  %s' % os.path.join(args.outdir, 'baseline_rollouts'))
     for path in rollout_plot_files:
         print('  %s' % path)
 

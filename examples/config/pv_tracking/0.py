@@ -10,7 +10,7 @@ params = {
     # Balanced defaults: reasonable wall-clock on CPU while still learning a
     # useful tracking policy. Increase n_epochs (e.g. 200-500) for higher accuracy.
     'kwargs': {
-        'n_epochs': 50,
+        'n_epochs': 200,
         'epoch_length': 64,
         'train_every_n_steps': 1,
         'n_train_repeat': 10,
@@ -37,5 +37,18 @@ params = {
 
         # ~10 full PV episodes (63 steps) before SAC training starts.
         'n_initial_exploration_steps': 630,
-    }
+    },
+    'environment_kwargs': {
+        'start_date': '2020-01-01',
+        'end_date': '2020-12-31',
+        'start_time': '06:00',
+        'periods': 64,
+        'freq': '15min',
+        'randomize_day': True,
+        'randomize_initial_orientation': True,
+        'weather_source': 'random',
+        'temperature': 23.0,
+        'wind_speed': 2.0,
+        'movement_penalty': 0.01,
+    },
 }

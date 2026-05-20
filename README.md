@@ -2,22 +2,26 @@
 
 This repository implements [Model-Based Policy Optimization (MBPO)](https://arxiv.org/abs/1906.08253) on top of [softlearning](https://github.com/rail-berkeley/softlearning). It includes a custom **PV solar tracking** Gym environment built with **pvlib**, wired into the full MBPO training, checkpointing, evaluation, and plotting workflow.
 
-<p align="center">
-  <img src="https://drive.google.com/uc?export=view&id=1siZA55atJi8Tgeefvv28WOqk7pFSynJP" width="80%">
-</p>
+## What this repository can do
+
+- Train a model-based reinforcement learning agent to control a 2-axis solar tracker.
+- Use `pvlib` to simulate realistic solar geometry and irradiance.
+- Train on randomized days of the year and stochastic weather conditions.
+- Evaluate the learned policy against baseline strategies.
+- Export rollout data and plots for inspection.
 
 ## Project overview
 
 | Layer | Location | Role |
 |-------|----------|------|
-| Gym environment | `mbpo/env/pv_tracking.py` | pvlib irradiance + 2D panel control (tilt/azimuth) |
+| Gym environment | `mbpo/env/pv_tracking.py` | PV tracking env with pvlib-based solar geometry, irradiance, seasonal sampling, and stochastic weather |
 | Environment registration | `mbpo/env/__init__.py` | Registers `PVTracking-v0` |
-| Model termination fn | `mbpo/static/pv_tracking.py` | Marks done when predicted next state is non-finite |
-| MBPO algorithm | `mbpo/algorithms/mbpo.py` | Ensemble dynamics model + SAC policy |
-| Training entrypoint | `examples/development/main.py` | Ray Tune `ExperimentRunner` |
-| Training config | `examples/config/pv_tracking/0.py` | Hyperparameters for PV runs |
-| Variant builder | `examples/development/base.py` | Merges config into Ray variant spec |
-| Utility scripts | `scripts/` | Env check, evaluate, plot, export weights |
+| Model termination fn | `mbpo/static/pv_tracking.py` | Marks fake-model transitions done when the predicted next state is invalid |
+| MBPO algorithm | `mbpo/algorithms/mbpo.py` | Ensemble dynamics model + SAC policy, plus model rollouts |
+| Training entrypoint | `examples/development/main.py` | Ray Tune experiment runner |
+| Training config | `examples/config/pv_tracking/0.py` | Default PV tracking hyperparameters and environment settings |
+| Variant builder | `examples/development/base.py` | Merges config and env params into Ray Tune variant spec |
+| Utility scripts | `scripts/` | Environment check, evaluation, plotting, export utilities |
 
 ### Data flow (training → evaluation)
 
@@ -37,11 +41,7 @@ scripts/evaluate_agent.py  +  scripts/plot_training_progress.py
 
 ## Installation
 
-### 1. MuJoCo (only for classic MBPO benchmarks)
-
-MuJoCo is **not** required for PV tracking. For Hopper/HalfCheetah-style tasks, install [MuJoCo 1.50](https://www.roboti.us/index.html) at `~/.mujoco/mjpro150` and place your license at `~/.mujoco/mjkey.txt`.
-
-### 2. Clone and install
+### 1. Clone and install
 
 ```bash
 git clone --recursive https://github.com/jannerm/mbpo.git
@@ -52,28 +52,32 @@ pip install -e viskit
 pip install -e .
 ```
 
-The conda environment installs dependencies from `environment/requirements.txt`, including **pvlib** for the PV environment.
+The conda environment installs dependencies from `environment/requirements.txt`, including **pvlib**.
+
+### 2. Optional MuJoCo support
+
+MuJoCo is not required for PV tracking. It is only needed for classic MBPO benchmarks like Hopper and HalfCheetah.
 
 ## Quick validation (no training)
 
 ```bash
 conda activate mbpo
-cd mbpo   # repository root
+cd mbpo
 
-# 1) pvlib + Gym environment smoke test
+# 1) Check the PV environment and action/observation shapes
 python scripts/check_pv_env.py
 
-# 2) Verify Ray variant / config wiring (dry run)
+# 2) Dry-run the training config and verify variant wiring
 mbpo run_example_dry examples.development \
   --config=examples.config.pv_tracking.0 \
   --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
 ```
 
-Expected: env checker prints obs/action shapes; dry run reports `max_path_length: 63`, `n_epochs: 50`, and one trial.
+Expect output showing the observation and action shapes and a dry-run variant summary.
 
-## Training (PV tracking)
+## Training PV tracking
 
-### Command
+### Basic command
 
 ```bash
 conda activate mbpo
@@ -85,193 +89,129 @@ mbpo run_local examples.development \
   --cpus=2 --trial-cpus=1
 ```
 
-### What happens each epoch
+### What the training does
 
-1. **Environment interaction** — `SimpleSampler` collects transitions from `PVTracking-v0` (episode length 63 steps).
-2. **Initial exploration** — uniform policy until `n_initial_exploration_steps` (630 ≈ 10 episodes) are in the replay pool.
-3. **Dynamics model** — ensemble BNN trained every `model_train_freq` steps on real data.
-4. **Model rollouts** — short imagined trajectories added to the pool (`rollout_schedule` controls horizon).
-5. **Policy training** — SAC updated with mixed real/model batches (`real_ratio`).
-6. **Evaluation** — one deterministic episode; metrics logged to `progress.csv`.
-7. **Checkpoint** — `checkpoint.pkl`, `policy_weights.pkl`, and TensorFlow weights under `checkpoint_*`.
+1. **Episode sampling** — each reset selects a random calendar day from the configured range.
+2. **Weather generation** — each episode can use clear, partly cloudy, or overcast irradiance profiles.
+3. **Interaction** — `SimpleSampler` collects `obs, action, reward, next_obs` transitions.
+4. **Model training** — MBPO trains an ensemble dynamics model on real transitions.
+5. **Imagined rollouts** — the learned model generates synthetic transitions to augment training.
+6. **Policy optimization** — SAC updates the policy using mixed real/model batches.
+7. **Checkpointing** — model and policy state are saved periodically.
 
-### Logs and checkpoints
+### Important environment concepts
 
-Results are written under:
+- `start_date` and `end_date` define the annual range for sampling training days.
+- `randomize_day` ensures episodes are drawn from across the year.
+- `weather_source='random'` enables daily weather variation.
+- `randomize_initial_orientation` lets the tracker start from different angles.
+- `max_path_length=63` corresponds to a single day of 15-minute steps.
 
-```
-~/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/
-  params.json          # full variant (written by Ray Tune)
-  progress.csv         # per-epoch metrics
-  result.json
-  checkpoint_*/
-    checkpoint.pkl     # full picklable state
-    policy_weights.pkl # policy only (for fast evaluation)
-    checkpoint         # TF checkpoint prefix
-```
+## Key parameters and guidance
 
-View runs with viskit:
+### Primary training settings
+
+| Parameter | Type | Default | Purpose | Guidance |
+|-----------|------|---------|---------|----------|
+| `n_epochs` | int | 200 | Number of training epochs | Longer for better convergence; use 200–500 for PV tracking |
+| `epoch_length` | int | 64 | Real env steps per epoch | Keep at 63 for one full day; increase only if you want multi-day episodes |
+| `n_initial_exploration_steps` | int | 630 | Real exploration steps before learning | Use `max_path_length * 10` to ensure enough coverage before training |
+| `model_train_freq` | int | 100 | Train model every this many env steps | 100 is reasonable; lower if model needs faster adaptation |
+| `rollout_batch_size` | int | 1000 | Imagined samples per rollout phase | Increase if GPU and memory allow more model data |
+| `real_ratio` | float | 0.1 | Fraction of real data in SAC minibatch | 0.1 is standard; increase if the real model is weak |
+| `rollout_schedule` | list | `[1, 20, 1, 1]` | Imagined rollout length schedule | Keep short early, grow gradually to maintain model accuracy |
+| `target_entropy` | float | -2 | SAC exploration tuning | For 2D actions, -2 is a good starting value |
+
+### PV environment settings
+
+| Parameter | Default | What it controls |
+|-----------|---------|------------------|
+| `start_date` | `2020-01-01` | first candidate training day |
+| `end_date` | `2020-12-31` | last candidate training day |
+| `start_time` | `06:00` | first step of each episode |
+| `periods` | `64` | number of timesteps per episode |
+| `freq` | `15min` | timestep resolution |
+| `weather_source` | `random` | choose between `clearsky` and `random` weather |
+| `temperature` | `23.0` | base ambient temperature |
+| `wind_speed` | `2.0` | base wind speed |
+| `movement_penalty` | `0.01` | cost for motion to discourage unnecessary movement |
+
+### Choosing parameters
+
+- Use `n_epochs` ≥ 200 for PV problems to allow enough learning.
+- Keep `epoch_length` and `max_path_length` aligned with one day if you want daily episodes.
+- Use `weather_source='random'` for training to force robustness across weather.
+- Use `start_date`/`end_date` to define your climate range and evaluate over hold-out day ranges.
+- If training is unstable, reduce `rollout_batch_size` or shorten model rollout length.
+
+## Evaluation and generalization
+
+### Basic evaluation
 
 ```bash
-viskit ~/ray_mbpo/PVTracking --port 6008
-```
-
-### Hyperparameters (`examples/config/pv_tracking/0.py`)
-
-Defaults are tuned for a **balance between wall-clock and accuracy** on CPU:
-
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| `n_epochs` | 50 | Increase to 200–500 for stronger policies |
-| `epoch_length` | 64 | Environment steps per training epoch |
-| `max_path_length` | 63 | Full PV day episode (set in `base.py`) |
-| `n_initial_exploration_steps` | 630 | ~10 episodes before learning |
-| `model_train_freq` | 100 | Retrain dynamics every 100 steps |
-| `max_model_t` | 120 s | Cap model training time per update |
-| `rollout_batch_size` | 1000 | Imagined samples per model rollout phase |
-| `num_networks` / `num_elites` | 5 / 3 | Ensemble size |
-| `real_ratio` | 0.1 | Fraction of real vs model data in SAC batches |
-| `rollout_schedule` | `[1, 20, 1, 1]` | Model rollout length schedule |
-| `target_entropy` | -2 | Matches 2D action space |
-
-TensorFlow / NumPy / Gym deprecation messages are safe to ignore.
-
-## Evaluation
-
-After training, evaluate a checkpoint (no retraining):
-
-```bash
-# Replace <seed>, <timestamp>, and <N> with actual checkpoint values
-# and quote the path if it contains angle brackets.
-CKPT_DIR="~/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>"
-
 python scripts/evaluate_agent.py \
-  "${CKPT_DIR}" \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
   --outdir evaluation/pv_tracking \
   --num-rollouts 10 \
   --max-path-length 63 \
   --deterministic
 ```
 
-If you already know the exact checkpoint, use that path directly:
+### Generalization testing
+
+- Use `--test-start-date` and `--test-end-date` to evaluate on a different date range from training.
+- Evaluate separately by season to measure robustness.
+- Use `--compare-baselines` to compare against fixed and rule-based strategies.
+
+### Example hold-out evaluation
 
 ```bash
 python scripts/evaluate_agent.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51" \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
   --outdir evaluation/pv_tracking \
-  --num-rollouts 10 \
+  --num-rollouts 5 \
   --max-path-length 63 \
-  --deterministic
+  --deterministic \
+  --compare-baselines \
+  --test-start-date 2020-12-01 \
+  --test-end-date 2020-12-31
 ```
 
-This evaluation runs the trained policy in the PVTracking environment for one full day episode (63 timesteps) and exports the actual trajectory data.
+### Evaluation output
 
-Outputs:
+- `evaluation_summary.txt` — includes reward, energy, season, and weather for every rollout
+- `rollouts/rollout_<n>.csv` — full trajectory logs
+- `rollout_plots/rollout_<n>_combined.png` — power/tilt/azimuth/reward plots
+- `baseline_rollouts/` — baseline strategy comparisons if requested
 
-- `evaluation_summary.txt` — per-rollout rewards and lengths
-- `evaluation_rewards.png`
-- `evaluation_lengths.png`
-- `rollouts/rollout_<n>.csv` — full episode trajectory logs including observations, actions, rewards, time, tilt, azimuth, power, and other env info
-- `rollout_plots/rollout_<n>_combined.png` — combined rollout trajectory plot for power, tilt, azimuth, and reward vs time
+## Scripts and utilities
 
-There is also a helper script for the same data:
+| Script | Purpose |
+|--------|---------|
+| `scripts/check_pv_env.py` | Smoke-test the environment and action/observation shapes |
+| `scripts/evaluate_agent.py` | Evaluate a saved checkpoint and save rollout plots |
+| `scripts/plot_rollout_trajectory.py` | Plot a single rollout CSV file |
+| `scripts/plot_training_progress.py` | Plot training metrics from `progress.csv` |
+| `scripts/plot_ray_results.py` | Plot Ray trial resource/status logs |
+| `scripts/evaluate_and_viskit.py` | Run evaluation and optionally launch viskit |
+| `scripts/export_policy_weights.py` | Export policy weights from older checkpoints |
 
-```bash
-python scripts/plot_rollout_trajectory.py \
-  --csv evaluation/pv_tracking/rollouts/rollout_1.csv \
-  --outdir evaluation/pv_tracking/rollout_plots \
-  --name rollout_1_combined
-```
+## Extending the project
 
-**Evaluation & Combined Plotting**
+To add a new environment:
 
-Two small utilities streamline evaluation and inspection:
+1. Create a new Gym environment under `mbpo/env/`.
+2. Register it in `mbpo/env/__init__.py`.
+3. Add a termination function in `mbpo/static/` with the lowercase domain name.
+4. Add a new config file under `examples/config/<domain>/0.py`.
+5. If the episode length is not 1000, add a domain-specific `max_path_length` in `examples/development/base.py`.
 
-- `scripts/evaluate_and_viskit.py`: runs evaluation, saves rollout CSVs and plots, optionally launches `viskit` for training curves.
-- `scripts/plot_rollout_trajectory.py`: reads a single `rollouts/rollout_<n>.csv` and creates a combined time-series figure (power, tilt, azimuth, reward).
+## Notes on the PV tracking design
 
-Quick end-to-end example (evaluate then view combined plot):
-
-```bash
-# 1) Evaluate checkpoint and generate rollouts + plots
-python scripts/evaluate_agent.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51" \
-  --outdir evaluation/pv_tracking \
-  --num-rollouts 1 \
-  --max-path-length 63 \
-  --deterministic
-
-# 2) (Optional) Recreate combined plot from CSV
-python scripts/plot_rollout_trajectory.py \
-  --csv evaluation/pv_tracking/rollouts/rollout_1.csv \
-  --outdir evaluation/pv_tracking/rollout_plots \
-  --name rollout_1_combined
-```
-
-> Note: `viskit ~/ray_mbpo/PVTracking --port 6008` shows training curves and experiment metrics, not the per-step PV day trajectory of a single evaluation rollout.
-
-### Export policy weights (older checkpoints)
-
-If `policy_weights.pkl` is missing (runs before the save hook was added):
-
-```bash
-python scripts/export_policy_weights.py "${CKPT_DIR}"
-```
-
-### Interactive rollouts (optional)
-
-```bash
-python -m examples.development.simulate_policy \
-  "${CKPT_DIR}" \
-  --num-rollouts 3 \
-  --max-path-length 63 \
-  --render-mode None \
-  --deterministic
-```
-
-## Plotting
-
-### Training curves (`progress.csv`)
-
-```bash
-TRIAL_DIR=~/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>
-
-python scripts/plot_training_progress.py \
-  "${TRIAL_DIR}" \
-  --outdir evaluation/pv_tracking/training_plots
-```
-
-Default metrics: `evaluation/return-average`, `training/return-average`, `model/val_loss`.
-
-### Ray trial status (terminal summary)
-
-Save the Ray status block to a text file, then:
-
-```bash
-python scripts/plot_ray_results.py /path/to/ray_status.txt \
-  --outdir evaluation/pv_tracking/ray_plots
-```
-
-## Adding other environments
-
-1. Copy [`examples/config/custom/0.py`](examples/config/custom/0.py).
-2. Implement a Gym env under `mbpo/env/` and register it in `mbpo/env/__init__.py`.
-3. Add a termination function in `mbpo/static/` (filename = lowercase domain, e.g. `pv_tracking.py` for `PVTracking`).
-4. Set `max_path_length` in `examples/development/base.py` if episodes are shorter than 1000 steps.
-
-## Classic MBPO benchmarks (MuJoCo)
-
-```bash
-mbpo run_local examples.development \
-  --config=examples.config.halfcheetah.0 \
-  --gpus=1 --trial-gpus=1
-```
-
-Rollout schedule format: `[start_epoch, end_epoch, start_length, end_length]` — e.g. `[20, 100, 1, 5]` ramps imagined rollout length from 1 to 5 between epochs 20 and 100.
-
-## Comparing to published MBPO results
-
-Precomputed learning curves: [Google Drive folder](https://drive.google.com/drive/folders/1matvC7hPi5al9-5S2uL4GuXfT5rzO9qU?usp=sharing).
+- Episodes are defined as a single day, which is appropriate for solar tracking.
+- The environment is designed to sample different days and weather conditions to avoid overfitting to one season.
+- Reward is based on collected energy with a small motion penalty, which matches the optimization objective.
+- The model-based pipeline is compatible because it uses the same `obs, action, reward, next_obs` transitions as real rollouts.
 
 ## Reference
 

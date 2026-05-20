@@ -144,6 +144,14 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
             dict(config_kwargs),
         )
 
+    environment_kwargs = getattr(env_params, 'environment_kwargs', None)
+    training_environment_kwargs = ENVIRONMENT_PARAMS.get(domain, {}).get(task, {})
+    if environment_kwargs:
+        training_environment_kwargs = deep_update(
+            training_environment_kwargs,
+            dict(environment_kwargs),
+        )
+
     variant_spec = {
         'git_sha': get_git_rev(),
 
@@ -152,8 +160,7 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
                 'domain': domain,
                 'task': task,
                 'universe': universe,
-                'kwargs': (
-                    ENVIRONMENT_PARAMS.get(domain, {}).get(task, {})),
+                'kwargs': training_environment_kwargs,
             },
             'evaluation': tune.sample_from(lambda spec: (
                 spec.get('config', spec)

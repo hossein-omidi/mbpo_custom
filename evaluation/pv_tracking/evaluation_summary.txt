@@ -1,28 +1,12 @@
 Checkpoint: /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51
-Num rollouts: 10
+Num rollouts: 1
 Deterministic: True
 Max path length: 63
 
 Rollout rewards:
   rollout_1: 2.115015
-  rollout_2: 2.115015
-  rollout_3: 2.115015
-  rollout_4: 2.115015
-  rollout_5: 2.115015
-  rollout_6: 2.115015
-  rollout_7: 2.115015
-  rollout_8: 2.115015
-  rollout_9: 2.115015
-  rollout_10: 2.115015
 
 Rollout lengths:
   rollout_1: 63
-  rollout_2: 63
-  rollout_3: 63
-  rollout_4: 63
-  rollout_5: 63
-  rollout_6: 63
-  rollout_7: 63
-  rollout_8: 63
-  rollout_9: 63
-  rollout_10: 63
+
+Rollout trajectory CSV files are saved under the `rollouts/` subfolder.
