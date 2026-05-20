@@ -172,6 +172,9 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
             }
         },
         'algorithm_params': algorithm_params,
+        'log_dir': getattr(env_params, 'log_dir', None),
+        'exp_name': getattr(env_params, 'exp_name', None),
+        'domain': domain,
         'replay_pool_params': {
             'type': 'SimpleReplayPool',
             'kwargs': {

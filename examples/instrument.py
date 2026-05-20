@@ -73,9 +73,14 @@ def add_command_line_args_to_variant_spec(variant_spec, command_line_args):
 
 def generate_experiment(trainable_class, variant_spec, command_line_args):
     params = variant_spec.get('algorithm_params')
-    local_dir = os.path.join(
-        command_line_args.log_dir or params.get('log_dir'),
-        params.get('domain'))
+    log_dir = command_line_args.log_dir or variant_spec.get('log_dir')
+    domain = (
+        variant_spec.get('domain') or
+        variant_spec.get('environment_params', {})
+        .get('training', {})
+        .get('domain')
+    )
+    local_dir = os.path.join(log_dir, domain) if log_dir and domain else log_dir or os.getcwd()
     resources_per_trial = _normalize_trial_resources(
         command_line_args.resources_per_trial,
         command_line_args.trial_cpus,
@@ -83,7 +88,7 @@ def generate_experiment(trainable_class, variant_spec, command_line_args):
         command_line_args.trial_extra_cpus,
         command_line_args.trial_extra_gpus)
 
-    experiment_id = params.get('exp_name')
+    experiment_id = variant_spec.get('exp_name') or domain
 
     variant_spec = add_command_line_args_to_variant_spec(
         variant_spec, command_line_args)
