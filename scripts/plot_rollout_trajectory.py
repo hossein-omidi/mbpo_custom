@@ -92,7 +92,10 @@ def plot_rollout(data, outdir, name):
 
     time = data.get('time')
     if time is not None and np.isfinite(time).all():
-        time = (time - time[0]) / 3600.0
+        if np.nanmax(time) <= 24.0 and np.nanmin(time) >= 0.0:
+            time = time - time[0]
+        else:
+            time = (time - time[0]) / 3600.0
         x_label = 'Time (hours)'
     else:
         time = np.arange(len(data.get('reward', [])), dtype=np.float64)

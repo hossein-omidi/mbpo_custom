@@ -1,12 +1,102 @@
 Checkpoint: /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51
-Num rollouts: 1
-Deterministic: True
+Num rollouts: 10
+Deterministic: False
 Max path length: 63
 
+Rollout conditions:
+  rollout_1:
+    date: 2020-04-22
+    day_of_year: 113
+    season: spring
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 1.283371
+  rollout_2:
+    date: 2020-07-15
+    day_of_year: 197
+    season: summer
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 0.812122
+  rollout_3:
+    date: 2020-07-15
+    day_of_year: 197
+    season: summer
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 0.484389
+  rollout_4:
+    date: 2020-01-24
+    day_of_year: 24
+    season: winter
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 0.607973
+  rollout_5:
+    date: 2020-01-30
+    day_of_year: 30
+    season: winter
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 0.160975
+  rollout_6:
+    date: 2020-03-20
+    day_of_year: 80
+    season: spring
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 1.135504
+  rollout_7:
+    date: 2020-08-13
+    day_of_year: 226
+    season: summer
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 0.857712
+  rollout_8:
+    date: 2020-02-18
+    day_of_year: 49
+    season: winter
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 0.147313
+  rollout_9:
+    date: 2020-02-27
+    day_of_year: 58
+    season: winter
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 0.238541
+  rollout_10:
+    date: 2020-06-30
+    day_of_year: 182
+    season: summer
+    weather_condition: clear
+    episode_length: 63
+    total_energy_kwh: 1.326167
+
 Rollout rewards:
-  rollout_1: 2.115015
+  rollout_1: 0.516004
+  rollout_2: 0.140219
+  rollout_3: -0.228151
+  rollout_4: -0.104052
+  rollout_5: -0.554454
+  rollout_6: 0.458342
+  rollout_7: 0.163204
+  rollout_8: -0.537128
+  rollout_9: -0.532281
+  rollout_10: 0.581980
 
 Rollout lengths:
   rollout_1: 63
+  rollout_2: 63
+  rollout_3: 63
+  rollout_4: 63
+  rollout_5: 63
+  rollout_6: 63
+  rollout_7: 63
+  rollout_8: 63
+  rollout_9: 63
+  rollout_10: 63
 
 Rollout trajectory CSV files are saved under the `rollouts/` subfolder.

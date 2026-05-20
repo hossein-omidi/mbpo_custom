@@ -66,9 +66,8 @@ def parse_args():
         help='Maximum length of each rollout.')
     parser.add_argument(
         '--deterministic',
-        type=lambda x: bool(strtobool(x)),
-        nargs='?', const=True,
-        default=True,
+        action='store_true',
+        default=False,
         help='Run the policy deterministically during evaluation.')
     parser.add_argument(
         '--render-mode',
@@ -134,6 +133,24 @@ def load_policy_weights(checkpoint_dir):
     if isinstance(picklable, dict) and 'policy_weights' in picklable:
         return picklable['policy_weights']
     raise KeyError('policy_weights not found in checkpoint.pkl')
+
+
+def load_checkpoint_picklable(checkpoint_dir):
+    checkpoint_file = os.path.join(checkpoint_dir, 'checkpoint.pkl')
+    if not os.path.exists(checkpoint_file):
+        return None
+    _apply_keras_hdf5_compat_patches()
+    with open(checkpoint_file, 'rb') as f:
+        picklable = pickle.load(f)
+    return picklable
+
+
+def _policy_shape_summary(policy):
+    return [w.shape for w in policy.get_weights()]
+
+
+def _policy_weights_shape_summary(policy_weights):
+    return [w.shape for w in policy_weights]
 
 
 def deep_update(original, override):
@@ -208,9 +225,70 @@ def resolve_checkpoint_path(checkpoint_pattern):
         % checkpoint_pattern)
 
 
-def get_policy(variant, environment, policy_weights):
+def get_policy(variant, environment, policy_weights, checkpoint_picklable=None):
+    if (checkpoint_picklable is not None and
+            isinstance(checkpoint_picklable, dict) and
+            'policy' in checkpoint_picklable):
+        try:
+            policy = checkpoint_picklable['policy']
+            # Ensure the restored policy object has its weights loaded.
+            policy.set_weights(policy_weights)
+            return policy
+        except Exception as e:
+            print('[evaluate_agent] Warning: unable to use pickled policy from checkpoint: %s' % str(e))
+
+    training_environment = None
+    if (checkpoint_picklable is not None and
+            isinstance(checkpoint_picklable, dict) and
+            'training_environment' in checkpoint_picklable):
+        training_environment = checkpoint_picklable['training_environment']
+
+    if training_environment is not None:
+        policy = get_policy_from_variant(variant, training_environment, Qs=[None])
+        try:
+            policy.set_weights(policy_weights)
+        except ValueError as e:
+            print(
+                '[evaluate_agent] Warning: policy weights mismatch on checkpoint training environment: %s' %
+                str(e))
+        else:
+            if (training_environment.active_observation_shape == environment.active_observation_shape and
+                    training_environment.action_space.shape == environment.action_space.shape):
+                return policy
+
     policy = get_policy_from_variant(variant, environment, Qs=[None])
-    policy.set_weights(policy_weights)
+    try:
+        policy.set_weights(policy_weights)
+    except ValueError as e:
+        input_dim = _infer_policy_input_dim(policy_weights)
+        env_input_dim = int(np.prod(environment.active_observation_shape))
+        if input_dim < env_input_dim:
+            print(
+                '[evaluate_agent] Detected legacy policy input dimension %d; '
+                'wrapping evaluation environment to use first %d observation coordinates.' % (
+                    input_dim, input_dim))
+            wrapped_environment = ObservationSliceWrapper(environment, input_dim)
+            policy = get_policy_from_variant(variant, wrapped_environment, Qs=[None])
+            try:
+                policy.set_weights(policy_weights)
+                return PolicyInputSliceWrapper(policy, input_dim)
+            except ValueError as e2:
+                raise ValueError(
+                    'Policy weights shape mismatch after applying legacy observation slice wrapper. '
+                    'Evaluation env active_observation_shape=%s action_space=%s, '
+                    'policy weight shapes=%s, error=%s' % (
+                        environment.active_observation_shape,
+                        environment.action_space.shape,
+                        _policy_weights_shape_summary(policy_weights),
+                        str(e2)))
+        raise ValueError(
+            'Policy weights shape mismatch when loading policy on evaluation environment. '
+            'Evaluation env active_observation_shape=%s action_space=%s, '
+            'policy weight shapes=%s, error=%s' % (
+                environment.active_observation_shape,
+                environment.action_space.shape,
+                _policy_weights_shape_summary(policy_weights),
+                str(e)))
     return policy
 
 
@@ -236,6 +314,66 @@ def _extract_underlying_env(env):
     if hasattr(env, '_env'):
         return env._env
     return env
+
+
+def _infer_policy_input_dim(policy_weights):
+    if not policy_weights:
+        raise ValueError('No policy weights provided.')
+    first_weight = policy_weights[0]
+    if hasattr(first_weight, 'shape') and len(first_weight.shape) == 2:
+        return int(first_weight.shape[0])
+    raise ValueError(
+        'Unable to infer policy input dimension from saved weights: %s' %
+        _policy_weights_shape_summary(policy_weights))
+
+
+class ObservationSliceWrapper(object):
+    def __init__(self, env, slice_dim):
+        self._env = env
+        self._slice_dim = int(slice_dim)
+
+    @property
+    def observation_space(self):
+        return self._env.observation_space
+
+    @property
+    def action_space(self):
+        return self._env.action_space
+
+    @property
+    def active_observation_shape(self):
+        return (self._slice_dim,)
+
+    def convert_to_active_observation(self, observation):
+        active_observation = getattr(
+            self._env, 'convert_to_active_observation', lambda x: x)(observation)
+        return np.asarray(active_observation, dtype=np.float32)[..., :self._slice_dim]
+
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+
+class PolicyInputSliceWrapper(object):
+    def __init__(self, policy, slice_dim):
+        self._policy = policy
+        self._slice_dim = int(slice_dim)
+
+    def actions_np(self, conditions):
+        if isinstance(conditions, (list, tuple)):
+            processed = [
+                np.asarray(condition, dtype=np.float32)[..., :self._slice_dim]
+                for condition in conditions
+            ]
+            return self._policy.actions_np(processed)
+
+        conditions = np.asarray(conditions, dtype=np.float32)
+        if conditions.ndim == 1:
+            conditions = conditions[None]
+        conditions = conditions[..., :self._slice_dim]
+        return self._policy.actions_np(conditions)
+
+    def __getattr__(self, name):
+        return getattr(self._policy, name)
 
 
 def make_baseline_rollout(env, baseline_type, path_length):
@@ -331,6 +469,16 @@ def rollout_metrics(paths):
     return np.array(rewards), np.array(lengths)
 
 
+def _hours_from_rollout_times(times):
+    times = np.asarray(times, dtype=np.float64)
+    if len(times) == 0 or not np.isfinite(times).all():
+        return times
+    if np.nanmax(times) <= 24.0 and np.nanmin(times) >= 0.0:
+        # PVTracking stores `info['time']` as hour-of-day values.
+        return times - times[0]
+    return (times - times[0]) / 3600.0
+
+
 def compute_total_energy_kwh(path):
     infos = path.get('infos', [])
     if not infos:
@@ -340,7 +488,10 @@ def compute_total_energy_kwh(path):
     if len(power) == 0:
         return np.nan
     if np.isfinite(times).all() and len(times) > 1:
-        dt_hours = np.diff(times) / 3600.0
+        if np.nanmax(times) <= 24.0 and np.nanmin(times) >= 0.0:
+            dt_hours = np.diff(times)
+        else:
+            dt_hours = np.diff(times) / 3600.0
         energy = np.sum(power[:-1] * dt_hours / 1000.0)
         energy += power[-1] * np.median(dt_hours) / 1000.0
         return float(energy)
@@ -495,7 +646,10 @@ def plot_rollout_series(outdir, path, idx):
     if infos and 'time' in infos[0]:
         times = np.array([info.get('time', np.nan) for info in infos], dtype=np.float64)
         if np.isfinite(times).all():
-            times = (times - times[0]) / 3600.0
+            if np.nanmax(times) <= 24.0 and np.nanmin(times) >= 0.0:
+                times = times - times[0]
+            else:
+                times = (times - times[0]) / 3600.0
     else:
         times = np.arange(len(path['rewards']), dtype=np.float64)
 
@@ -540,7 +694,10 @@ def plot_rollout_combined(outdir, path, idx):
     if infos and 'time' in infos[0]:
         times = np.array([info.get('time', np.nan) for info in infos], dtype=np.float64)
         if np.isfinite(times).all():
-            times = (times - times[0]) / 3600.0
+            if np.nanmax(times) <= 24.0 and np.nanmin(times) >= 0.0:
+                times = times - times[0]
+            else:
+                times = (times - times[0]) / 3600.0
     else:
         times = np.arange(len(path['rewards']), dtype=np.float64)
 
@@ -599,6 +756,7 @@ def main(args):
     tf.keras.backend.set_session(session)
 
     variant = load_variant(experiment_root, args.variant_file)
+    checkpoint_picklable = load_checkpoint_picklable(checkpoint_path)
     policy_weights = load_policy_weights(checkpoint_path)
 
     eval_environment = get_eval_environment(
@@ -608,7 +766,12 @@ def main(args):
         args.test_end_date,
         args.fixed_eval_dates,
     )
-    policy = get_policy(variant, eval_environment, policy_weights)
+    policy = get_policy(
+        variant,
+        eval_environment,
+        policy_weights,
+        checkpoint_picklable=checkpoint_picklable,
+    )
 
     path_length = args.max_path_length
     if path_length == 1000:
