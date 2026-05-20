@@ -7,8 +7,10 @@ params = {
     'log_dir': '~/ray_mbpo/',
     'exp_name': 'pv_tracking',
 
+    # Balanced defaults: reasonable wall-clock on CPU while still learning a
+    # useful tracking policy. Increase n_epochs (e.g. 200-500) for higher accuracy.
     'kwargs': {
-        'n_epochs': 5,
+        'n_epochs': 50,
         'epoch_length': 64,
         'train_every_n_steps': 1,
         'n_train_repeat': 10,
@@ -20,17 +22,20 @@ params = {
         'tau': 5e-3,
         'reward_scale': 1.0,
 
-        'model_train_freq': 50,
+        # Train dynamics model every 100 env steps; cap wall time if needed.
+        'model_train_freq': 100,
         'model_retain_epochs': 1,
-        'rollout_batch_size': 100,
+        'max_model_t': 120,
+
+        'rollout_batch_size': 1000,
         'deterministic': False,
         'num_networks': 5,
         'num_elites': 3,
         'real_ratio': 0.1,
         'target_entropy': -2,
-        'max_model_t': None,
-        'rollout_schedule': [1, 10, 1, 1],
-        # ~10 full episodes (63 steps each) before policy training
+        'rollout_schedule': [1, 20, 1, 1],
+
+        # ~10 full PV episodes (63 steps) before SAC training starts.
         'n_initial_exploration_steps': 630,
     }
 }

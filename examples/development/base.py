@@ -104,6 +104,7 @@ NUM_EPOCHS_PER_DOMAIN = {
     'Ant': int(3e3),
     'Humanoid': int(1e4),
     'Pendulum': 10,
+    'PVTracking': 50,
 }
 
 ALGORITHM_PARAMS_PER_DOMAIN = {
@@ -132,10 +133,16 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
         ALGORITHM_PARAMS_PER_DOMAIN.get(domain, {}),
         ALGORITHM_PARAMS_ADDITIONAL.get(algorithm, {})
     )
-    algorithm_params = deep_update(
-        algorithm_params,
-        env_params
-    )
+    # Merge only algorithm-relevant fields from the config file. Do not copy
+    # environment metadata (domain, universe, log_dir, ...) into algorithm_params.
+    if getattr(env_params, 'type', None):
+        algorithm_params['type'] = env_params.type
+    config_kwargs = getattr(env_params, 'kwargs', None)
+    if config_kwargs:
+        algorithm_params['kwargs'] = deep_update(
+            algorithm_params.get('kwargs', {}),
+            dict(config_kwargs),
+        )
 
     variant_spec = {
         'git_sha': get_git_rev(),

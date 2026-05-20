@@ -1,20 +1,50 @@
-# Model-Based Policy Optimization
+# Model-Based Policy Optimization (MBPO)
 
-Code to reproduce the experiments in [When to Trust Your Model: Model-Based Policy Optimization](https://arxiv.org/abs/1906.08253).
+This repository implements [Model-Based Policy Optimization (MBPO)](https://arxiv.org/abs/1906.08253) on top of [softlearning](https://github.com/rail-berkeley/softlearning). It includes a custom **PV solar tracking** Gym environment built with **pvlib**, wired into the full MBPO training, checkpointing, evaluation, and plotting workflow.
 
 <p align="center">
-	<!-- <img src="https://drive.google.com/uc?export=view&id=19KA7zIjo4HVEqrJNRRgNvkpUwZ6AWGMD" width="80%"> -->
-	<img src="https://drive.google.com/uc?export=view&id=1siZA55atJi8Tgeefvv28WOqk7pFSynJP" width="80%">
+  <img src="https://drive.google.com/uc?export=view&id=1siZA55atJi8Tgeefvv28WOqk7pFSynJP" width="80%">
 </p>
 
+## Project overview
+
+| Layer | Location | Role |
+|-------|----------|------|
+| Gym environment | `mbpo/env/pv_tracking.py` | pvlib irradiance + 2D panel control (tilt/azimuth) |
+| Environment registration | `mbpo/env/__init__.py` | Registers `PVTracking-v0` |
+| Model termination fn | `mbpo/static/pv_tracking.py` | Marks done when predicted next state is non-finite |
+| MBPO algorithm | `mbpo/algorithms/mbpo.py` | Ensemble dynamics model + SAC policy |
+| Training entrypoint | `examples/development/main.py` | Ray Tune `ExperimentRunner` |
+| Training config | `examples/config/pv_tracking/0.py` | Hyperparameters for PV runs |
+| Variant builder | `examples/development/base.py` | Merges config into Ray variant spec |
+| Utility scripts | `scripts/` | Env check, evaluate, plot, export weights |
+
+### Data flow (training → evaluation)
+
+```
+examples/config/pv_tracking/0.py
+        ↓
+examples.development (Ray Tune)
+        ↓
+GymAdapter → PVTracking-v0 (pvlib)
+        ↓
+MBPO: collect real data → train ensemble BNN → imaginary rollouts → train SAC
+        ↓
+checkpoint_*/  (checkpoint.pkl, policy_weights.pkl, TF checkpoint)
+        ↓
+scripts/evaluate_agent.py  +  scripts/plot_training_progress.py
+```
+
 ## Installation
-1. Install [MuJoCo 1.50](https://www.roboti.us/index.html) at `~/.mujoco/mjpro150` and copy your license key to `~/.mujoco/mjkey.txt`
-2. Clone `mbpo`
-```
+
+### 1. MuJoCo (only for classic MBPO benchmarks)
+
+MuJoCo is **not** required for PV tracking. For Hopper/HalfCheetah-style tasks, install [MuJoCo 1.50](https://www.roboti.us/index.html) at `~/.mujoco/mjpro150` and place your license at `~/.mujoco/mjkey.txt`.
+
+### 2. Clone and install
+
+```bash
 git clone --recursive https://github.com/jannerm/mbpo.git
-```
-3. Create a conda environment and install mbpo
-```
 cd mbpo
 conda env create -f environment/gpu-env.yml
 conda activate mbpo
@@ -22,42 +52,177 @@ pip install -e viskit
 pip install -e .
 ```
 
-## Usage
-Configuration files can be found in [`examples/config/`](examples/config).
+The conda environment installs dependencies from `environment/requirements.txt`, including **pvlib** for the PV environment.
+
+## Quick validation (no training)
+
+```bash
+conda activate mbpo
+cd mbpo   # repository root
+
+# 1) pvlib + Gym environment smoke test
+python scripts/check_pv_env.py
+
+# 2) Verify Ray variant / config wiring (dry run)
+mbpo run_example_dry examples.development \
+  --config=examples.config.pv_tracking.0 \
+  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+```
+
+Expected: env checker prints obs/action shapes; dry run reports `max_path_length: 63`, `n_epochs: 50`, and one trial.
+
+## Training (PV tracking)
+
+### Command
+
+```bash
+conda activate mbpo
+cd mbpo
+
+mbpo run_local examples.development \
+  --config=examples.config.pv_tracking.0 \
+  --gpus=0 --trial-gpus=0 \
+  --cpus=2 --trial-cpus=1
+```
+
+### What happens each epoch
+
+1. **Environment interaction** — `SimpleSampler` collects transitions from `PVTracking-v0` (episode length 63 steps).
+2. **Initial exploration** — uniform policy until `n_initial_exploration_steps` (630 ≈ 10 episodes) are in the replay pool.
+3. **Dynamics model** — ensemble BNN trained every `model_train_freq` steps on real data.
+4. **Model rollouts** — short imagined trajectories added to the pool (`rollout_schedule` controls horizon).
+5. **Policy training** — SAC updated with mixed real/model batches (`real_ratio`).
+6. **Evaluation** — one deterministic episode; metrics logged to `progress.csv`.
+7. **Checkpoint** — `checkpoint.pkl`, `policy_weights.pkl`, and TensorFlow weights under `checkpoint_*`.
+
+### Logs and checkpoints
+
+Results are written under:
 
 ```
-mbpo run_local examples.development --config=examples.config.halfcheetah.0 --gpus=1 --trial-gpus=1
+~/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/
+  params.json          # full variant (written by Ray Tune)
+  progress.csv         # per-epoch metrics
+  result.json
+  checkpoint_*/
+    checkpoint.pkl     # full picklable state
+    policy_weights.pkl # policy only (for fast evaluation)
+    checkpoint         # TF checkpoint prefix
 ```
 
-Currently only running locally is supported.
+View runs with viskit:
 
-#### New environments
-To run on a different environment, you can modify the provided [template](examples/config/custom/0.py). You will also need to provide the termination function for the environment in [`mbpo/static`](mbpo/static). If you name the file the lowercase version of the environment name, it will be found automatically. See [`hopper.py`](mbpo/static/hopper.py) for an example.
-
-#### Logging
-
-This codebase contains [viskit](https://github.com/vitchyr/viskit) as a submodule. You can view saved runs with:
+```bash
+viskit ~/ray_mbpo/PVTracking --port 6008
 ```
-viskit ~/ray_mbpo --port 6008
+
+### Hyperparameters (`examples/config/pv_tracking/0.py`)
+
+Defaults are tuned for a **balance between wall-clock and accuracy** on CPU:
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `n_epochs` | 50 | Increase to 200–500 for stronger policies |
+| `epoch_length` | 64 | Environment steps per training epoch |
+| `max_path_length` | 63 | Full PV day episode (set in `base.py`) |
+| `n_initial_exploration_steps` | 630 | ~10 episodes before learning |
+| `model_train_freq` | 100 | Retrain dynamics every 100 steps |
+| `max_model_t` | 120 s | Cap model training time per update |
+| `rollout_batch_size` | 1000 | Imagined samples per model rollout phase |
+| `num_networks` / `num_elites` | 5 / 3 | Ensemble size |
+| `real_ratio` | 0.1 | Fraction of real vs model data in SAC batches |
+| `rollout_schedule` | `[1, 20, 1, 1]` | Model rollout length schedule |
+| `target_entropy` | -2 | Matches 2D action space |
+
+TensorFlow / NumPy / Gym deprecation messages are safe to ignore.
+
+## Evaluation
+
+After training, evaluate a checkpoint (no retraining):
+
+```bash
+CKPT_DIR=~/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>
+
+python scripts/evaluate_agent.py \
+  "${CKPT_DIR}" \
+  --outdir evaluation/pv_tracking \
+  --num-rollouts 10 \
+  --max-path-length 63 \
+  --deterministic
 ```
-assuming you used the default [`log_dir`](examples/config/halfcheetah/0.py#L7).
 
-#### Hyperparameters
+Outputs:
 
-The rollout length schedule is defined by a length-4 list in a [config file](examples/config/halfcheetah/0.py#L31). The format is `[start_epoch, end_epoch, start_length, end_length]`, so the following:
+- `evaluation_summary.txt` — per-rollout returns and lengths
+- `evaluation_rewards.png`
+- `evaluation_lengths.png`
+
+### Export policy weights (older checkpoints)
+
+If `policy_weights.pkl` is missing (runs before the save hook was added):
+
+```bash
+python scripts/export_policy_weights.py "${CKPT_DIR}"
 ```
-'rollout_schedule': [20, 100, 1, 5] 
+
+### Interactive rollouts (optional)
+
+```bash
+python -m examples.development.simulate_policy \
+  "${CKPT_DIR}" \
+  --num-rollouts 3 \
+  --max-path-length 63 \
+  --render-mode None \
+  --deterministic
 ```
-corresponds to a model rollout length linearly increasing from 1 to 5 over epochs 20 to 100. 
 
-If you want to speed up training in terms of wall clock time (but possibly make the runs less sample-efficient), you can set a timeout for model training ([`max_model_t`](examples/config/halfcheetah/0.py#L30), in seconds) or train the model less frequently (every [`model_train_freq`](examples/config/halfcheetah/0.py#L22) steps).
+## Plotting
 
-## Comparing to MBPO
-If you would like to compare to MBPO but do not have the resources to re-run all experiments, the learning curves found in Figure 2 of the paper (plus on the Humanoid environment) are available in this [shared folder](https://drive.google.com/drive/folders/1matvC7hPi5al9-5S2uL4GuXfT5rzO9qU?usp=sharing). See `plot.py` for an example of how to read the pickle files with the results.
+### Training curves (`progress.csv`)
+
+```bash
+TRIAL_DIR=~/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>
+
+python scripts/plot_training_progress.py \
+  "${TRIAL_DIR}" \
+  --outdir evaluation/pv_tracking/training_plots
+```
+
+Default metrics: `evaluation/return-average`, `training/return-average`, `model/val_loss`.
+
+### Ray trial status (terminal summary)
+
+Save the Ray status block to a text file, then:
+
+```bash
+python scripts/plot_ray_results.py /path/to/ray_status.txt \
+  --outdir evaluation/pv_tracking/ray_plots
+```
+
+## Adding other environments
+
+1. Copy [`examples/config/custom/0.py`](examples/config/custom/0.py).
+2. Implement a Gym env under `mbpo/env/` and register it in `mbpo/env/__init__.py`.
+3. Add a termination function in `mbpo/static/` (filename = lowercase domain, e.g. `pv_tracking.py` for `PVTracking`).
+4. Set `max_path_length` in `examples/development/base.py` if episodes are shorter than 1000 steps.
+
+## Classic MBPO benchmarks (MuJoCo)
+
+```bash
+mbpo run_local examples.development \
+  --config=examples.config.halfcheetah.0 \
+  --gpus=1 --trial-gpus=1
+```
+
+Rollout schedule format: `[start_epoch, end_epoch, start_length, end_length]` — e.g. `[20, 100, 1, 5]` ramps imagined rollout length from 1 to 5 between epochs 20 and 100.
+
+## Comparing to published MBPO results
+
+Precomputed learning curves: [Google Drive folder](https://drive.google.com/drive/folders/1matvC7hPi5al9-5S2uL4GuXfT5rzO9qU?usp=sharing).
 
 ## Reference
 
-```
+```bibtex
 @inproceedings{janner2019mbpo,
   author = {Michael Janner and Justin Fu and Marvin Zhang and Sergey Levine},
   title = {When to Trust Your Model: Model-Based Policy Optimization},
@@ -67,6 +232,5 @@ If you would like to compare to MBPO but do not have the resources to re-run all
 ```
 
 ## Acknowledgments
-The underlying soft actor-critic implementation in MBPO comes from [Tuomas Haarnoja](https://scholar.google.com/citations?user=VT7peyEAAAAJ&hl=en) and [Kristian Hartikainen's](https://hartikainen.github.io/) [softlearning](https://github.com/rail-berkeley/softlearning) codebase. The modeling code is a slightly modified version of [Kurtland Chua's](https://kchua.github.io/) [PETS](https://github.com/kchua/handful-of-trials) implementation.
 
-
+SAC implementation from [softlearning](https://github.com/rail-berkeley/softlearning). Dynamics modeling from [PETS](https://github.com/kchua/handful-of-trials).
