@@ -82,10 +82,15 @@ def normalize_angle_diff(target, current):
     return diff
 
 
-def make_environment(variant, override=None):
+def make_environment(variant, override=None, fixed_eval_dates=None):
     env_params = variant['environment_params']['training']
     if override:
         env_params = deep_update(env_params, override)
+    if fixed_eval_dates:
+        env_params = deep_update(env_params, {'kwargs': {}})
+        env_params['kwargs']['fixed_eval_dates'] = [
+            date.strip() for date in fixed_eval_dates.split(',') if date.strip()]
+        env_params['kwargs']['randomize_day'] = False
     return get_environment_from_params(env_params)
 
 
@@ -173,6 +178,7 @@ def main():
     parser.add_argument('--max-path-length', '-l', type=int, default=63, help='Rollout horizon')
     parser.add_argument('--variant-file', type=str, default='params.json', help='Variant JSON filename stored in the experiment root')
     parser.add_argument('--deterministic', action='store_true', help='Run the policy deterministically')
+    parser.add_argument('--fixed-eval-dates', type=str, default=None, help='Comma-separated list of exact dates (YYYY-MM-DD) for fixed evaluation rollouts')
     parser.add_argument('--baseline-types', nargs='+', default=['fixed_no_motion', 'sun_tracking'], help='Baselines to compare')
     args = parser.parse_args()
 
@@ -180,7 +186,7 @@ def main():
     variant = load_variant(os.path.dirname(checkpoint_dir), args.variant_file)
     policy_weights = load_policy_weights(checkpoint_dir)
 
-    env = make_environment(variant)
+    env = make_environment(variant, fixed_eval_dates=args.fixed_eval_dates)
     policy = get_policy_from_variant(variant, env, Qs=[None])
     policy.set_weights(policy_weights)
 

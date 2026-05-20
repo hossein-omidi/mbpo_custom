@@ -27,13 +27,15 @@ params = {
         'model_retain_epochs': 5,
         'max_model_t': 120,
 
-        'rollout_batch_size': 500,
+        'rollout_batch_size': 300,
         'deterministic': False,
         'num_networks': 5,
         'num_elites': 3,
-        'real_ratio': 0.2,
+        'real_ratio': 0.5,
+        'min_alpha': 0.05,
+        'max_model_rollout_length': 4,
         'target_entropy': -2,
-        'rollout_schedule': [0, 100, 1, 10],
+        'rollout_schedule': [20, 120, 1, 4],
 
         # ~10 full PV episodes (63 steps) before SAC training starts.
         'n_initial_exploration_steps': 630,

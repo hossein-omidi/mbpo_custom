@@ -120,9 +120,11 @@ mbpo run_local examples.development \
 | `epoch_length` | int | 64 | Real env steps per epoch | Keep at 63 for one full day; increase only if you want multi-day episodes |
 | `n_initial_exploration_steps` | int | 630 | Real exploration steps before learning | Use `max_path_length * 10` to ensure enough coverage before training |
 | `model_train_freq` | int | 100 | Train model every this many env steps | 100 is reasonable; lower if model needs faster adaptation |
-| `rollout_batch_size` | int | 500 | Imagined samples per rollout phase | Use a smaller batch size for more stable PV training |
-| `real_ratio` | float | 0.2 | Fraction of real data in SAC minibatch | Increase if the real model is weak or policy is unstable |
-| `rollout_schedule` | list | `[0, 100, 1, 10]` | Imagined rollout length schedule | Start at 1, then ramp to 10 by epoch 100 for conservative use |
+| `rollout_batch_size` | int | 300 | Imagined samples per rollout phase | Use a smaller batch size for more stable PV training |
+| `real_ratio` | float | 0.5 | Fraction of real data in SAC minibatch | Increase if the real model is weak or policy is unstable |
+| `min_alpha` | float | 0.05 | Lower bound for SAC temperature | Prevents entropy from collapsing too quickly |
+| `max_model_rollout_length` | int | 4 | Hard cap on model rollout horizon | Keep imagined trajectories short for PV tracking |
+| `rollout_schedule` | list | `[20, 120, 1, 4]` | Imagined rollout length schedule | Start at 1, then ramp to 4 by epoch 120 for conservative use |
 | `target_entropy` | float | -2 | SAC exploration tuning | For 2D actions, -2 is a good starting value |
 
 ### PV environment settings
@@ -163,6 +165,7 @@ python scripts/evaluate_agent.py \
 ### Generalization testing
 
 - Use `--test-start-date` and `--test-end-date` to evaluate on a different date range from training.
+- Use `--fixed-eval-dates` to evaluate on an exact list of held-out calendar days.
 - Evaluate separately by season to measure robustness.
 - Use `--compare-baselines` to compare against fixed and rule-based strategies.
 
@@ -178,6 +181,15 @@ python scripts/evaluate_agent.py \
   --compare-baselines \
   --test-start-date 2020-12-01 \
   --test-end-date 2020-12-31
+
+# Exact held-out evaluation on selected days
+python scripts/evaluate_agent.py \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
+  --outdir evaluation/pv_tracking_fixed \
+  --num-rollouts 5 \
+  --max-path-length 63 \
+  --deterministic \
+  --fixed-eval-dates 2020-12-01,2020-03-21,2020-06-21,2020-09-22
 ```
 
 ### Baseline comparison helper
@@ -190,6 +202,14 @@ python scripts/compare_baselines.py \
   --outdir evaluation/pv_tracking \
   --num-rollouts 10 \
   --max-path-length 63
+
+# Use exact held-out days for policy + baseline comparison
+python scripts/compare_baselines.py \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
+  --outdir evaluation/pv_tracking_fixed \
+  --num-rollouts 10 \
+  --max-path-length 63 \
+  --fixed-eval-dates 2020-03-21,2020-06-21,2020-09-22,2020-12-21
 ```
 
 This script evaluates the learned policy and the following baselines:

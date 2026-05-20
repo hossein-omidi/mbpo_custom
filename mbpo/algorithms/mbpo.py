@@ -66,6 +66,9 @@ class MBPO(RLAlgorithm):
             model_retain_epochs=20,
             rollout_batch_size=100e3,
             real_ratio=0.1,
+            model_batch_ratio=None,
+            min_alpha=0.0,
+            max_model_rollout_length=None,
             rollout_schedule=[20,100,1,1],
             hidden_dim=200,
             max_model_t=None,
@@ -113,7 +116,18 @@ class MBPO(RLAlgorithm):
         self._model_train_freq = model_train_freq
         self._rollout_batch_size = int(rollout_batch_size)
         self._deterministic = deterministic
-        self._real_ratio = real_ratio
+        if model_batch_ratio is not None:
+            self._real_ratio = float(1.0 - model_batch_ratio)
+        else:
+            self._real_ratio = float(real_ratio)
+        self._real_ratio = max(0.0, min(1.0, self._real_ratio))
+        self._model_batch_ratio = 1.0 - self._real_ratio
+        self._min_alpha = float(min_alpha)
+        self._max_model_rollout_length = (
+            int(max_model_rollout_length)
+            if max_model_rollout_length is not None else None
+        )
+        self._last_model_rollout_stats = {}
 
         self._log_dir = os.getcwd()
         self._writer = Writer(self._log_dir)
@@ -345,8 +359,12 @@ class MBPO(RLAlgorithm):
 
         self._rollout_length = int(np.ceil(y))
         self._rollout_length = max(min_length, min(self._rollout_length, max_length))
-        print('[ Model Length ] Epoch: {} (min: {}, max: {}) | Length: {} (min: {} , max: {})'.format(
-            self._epoch, min_epoch, max_epoch, self._rollout_length, min_length, max_length
+        if self._max_model_rollout_length is not None:
+            self._rollout_length = min(self._rollout_length, self._max_model_rollout_length)
+
+        print('[ Model Length ] Epoch: {} (min: {}, max: {}) | Length: {} (min: {} , max: {}) | cap: {}'.format(
+            self._epoch, min_epoch, max_epoch, self._rollout_length, min_length, max_length,
+            self._max_model_rollout_length if self._max_model_rollout_length is not None else 'none'
         ))
 
     def _reallocate_model_pool(self):
@@ -386,11 +404,28 @@ class MBPO(RLAlgorithm):
         batch = self.sampler.random_batch(rollout_batch_size)
         obs = batch['observations']
         steps_added = []
+        low = self._training_environment.observation_space.low
+        high = self._training_environment.observation_space.high
+        action_low = self._training_environment.action_space.low
+        action_high = self._training_environment.action_space.high
+
+        def normalize_pair(values):
+            norms = np.linalg.norm(values, axis=-1, keepdims=True)
+            norms = np.where(norms == 0.0, 1.0, norms)
+            return values / norms
+
         for i in range(self._rollout_length):
             act = self._policy.actions_np(obs)
-            
+            act = np.clip(act, action_low, action_high)
+
             next_obs, rew, term, info = self.fake_env.step(obs, act, **kwargs)
             steps_added.append(len(obs))
+
+            next_obs = np.clip(next_obs, low, high)
+            next_obs[:, 1:3] = normalize_pair(next_obs[:, 1:3])
+            next_obs[:, 8:10] = normalize_pair(next_obs[:, 8:10])
+            next_obs[:, 11:13] = normalize_pair(next_obs[:, 11:13])
+            next_obs[:, 13:15] = normalize_pair(next_obs[:, 13:15])
 
             samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
             self._model_pool.add_samples(samples)
@@ -411,6 +446,7 @@ class MBPO(RLAlgorithm):
             'mean_model_log_prob': float(np.mean(info['log_prob'])) if len(info['log_prob']) > 0 else np.nan,
             'model_rollout_samples': int(sum(steps_added)),
         }
+        self._last_model_rollout_stats = rollout_stats
         print('[ Model Rollout ] Added: {:.1e} | Model pool: {:.1e} (max {:.1e}) | Length: {} | Mean dev: {:.4f} | Train rep: {}'.format(
             sum(steps_added), self._model_pool.size, self._model_pool._max_size, mean_rollout_length, rollout_stats['mean_model_dev'], self._n_train_repeat
         ))
@@ -555,20 +591,19 @@ class MBPO(RLAlgorithm):
                 learning_rate=self._Q_lr,
                 name='{}_{}_optimizer'.format(Q._name, i)
             ) for i, Q in enumerate(self._Qs))
-        Q_training_ops = tuple(
-            tf.contrib.layers.optimize_loss(
+        Q_training_ops = []
+        for i, (Q, Q_loss, Q_optimizer) in enumerate(zip(self._Qs, Q_losses, self._Q_optimizers)):
+            grads_and_vars = Q_optimizer.compute_gradients(
                 Q_loss,
-                self.global_step,
-                learning_rate=self._Q_lr,
-                optimizer=Q_optimizer,
-                variables=Q.trainable_variables,
-                increment_global_step=False,
-                summaries=((
-                    "loss", "gradients", "gradient_norm", "global_gradient_norm"
-                ) if self._tf_summaries else ()))
-            for i, (Q, Q_loss, Q_optimizer)
-            in enumerate(zip(self._Qs, Q_losses, self._Q_optimizers)))
-
+                var_list=Q.trainable_variables)
+            clipped_grads_and_vars = [
+                (tf.clip_by_norm(g, 10.0), v) if g is not None else (g, v)
+                for g, v in grads_and_vars
+            ]
+            Q_training_ops.append(
+                Q_optimizer.apply_gradients(
+                    clipped_grads_and_vars,
+                    global_step=None))
         self._training_ops.update({'Q': tf.group(Q_training_ops)})
 
     def _init_actor_update(self):
@@ -603,6 +638,7 @@ class MBPO(RLAlgorithm):
                 'temperature_alpha': self._alpha_train_op
             })
 
+        alpha = tf.maximum(alpha, self._min_alpha)
         self._alpha = alpha
 
         if self._action_prior == 'normal':
@@ -633,16 +669,16 @@ class MBPO(RLAlgorithm):
         self._policy_optimizer = tf.train.AdamOptimizer(
             learning_rate=self._policy_lr,
             name="policy_optimizer")
-        policy_train_op = tf.contrib.layers.optimize_loss(
+        policy_grads_and_vars = self._policy_optimizer.compute_gradients(
             policy_loss,
-            self.global_step,
-            learning_rate=self._policy_lr,
-            optimizer=self._policy_optimizer,
-            variables=self._policy.trainable_variables,
-            increment_global_step=False,
-            summaries=(
-                "loss", "gradients", "gradient_norm", "global_gradient_norm"
-            ) if self._tf_summaries else ())
+            var_list=self._policy.trainable_variables)
+        clipped_policy_grads_and_vars = [
+            (tf.clip_by_norm(g, 10.0), v) if g is not None else (g, v)
+            for g, v in policy_grads_and_vars
+        ]
+        policy_train_op = self._policy_optimizer.apply_gradients(
+            clipped_policy_grads_and_vars,
+            global_step=None)
 
         self._training_ops.update({'policy_train_op': policy_train_op})
 
@@ -725,7 +761,13 @@ class MBPO(RLAlgorithm):
             'real_batch_size': int(getattr(self, '_last_real_batch_size', 0)),
             'model_batch_size': int(getattr(self, '_last_model_batch_size', 0)),
             'real_batch_ratio': float(getattr(self, '_last_real_batch_size', 0)) / max(1, batch['observations'].shape[0]),
-            'model_batch_ratio': float(getattr(self, '_last_model_batch_size', 0)) / max(1, batch['observations'].shape[0]),
+            'model_batch_ratio': self._model_batch_ratio,
+            'action_mean': float(np.mean(batch['actions'])),
+            'action_std': float(np.std(batch['actions'])),
+            'mean_model_dev': float(self._last_model_rollout_stats.get('mean_model_dev', np.nan)),
+            'mean_model_log_prob': float(self._last_model_rollout_stats.get('mean_model_log_prob', np.nan)),
+            'model_rollout_length': int(self._last_model_rollout_stats.get('rollout_length', getattr(self, '_rollout_length', 0))),
+            'model_rollout_samples': int(self._last_model_rollout_stats.get('model_rollout_samples', 0)),
         })
 
         policy_diagnostics = self._policy.get_diagnostics(

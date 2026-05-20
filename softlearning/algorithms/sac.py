@@ -230,19 +230,17 @@ class SAC(RLAlgorithm):
                 learning_rate=self._Q_lr,
                 name='{}_{}_optimizer'.format(Q._name, i)
             ) for i, Q in enumerate(self._Qs))
-        Q_training_ops = tuple(
-            tf.contrib.layers.optimize_loss(
+        Q_training_ops = []
+        for i, (Q, Q_loss, Q_optimizer) in enumerate(zip(self._Qs, Q_losses, self._Q_optimizers)):
+            grads_and_vars = Q_optimizer.compute_gradients(
                 Q_loss,
-                self.global_step,
-                learning_rate=self._Q_lr,
-                optimizer=Q_optimizer,
-                variables=Q.trainable_variables,
-                increment_global_step=False,
-                summaries=((
-                    "loss", "gradients", "gradient_norm", "global_gradient_norm"
-                ) if self._tf_summaries else ()))
-            for i, (Q, Q_loss, Q_optimizer)
-            in enumerate(zip(self._Qs, Q_losses, self._Q_optimizers)))
+                var_list=Q.trainable_variables)
+            clipped_grads_and_vars = [
+                (tf.clip_by_norm(g, 10.0), v) if g is not None else (g, v)
+                for g, v in grads_and_vars
+            ]
+            Q_training_ops.append(
+                Q_optimizer.apply_gradients(clipped_grads_and_vars, global_step=None))
 
         self._training_ops.update({'Q': tf.group(Q_training_ops)})
 
@@ -311,16 +309,16 @@ class SAC(RLAlgorithm):
         self._policy_optimizer = tf.train.AdamOptimizer(
             learning_rate=self._policy_lr,
             name="policy_optimizer")
-        policy_train_op = tf.contrib.layers.optimize_loss(
+        policy_grads_and_vars = self._policy_optimizer.compute_gradients(
             policy_loss,
-            self.global_step,
-            learning_rate=self._policy_lr,
-            optimizer=self._policy_optimizer,
-            variables=self._policy.trainable_variables,
-            increment_global_step=False,
-            summaries=(
-                "loss", "gradients", "gradient_norm", "global_gradient_norm"
-            ) if self._tf_summaries else ())
+            var_list=self._policy.trainable_variables)
+        clipped_policy_grads_and_vars = [
+            (tf.clip_by_norm(g, 10.0), v) if g is not None else (g, v)
+            for g, v in policy_grads_and_vars
+        ]
+        policy_train_op = self._policy_optimizer.apply_gradients(
+            clipped_policy_grads_and_vars,
+            global_step=None)
 
         self._training_ops.update({'policy_train_op': policy_train_op})
 

@@ -97,6 +97,11 @@ def parse_args():
         default=None,
         help='Optional evaluation end date (YYYY-MM-DD) for day sampling.')
     parser.add_argument(
+        '--fixed-eval-dates',
+        type=str,
+        default=None,
+        help='Comma-separated list of exact dates (YYYY-MM-DD) for fixed evaluation rollouts.')
+    parser.add_argument(
         '--compare-baselines',
         action='store_true',
         default=False,
@@ -143,7 +148,12 @@ def deep_update(original, override):
     return updated
 
 
-def get_eval_environment(variant, override_path=None, test_start_date=None, test_end_date=None):
+def get_eval_environment(
+        variant,
+        override_path=None,
+        test_start_date=None,
+        test_end_date=None,
+        fixed_eval_dates=None):
     environment_params = variant['environment_params']
     eval_env_params = (
         environment_params.get('evaluation')
@@ -155,7 +165,12 @@ def get_eval_environment(variant, override_path=None, test_start_date=None, test
             override = json.load(f)
         eval_env_params = deep_update(eval_env_params, override)
 
-    if test_start_date or test_end_date:
+    if fixed_eval_dates:
+        eval_env_params = deep_update(eval_env_params, {'kwargs': {}})
+        eval_env_params['kwargs']['fixed_eval_dates'] = [
+            date.strip() for date in fixed_eval_dates.split(',') if date.strip()]
+        eval_env_params['kwargs']['randomize_day'] = False
+    elif test_start_date or test_end_date:
         eval_env_params = deep_update(eval_env_params, {'kwargs': {}})
         if test_start_date:
             eval_env_params['kwargs']['start_date'] = test_start_date
@@ -591,6 +606,7 @@ def main(args):
         args.eval_env_override,
         args.test_start_date,
         args.test_end_date,
+        args.fixed_eval_dates,
     )
     policy = get_policy(variant, eval_environment, policy_weights)
 
