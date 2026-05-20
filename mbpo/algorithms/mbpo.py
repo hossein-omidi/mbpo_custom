@@ -70,6 +70,11 @@ class MBPO(RLAlgorithm):
             min_alpha=0.0,
             max_model_rollout_length=None,
             rollout_schedule=[20,100,1,1],
+            save_every_epochs=None,
+            early_stop_patience=None,
+            monitor_metric='evaluation/return-average',
+            q_loss_warning_threshold=None,
+            q_loss_stop_threshold=None,
             hidden_dim=200,
             max_model_t=None,
             **kwargs,
@@ -127,6 +132,27 @@ class MBPO(RLAlgorithm):
             int(max_model_rollout_length)
             if max_model_rollout_length is not None else None
         )
+        self._save_every_epochs = (
+            int(save_every_epochs)
+            if save_every_epochs is not None else None
+        )
+        self._early_stop_patience = (
+            int(early_stop_patience)
+            if early_stop_patience is not None else None
+        )
+        self._monitor_metric = monitor_metric
+        self._q_loss_warning_threshold = (
+            float(q_loss_warning_threshold)
+            if q_loss_warning_threshold is not None else None
+        )
+        self._q_loss_stop_threshold = (
+            float(q_loss_stop_threshold)
+            if q_loss_stop_threshold is not None else None
+        )
+        self._best_monitor_value = -np.inf
+        self._epochs_since_improvement = 0
+        self._stop_training = False
+        self._last_real_ratio = self._real_ratio
         self._last_model_rollout_stats = {}
 
         self._log_dir = os.getcwd()
@@ -215,6 +241,17 @@ class MBPO(RLAlgorithm):
             self._epoch_before_hook()
             gt.stamp('epoch_before_hook')
 
+            if self._stop_training:
+                print('[ MBPO ] Stop flag set before epoch {}. Ending training.'.format(self._epoch))
+                break
+
+            print('[ MBPO ] Epoch {} | Rollout length {} | Rollout batch size {} | Model pool size {} | real_ratio {:.3f} | model_batch_ratio {:.3f}'.format(
+                self._epoch,
+                getattr(self, '_rollout_length', None),
+                self._rollout_batch_size,
+                self._model_pool.size if hasattr(self, '_model_pool') else 0,
+                self._real_ratio,
+                self._model_batch_ratio))
             self._training_progress = Progress(self._epoch_length * self._n_train_repeat)
             start_samples = self.sampler._total_samples
             for i in count():
@@ -315,6 +352,10 @@ class MBPO(RLAlgorithm):
                 ('timesteps_total', self._total_timestep),
                 ('train-steps', self._num_train_steps),
             )))
+
+            self._maybe_handle_training_protection(diagnostics)
+            if self._stop_training:
+                print('[ MBPO ] Early stop triggered. Exiting training loop at epoch {}.'.format(self._epoch))
 
             if self._eval_render_mode is not None and hasattr(
                     evaluation_environment, 'render_rollouts'):
@@ -471,6 +512,11 @@ class MBPO(RLAlgorithm):
         model_batch_size = batch_size - env_batch_size
         self._last_real_batch_size = env_batch_size
         self._last_model_batch_size = model_batch_size
+        self._last_real_ratio = float(env_batch_size) / max(1, batch_size)
+
+        if model_batch_size > 0 and hasattr(self, '_model_pool') and self._model_pool.size < model_batch_size:
+            print('[ MBPO WARNING ] Model pool has {} samples but requested {} model samples. Sampling with available pool size.'.format(
+                self._model_pool.size, model_batch_size))
 
         ## can sample from the env pool even if env_batch_size == 0
         env_batch = self._pool.random_batch(env_batch_size)
@@ -485,6 +531,29 @@ class MBPO(RLAlgorithm):
             ## so skip the model pool sampling
             batch = env_batch
         return batch
+
+    def _maybe_handle_training_protection(self, diagnostics):
+        q_loss = diagnostics.get('Q_loss', np.nan)
+        if self._q_loss_warning_threshold is not None and q_loss > self._q_loss_warning_threshold:
+            print('[ MBPO WARNING ] Q_loss {:.4f} > warning threshold {:.4f}'.format(
+                q_loss, self._q_loss_warning_threshold))
+
+        if self._q_loss_stop_threshold is not None and q_loss > self._q_loss_stop_threshold:
+            print('[ MBPO STOP ] Q_loss {:.4f} exceeds stop threshold {:.4f}. Marking training to stop.'.format(
+                q_loss, self._q_loss_stop_threshold))
+            self._stop_training = True
+
+        monitor_value = diagnostics.get(self._monitor_metric)
+        if monitor_value is not None and self._early_stop_patience is not None:
+            if monitor_value > self._best_monitor_value:
+                self._best_monitor_value = monitor_value
+                self._epochs_since_improvement = 0
+            else:
+                self._epochs_since_improvement += 1
+                if self._epochs_since_improvement >= self._early_stop_patience:
+                    print('[ MBPO STOP ] No improvement on {} for {} epochs. Marking training to stop.'.format(
+                        self._monitor_metric, self._early_stop_patience))
+                    self._stop_training = True
 
     def _init_global_step(self):
         self.global_step = training_util.get_or_create_global_step()
@@ -761,7 +830,15 @@ class MBPO(RLAlgorithm):
             'real_batch_size': int(getattr(self, '_last_real_batch_size', 0)),
             'model_batch_size': int(getattr(self, '_last_model_batch_size', 0)),
             'real_batch_ratio': float(getattr(self, '_last_real_batch_size', 0)) / max(1, batch['observations'].shape[0]),
-            'model_batch_ratio': self._model_batch_ratio,
+            'model_batch_ratio': float(getattr(self, '_last_model_batch_size', 0)) / max(1, batch['observations'].shape[0]),
+            'rollout_batch_size': int(self._rollout_batch_size),
+            'model_pool_size': int(self._model_pool.size if hasattr(self, '_model_pool') else 0),
+            'reward_scale': float(self._reward_scale),
+            'target_entropy': float(self._target_entropy),
+            'alpha_min': float(self._min_alpha),
+            'save_every_epochs': int(self._save_every_epochs) if self._save_every_epochs is not None else 0,
+            'q_loss_warning_threshold': float(self._q_loss_warning_threshold) if self._q_loss_warning_threshold is not None else np.nan,
+            'q_loss_stop_threshold': float(self._q_loss_stop_threshold) if self._q_loss_stop_threshold is not None else np.nan,
             'action_mean': float(np.mean(batch['actions'])),
             'action_std': float(np.std(batch['actions'])),
             'mean_model_dev': float(self._last_model_rollout_stats.get('mean_model_dev', np.nan)),

@@ -5,6 +5,7 @@ import pickle
 import sys
 import pdb
 
+import numpy as np
 import tensorflow as tf
 from ray import tune
 
@@ -33,6 +34,16 @@ class ExperimentRunner(tune.Trainable):
 
         self.train_generator = None
         self._built = False
+        self._best_eval_return = -np.inf
+        self._best_eval_checkpoint_dir = None
+        self._epochs_since_best_eval = 0
+        self._save_every_epochs = (
+            int(self._variant['run_params'].get('save_every_epochs'))
+            if self._variant['run_params'].get('save_every_epochs') is not None else
+            int(self._variant['run_params'].get('checkpoint_frequency', 0))
+        )
+        self._monitor_metric = self._variant['run_params'].get(
+            'monitor_metric', 'evaluation/return-average')
 
     def _stop(self):
         tf.reset_default_graph()
@@ -87,9 +98,33 @@ class ExperimentRunner(tune.Trainable):
         if self.train_generator is None:
             self.train_generator = self.algorithm.train()
 
-        diagnostics = next(self.train_generator)
+        try:
+            diagnostics = next(self.train_generator)
+        except StopIteration:
+            return {'done': True}
+
+        self._maybe_checkpoint(diagnostics)
 
         return diagnostics
+
+    def _maybe_checkpoint(self, diagnostics):
+        current_epoch = getattr(self.algorithm, '_epoch', 0)
+        if self._save_every_epochs and (current_epoch + 1) % self._save_every_epochs == 0:
+            latest_checkpoint_dir = os.path.join(os.getcwd(), 'latest_checkpoint')
+            print('[ ExperimentRunner ] Saving latest checkpoint to: {}'.format(latest_checkpoint_dir))
+            self._save(latest_checkpoint_dir)
+
+        monitor_value = diagnostics.get(self._monitor_metric)
+        if monitor_value is not None and monitor_value > self._best_eval_return:
+            self._best_eval_return = monitor_value
+            self._epochs_since_best_eval = 0
+            best_checkpoint_dir = os.path.join(os.getcwd(), 'best_eval_checkpoint')
+            self._best_eval_checkpoint_dir = best_checkpoint_dir
+            print('[ ExperimentRunner ] New best eval {} = {:.6f}. Saving best checkpoint to: {}'.format(
+                self._monitor_metric, monitor_value, best_checkpoint_dir))
+            self._save(best_checkpoint_dir)
+        else:
+            self._epochs_since_best_eval += 1
 
     def _pickle_path(self, checkpoint_dir):
         return os.path.join(checkpoint_dir, 'checkpoint.pkl')
@@ -130,6 +165,7 @@ class ExperimentRunner(tune.Trainable):
             `tf.train.Checkpoint` and `pickle.dump` in very unorganized way
             which makes things not so usable.
         """
+        os.makedirs(checkpoint_dir, exist_ok=True)
         pickle_path = self._pickle_path(checkpoint_dir)
         with open(pickle_path, 'wb') as f:
             pickle.dump(self.picklables, f)
