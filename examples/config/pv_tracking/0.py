@@ -33,9 +33,14 @@ params = {
         'num_elites': 3,
         'real_ratio': 0.5,
         'min_alpha': 0.05,
-        'max_model_rollout_length': 4,
+        'max_model_rollout_length': 3,
         'target_entropy': -2,
-        'rollout_schedule': [20, 120, 1, 4],
+        'rollout_schedule': [20, 120, 1, 3],
+        'save_every_epochs': 5,
+        'early_stop_patience': 12,
+        'monitor_metric': 'evaluation/return-average',
+        'q_loss_warning_threshold': 0.03,
+        'q_loss_stop_threshold': 0.1,
 
         # ~10 full PV episodes (63 steps) before SAC training starts.
         'n_initial_exploration_steps': 630,

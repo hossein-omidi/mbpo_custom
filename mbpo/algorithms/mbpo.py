@@ -154,6 +154,7 @@ class MBPO(RLAlgorithm):
         self._stop_training = False
         self._last_real_ratio = self._real_ratio
         self._last_model_rollout_stats = {}
+        self._last_Q_loss = np.nan
 
         self._log_dir = os.getcwd()
         self._writer = Writer(self._log_dir)
@@ -398,10 +399,20 @@ class MBPO(RLAlgorithm):
             dx = min(dx, 1.0)
             y = dx * (max_length - min_length) + min_length
 
-        self._rollout_length = int(np.ceil(y))
+        self._rollout_length = int(np.floor(y))
         self._rollout_length = max(min_length, min(self._rollout_length, max_length))
         if self._max_model_rollout_length is not None:
             self._rollout_length = min(self._rollout_length, self._max_model_rollout_length)
+
+        if (self._q_loss_warning_threshold is not None and
+                np.isfinite(self._last_Q_loss) and
+                self._last_Q_loss > self._q_loss_warning_threshold):
+            reduced_length = max(min_length, 1)
+            if self._rollout_length > reduced_length:
+                print('[ Model Length ] Q_loss {:.4f} above warning threshold {:.4f}. Reducing rollout length {} -> {}.'.format(
+                    self._last_Q_loss, self._q_loss_warning_threshold,
+                    self._rollout_length, reduced_length))
+                self._rollout_length = reduced_length
 
         print('[ Model Length ] Epoch: {} (min: {}, max: {}) | Length: {} (min: {} , max: {}) | cap: {}'.format(
             self._epoch, min_epoch, max_epoch, self._rollout_length, min_length, max_length,
@@ -849,6 +860,7 @@ class MBPO(RLAlgorithm):
 
         policy_diagnostics = self._policy.get_diagnostics(
             batch['observations'])
+        self._last_Q_loss = np.mean(Q_losses)
         diagnostics.update({
             f'policy/{key}': value
             for key, value in policy_diagnostics.items()
@@ -862,6 +874,16 @@ class MBPO(RLAlgorithm):
     @property
     def tf_saveables(self):
         saveables = {
+            'policy': self._policy,
+            'model': self._model,
+            **{
+                f'Q_{i}': Q
+                for i, Q in enumerate(self._Qs)
+            },
+            **{
+                f'Q_target_{i}': Q_target
+                for i, Q_target in enumerate(self._Q_targets)
+            },
             '_policy_optimizer': self._policy_optimizer,
             **{
                 f'Q_optimizer_{i}': optimizer

@@ -37,13 +37,24 @@ class ExperimentRunner(tune.Trainable):
         self._best_eval_return = -np.inf
         self._best_eval_checkpoint_dir = None
         self._epochs_since_best_eval = 0
+
+        save_every_epochs = self._variant['run_params'].get('save_every_epochs')
+        if save_every_epochs is None:
+            save_every_epochs = (
+                self._variant.get('algorithm_params', {})
+                .get('kwargs', {})
+                .get('save_every_epochs'))
         self._save_every_epochs = (
-            int(self._variant['run_params'].get('save_every_epochs'))
-            if self._variant['run_params'].get('save_every_epochs') is not None else
+            int(save_every_epochs)
+            if save_every_epochs is not None else
             int(self._variant['run_params'].get('checkpoint_frequency', 0))
         )
-        self._monitor_metric = self._variant['run_params'].get(
-            'monitor_metric', 'evaluation/return-average')
+
+        self._monitor_metric = (
+            self._variant['run_params'].get('monitor_metric') or
+            self._variant.get('algorithm_params', {})
+                .get('kwargs', {})
+                .get('monitor_metric', 'evaluation/return-average'))
 
     def _stop(self):
         tf.reset_default_graph()
@@ -113,6 +124,15 @@ class ExperimentRunner(tune.Trainable):
             latest_checkpoint_dir = os.path.join(os.getcwd(), 'latest_checkpoint')
             print('[ ExperimentRunner ] Saving latest checkpoint to: {}'.format(latest_checkpoint_dir))
             self._save(latest_checkpoint_dir)
+
+        q_loss = diagnostics.get('Q_loss')
+        q_loss_warning_threshold = getattr(self.algorithm, '_q_loss_warning_threshold', None)
+        if (q_loss_warning_threshold is not None and q_loss is not None and
+                q_loss > q_loss_warning_threshold):
+            emergency_checkpoint_dir = os.path.join(os.getcwd(), 'emergency_checkpoint')
+            print('[ ExperimentRunner ] Q_loss {:.6f} > warning threshold {:.6f}. Saving emergency checkpoint to: {}'.format(
+                q_loss, q_loss_warning_threshold, emergency_checkpoint_dir))
+            self._save(emergency_checkpoint_dir)
 
         monitor_value = diagnostics.get(self._monitor_metric)
         if monitor_value is not None and monitor_value > self._best_eval_return:
