@@ -39,8 +39,9 @@ params = {
         'save_every_epochs': 5,
         'early_stop_patience': 12,
         'monitor_metric': 'evaluation/return-average',
-        'q_loss_warning_threshold': 0.1,
-        'q_loss_stop_threshold': 1,
+        # Q-loss thresholds disabled: diagnostics only if re-enabled in code.
+        'q_loss_warning_threshold': None,
+        'q_loss_stop_threshold': None,
 
         # ~10 full PV episodes (63 steps) before SAC training starts.
         'n_initial_exploration_steps': 630,

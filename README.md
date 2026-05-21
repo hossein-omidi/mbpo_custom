@@ -151,7 +151,13 @@ mbpo run_local examples.development \
 
 ## Evaluation and generalization
 
-### Basic evaluation
+Evaluation scripts (`scripts/evaluate_agent.py`, `scripts/compare_baselines.py`) share
+`scripts/eval_utils.py` so the learned policy and baselines use the same environment
+settings, per-rollout seeds, and metrics. By default, evaluation uses **random days**
+across the configured date range and stochastic weather (from the training variant
+unless overridden).
+
+### Basic evaluation (diverse random days)
 
 ```bash
 python scripts/evaluate_agent.py \
@@ -161,6 +167,10 @@ python scripts/evaluate_agent.py \
   --max-path-length 63 \
   --deterministic
 ```
+
+Use at least **10 rollouts** for stable estimates when `randomize_day=True` (the script
+warns if fewer). Outputs include `evaluation_summary.txt`, `evaluation_summary.json`,
+per-rollout CSVs, combined time-series plots, and seasonal breakdown.
 
 ### Generalization testing
 
@@ -218,10 +228,12 @@ This script evaluates the learned policy and the following baselines:
 
 ### Evaluation output
 
-- `evaluation_summary.txt` — includes reward, energy, season, and weather for every rollout
-- `rollouts/rollout_<n>.csv` — full trajectory logs
-- `rollout_plots/rollout_<n>_combined.png` — power/tilt/azimuth/reward plots
-- `baseline_rollouts/` — baseline strategy comparisons if requested
+- `evaluation_summary.txt` — aggregate mean/std/min/max, per-season stats, per-rollout conditions
+- `evaluation_summary.json` — same metrics in machine-readable form
+- `evaluation_rewards.png`, `evaluation_by_season.png` — aggregate performance
+- `rollouts/rollout_<n>.csv` — step, time, power, energy, movement, tilt, azimuth, weather, actions, obs
+- `rollout_plots/rollout_<n>_combined.png` — power, cumulative energy, tilt, azimuth, actions, reward/movement vs time-of-day
+- `baseline_rollouts/` — baseline trajectories when `--compare-baselines` is used
 
 ## Scripts and utilities
 

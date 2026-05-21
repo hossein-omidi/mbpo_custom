@@ -4,9 +4,11 @@ import pdb
 
 class FakeEnv:
 
-    def __init__(self, model, config):
+    def __init__(self, model, config, obs_low=None, obs_high=None):
         self.model = model
         self.config = config
+        self._obs_low = obs_low
+        self._obs_high = obs_high
 
     '''
         x : [ batch_size, obs_dim + 1 ]
@@ -61,6 +63,9 @@ class FakeEnv:
         log_prob, dev = self._get_logprob(samples, ensemble_model_means, ensemble_model_vars)
 
         rewards, next_obs = samples[:,:1], samples[:,1:]
+        if hasattr(self.config, 'postprocess_next_obs'):
+            next_obs = self.config.postprocess_next_obs(
+                next_obs, self._obs_low, self._obs_high)
         terminals = self.config.termination_fn(obs, act, next_obs)
 
         batch_size = model_means.shape[0]

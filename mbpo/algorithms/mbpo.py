@@ -107,7 +107,12 @@ class MBPO(RLAlgorithm):
         act_dim = np.prod(training_environment.action_space.shape)
         self._model = construct_model(obs_dim=obs_dim, act_dim=act_dim, hidden_dim=hidden_dim, num_networks=num_networks, num_elites=num_elites)
         self._static_fns = static_fns
-        self.fake_env = FakeEnv(self._model, self._static_fns)
+        self.fake_env = FakeEnv(
+            self._model,
+            self._static_fns,
+            obs_low=training_environment.observation_space.low,
+            obs_high=training_environment.observation_space.high,
+        )
 
         self._rollout_schedule = rollout_schedule
         self._max_model_t = max_model_t
@@ -404,16 +409,6 @@ class MBPO(RLAlgorithm):
         if self._max_model_rollout_length is not None:
             self._rollout_length = min(self._rollout_length, self._max_model_rollout_length)
 
-        if (self._q_loss_warning_threshold is not None and
-                np.isfinite(self._last_Q_loss) and
-                self._last_Q_loss > self._q_loss_warning_threshold):
-            reduced_length = max(min_length, 1)
-            if self._rollout_length > reduced_length:
-                print('[ Model Length ] Q_loss {:.4f} above warning threshold {:.4f}. Reducing rollout length {} -> {}.'.format(
-                    self._last_Q_loss, self._q_loss_warning_threshold,
-                    self._rollout_length, reduced_length))
-                self._rollout_length = reduced_length
-
         print('[ Model Length ] Epoch: {} (min: {}, max: {}) | Length: {} (min: {} , max: {}) | cap: {}'.format(
             self._epoch, min_epoch, max_epoch, self._rollout_length, min_length, max_length,
             self._max_model_rollout_length if self._max_model_rollout_length is not None else 'none'
@@ -450,6 +445,11 @@ class MBPO(RLAlgorithm):
         return model_metrics
 
     def _sample_model_rollout_start_states(self, batch_size):
+        """Sample rollout start observations from non-terminal, pre-horizon transitions.
+
+        Falls back to sampler.random_batch only if the replay pool is empty or
+        lacks terminal flags (not the normal PVTracking path).
+        """
         if not hasattr(self._pool, 'fields') or 'terminals' not in self._pool.fields:
             return self.sampler.random_batch(batch_size)
 
@@ -457,12 +457,26 @@ class MBPO(RLAlgorithm):
             return self.sampler.random_batch(batch_size)
 
         terminals = self._pool.fields['terminals'][:self._pool.size].squeeze(-1)
+        observations = self._pool.fields['observations'][:self._pool.size]
         nonterminal_indices = np.where(~terminals)[0]
-        if len(nonterminal_indices) == 0:
+
+        is_valid_start = getattr(self._static_fns, 'is_valid_rollout_start_obs', None)
+        if is_valid_start is not None:
+            valid_mask = is_valid_start(observations)
+            candidate_indices = nonterminal_indices[valid_mask[nonterminal_indices]]
+        else:
+            candidate_indices = nonterminal_indices
+
+        if len(candidate_indices) == 0:
+            print('[ Model Rollout ] No valid non-terminal pre-horizon start states; '
+                  'falling back to non-terminal pool samples.')
+            candidate_indices = nonterminal_indices
+        if len(candidate_indices) == 0:
             return self.sampler.random_batch(batch_size)
 
-        replace = len(nonterminal_indices) < batch_size
-        indices = np.random.choice(nonterminal_indices, size=batch_size, replace=replace)
+        replace = len(candidate_indices) < batch_size
+        indices = np.random.choice(
+            candidate_indices, size=batch_size, replace=replace)
         observation_keys = getattr(self.sampler.env, 'observation_keys', None)
         return self._pool.batch_by_indices(
             indices,
@@ -477,15 +491,8 @@ class MBPO(RLAlgorithm):
         batch = self._sample_model_rollout_start_states(rollout_batch_size)
         obs = batch['observations']
         steps_added = []
-        low = self._training_environment.observation_space.low
-        high = self._training_environment.observation_space.high
         action_low = self._training_environment.action_space.low
         action_high = self._training_environment.action_space.high
-
-        def normalize_pair(values):
-            norms = np.linalg.norm(values, axis=-1, keepdims=True)
-            norms = np.where(norms == 0.0, 1.0, norms)
-            return values / norms
 
         for i in range(self._rollout_length):
             act = self._policy.actions_np(obs)
@@ -493,12 +500,6 @@ class MBPO(RLAlgorithm):
 
             next_obs, rew, term, info = self.fake_env.step(obs, act, **kwargs)
             steps_added.append(len(obs))
-
-            next_obs = np.clip(next_obs, low, high)
-            next_obs[:, 1:3] = normalize_pair(next_obs[:, 1:3])
-            next_obs[:, 8:10] = normalize_pair(next_obs[:, 8:10])
-            next_obs[:, 11:13] = normalize_pair(next_obs[:, 11:13])
-            next_obs[:, 13:15] = normalize_pair(next_obs[:, 13:15])
 
             samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
             self._model_pool.add_samples(samples)

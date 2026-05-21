@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compare a trained PV tracking policy against simple baselines.
 
-This script evaluates a checkpointed policy and fixed baseline strategies in the
-PVTracking environment, reporting energy and movement costs for each rollout.
+Uses the same evaluation environment settings, seeds, and metrics as
+scripts/evaluate_agent.py so comparisons are fair.
 """
 
 import argparse
@@ -11,12 +11,26 @@ import json
 import os
 import pickle
 import re
+import sys
 
 import numpy as np
+import tensorflow as tf
 
-from softlearning.environments.utils import get_environment_from_params
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
 from softlearning.policies.utils import get_policy_from_variant
 from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
+
+from eval_utils import (
+    describe_eval_config,
+    get_eval_environment,
+    get_rollout_metadata,
+    make_baseline_rollout,
+    summarize_paths,
+    validate_eval_coverage,
+)
 
 
 def resolve_checkpoint_path(checkpoint_pattern):
@@ -65,108 +79,46 @@ def load_policy_weights(checkpoint_dir):
     raise KeyError('policy_weights not found in checkpoint.pkl')
 
 
-def deep_update(original, override):
-    if not isinstance(override, dict):
-        return override
-    updated = dict(original)
-    for key, value in override.items():
-        if key in updated and isinstance(updated[key], dict):
-            updated[key] = deep_update(updated[key], value)
-        else:
-            updated[key] = value
-    return updated
+def run_policy_rollout(policy, env, max_length=63, seed=None):
+    if seed is not None and hasattr(env, 'seed'):
+        env.seed(seed)
 
-
-def normalize_angle_diff(target, current):
-    diff = (target - current + 180.0) % 360.0 - 180.0
-    return diff
-
-
-def make_environment(variant, override=None, fixed_eval_dates=None):
-    env_params = variant['environment_params']['training']
-    if override:
-        env_params = deep_update(env_params, override)
-    if fixed_eval_dates:
-        env_params = deep_update(env_params, {'kwargs': {}})
-        env_params['kwargs']['fixed_eval_dates'] = [
-            date.strip() for date in fixed_eval_dates.split(',') if date.strip()]
-        env_params['kwargs']['randomize_day'] = False
-    return get_environment_from_params(env_params)
-
-
-def run_rollout(policy, env, max_length=63, deterministic=True):
-    obs = env.reset()
-    total_reward = 0.0
-    total_energy = 0.0
-    total_movement = 0.0
+    observations = []
+    actions = []
+    rewards = []
+    terminals = []
     infos = []
+
+    obs = env.reset()
     done = False
     step = 0
+    convert = getattr(env, 'convert_to_active_observation', lambda x: x)
 
     while not done and step < max_length:
-        action = policy.actions_np(obs[None])[0]
+        active_obs = convert(obs)
+        action = policy.actions_np([active_obs])[0]
         next_obs, reward, done, info = env.step(action)
-        total_reward += reward
-        total_energy += info.get('energy_kwh', 0.0)
-        total_movement += info.get('movement_cost', 0.0)
+
+        observations.append(obs)
+        actions.append(action)
+        rewards.append(reward)
+        terminals.append(done)
         infos.append(info)
         obs = next_obs
         step += 1
 
     return {
-        'return': total_reward,
-        'energy_kwh': total_energy,
-        'movement_cost': total_movement,
-        'length': step,
+        'observations': np.asarray(observations),
+        'actions': np.asarray(actions),
+        'rewards': np.asarray(rewards),
+        'terminals': np.asarray(terminals),
         'infos': infos,
     }
 
 
-def run_baseline(env, baseline_type, max_length=63):
-    obs = env.reset()
-    total_reward = 0.0
-    total_energy = 0.0
-    total_movement = 0.0
-    infos = []
-    done = False
-    step = 0
-
-    while not done and step < max_length:
-        solar_position = env._solar_position(env.current_time)
-        target_tilt = float(np.clip(solar_position.zenith, *env.tilt_limits))
-        target_azimuth = float(solar_position.azimuth)
-
-        if baseline_type == 'fixed_no_motion':
-            action = np.array([0.0, 0.0], dtype=np.float32)
-        elif baseline_type == 'sun_tracking':
-            tilt_diff = target_tilt - env.tilt
-            azimuth_diff = normalize_angle_diff(target_azimuth, env.azimuth)
-            action = np.array([
-                np.clip(tilt_diff / env.max_delta_tilt, -1.0, 1.0),
-                np.clip(azimuth_diff / env.max_delta_azimuth, -1.0, 1.0),
-            ], dtype=np.float32)
-        else:
-            raise ValueError('Unknown baseline: %s' % baseline_type)
-
-        next_obs, reward, done, info = env.step(action)
-        total_reward += reward
-        total_energy += info.get('energy_kwh', 0.0)
-        total_movement += info.get('movement_cost', 0.0)
-        infos.append(info)
-        obs = next_obs
-        step += 1
-
-    return {
-        'return': total_reward,
-        'energy_kwh': total_energy,
-        'movement_cost': total_movement,
-        'length': step,
-        'infos': infos,
-    }
-
-
-def print_summary(name, stats):
-    print(f'[{name}] return={stats["return"]:.4f} energy_kwh={stats["energy_kwh"]:.4f} movement_cost={stats["movement_cost"]:.4f} length={stats["length"]}')
+def _write_stats(f, label, stats):
+    f.write('%s (n=%d): mean=%.4f std=%.4f min=%.4f max=%.4f\n' % (
+        label, stats['count'], stats['mean'], stats['std'], stats['min'], stats['max']))
 
 
 def main():
@@ -174,61 +126,107 @@ def main():
         description='Compare a PV policy checkpoint against simple baselines.')
     parser.add_argument('checkpoint', type=str, help='Path to checkpoint directory or glob pattern')
     parser.add_argument('--outdir', type=str, default='evaluation', help='Directory to save summary files')
-    parser.add_argument('--num-rollouts', '-n', type=int, default=10, help='Number of rollouts for each policy/baseline')
+    parser.add_argument('--num-rollouts', '-n', type=int, default=10, help='Number of rollouts per method')
     parser.add_argument('--max-path-length', '-l', type=int, default=63, help='Rollout horizon')
-    parser.add_argument('--variant-file', type=str, default='params.json', help='Variant JSON filename stored in the experiment root')
+    parser.add_argument('--variant-file', type=str, default='params.json', help='Variant JSON in experiment root')
     parser.add_argument('--deterministic', action='store_true', help='Run the policy deterministically')
-    parser.add_argument('--fixed-eval-dates', type=str, default=None, help='Comma-separated list of exact dates (YYYY-MM-DD) for fixed evaluation rollouts')
-    parser.add_argument('--baseline-types', nargs='+', default=['fixed_no_motion', 'sun_tracking'], help='Baselines to compare')
+    parser.add_argument('--test-start-date', type=str, default=None, help='Hold-out start date (YYYY-MM-DD)')
+    parser.add_argument('--test-end-date', type=str, default=None, help='Hold-out end date (YYYY-MM-DD)')
+    parser.add_argument('--fixed-eval-dates', type=str, default=None,
+                        help='Comma-separated fixed evaluation dates (YYYY-MM-DD)')
+    parser.add_argument('--baseline-types', nargs='+',
+                        default=['fixed_no_motion', 'sun_tracking'],
+                        help='Baselines to compare')
+    parser.add_argument('--min-rollouts', type=int, default=10,
+                        help='Warn if fewer rollouts with randomize_day=True')
     args = parser.parse_args()
 
     checkpoint_dir = resolve_checkpoint_path(args.checkpoint)
     variant = load_variant(os.path.dirname(checkpoint_dir), args.variant_file)
     policy_weights = load_policy_weights(checkpoint_dir)
 
-    env = make_environment(variant, fixed_eval_dates=args.fixed_eval_dates)
-    policy = get_policy_from_variant(variant, env, Qs=[None])
+    gpu_options = tf.GPUOptions(allow_growth=True)
+    session = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+    tf.keras.backend.set_session(session)
+
+    eval_env, eval_env_params = get_eval_environment(
+        variant,
+        test_start_date=args.test_start_date,
+        test_end_date=args.test_end_date,
+        fixed_eval_dates=args.fixed_eval_dates,
+    )
+    for warning in validate_eval_coverage(args.num_rollouts, eval_env_params, args.min_rollouts):
+        print('[compare_baselines] WARNING: %s' % warning)
+
+    policy = get_policy_from_variant(variant, eval_env, Qs=[None])
     policy.set_weights(policy_weights)
 
     os.makedirs(args.outdir, exist_ok=True)
     summary_path = os.path.join(args.outdir, 'baseline_comparison_summary.txt')
 
+    policy_paths = []
+    baseline_paths = {name: [] for name in args.baseline_types}
+
+    with policy.set_deterministic(args.deterministic):
+        for idx in range(args.num_rollouts):
+            eval_env, _ = get_eval_environment(
+                variant,
+                test_start_date=args.test_start_date,
+                test_end_date=args.test_end_date,
+                fixed_eval_dates=args.fixed_eval_dates,
+            )
+            policy_paths.append(
+                run_policy_rollout(policy, eval_env, args.max_path_length, seed=idx))
+
+    for name in args.baseline_types:
+        for idx in range(args.num_rollouts):
+            baseline_env, _ = get_eval_environment(
+                variant,
+                test_start_date=args.test_start_date,
+                test_end_date=args.test_end_date,
+                fixed_eval_dates=args.fixed_eval_dates,
+            )
+            baseline_paths[name].append(
+                make_baseline_rollout(
+                    baseline_env, name, args.max_path_length, seed=idx))
+
+    policy_stats = summarize_paths(policy_paths)
+    baseline_summaries = {
+        name: summarize_paths(baseline_paths[name])
+        for name in args.baseline_types
+    }
+
     with open(summary_path, 'w', encoding='utf-8') as f:
-        f.write('Baseline comparison for checkpoint: %s\n' % checkpoint_dir)
-        f.write('Config file: %s\n' % args.variant_file)
-        f.write('\n')
-
-        print('Evaluating learned policy...')
-        policy_stats = []
-        for i in range(args.num_rollouts):
-            stats = run_rollout(policy, env, max_length=args.max_path_length, deterministic=args.deterministic)
-            policy_stats.append(stats)
-            print_summary(f'policy_{i+1}', stats)
-            f.write(f'policy_{i+1} {stats}\n')
-
-        def summarize_group(name, group_stats):
-            returns = [s['return'] for s in group_stats]
-            energies = [s['energy_kwh'] for s in group_stats]
-            movements = [s['movement_cost'] for s in group_stats]
-            f.write(f'\n{name} summary:\n')
-            f.write(f'  mean_return={np.mean(returns):.4f} std_return={np.std(returns):.4f}\n')
-            f.write(f'  mean_energy={np.mean(energies):.4f} std_energy={np.std(energies):.4f}\n')
-            f.write(f'  mean_movement={np.mean(movements):.4f} std_movement={np.std(movements):.4f}\n')
-            print(f'[{name}] mean_return={np.mean(returns):.4f} std_return={np.std(returns):.4f} mean_energy={np.mean(energies):.4f} mean_movement={np.mean(movements):.4f}')
-
-        summarize_group('policy', policy_stats)
-
-        for baseline in args.baseline_types:
-            baseline_stats = []
-            print(f'Evaluating baseline: {baseline}')
-            for i in range(args.num_rollouts):
-                stats = run_baseline(env, baseline, max_length=args.max_path_length)
-                baseline_stats.append(stats)
-                print_summary(f'{baseline}_{i+1}', stats)
-                f.write(f'{baseline}_{i+1} {stats}\n')
-            summarize_group(baseline, baseline_stats)
+        f.write('PV Tracking Baseline Comparison\n')
+        f.write('Checkpoint: %s\n' % checkpoint_dir)
+        f.write('Deterministic: %s\n' % args.deterministic)
+        f.write('Rollouts per method: %d\n' % args.num_rollouts)
+        f.write('\nEvaluation environment:\n')
+        for line in describe_eval_config(eval_env_params):
+            f.write('  %s\n' % line)
+        f.write('\nAggregate comparison:\n')
+        _write_stats(f, '  learned_policy reward', policy_stats['reward'])
+        _write_stats(f, '  learned_policy energy_kwh', policy_stats['total_energy_kwh'])
+        _write_stats(f, '  learned_policy movement', policy_stats['total_movement_cost'])
+        for name, stats in baseline_summaries.items():
+            f.write('\n  baseline: %s\n' % name)
+            _write_stats(f, '    reward', stats['reward'])
+            _write_stats(f, '    energy_kwh', stats['total_energy_kwh'])
+            _write_stats(f, '    movement', stats['total_movement_cost'])
+        f.write('\nPer-rollout (learned policy):\n')
+        for idx, path in enumerate(policy_paths, 1):
+            meta = get_rollout_metadata(path)
+            f.write(
+                '  %d: date=%s season=%s weather=%s reward=%.4f energy=%.4f\n' % (
+                    idx, meta['date'], meta['season'], meta['weather_condition'],
+                    meta['total_reward'], meta['total_energy_kwh']))
 
     print('Baseline comparison saved to:', summary_path)
+    print('Learned policy: mean_reward=%.4f mean_energy=%.4f kWh' % (
+        policy_stats['reward']['mean'], policy_stats['total_energy_kwh']['mean']))
+    for name, stats in baseline_summaries.items():
+        print('  %s: mean_reward=%.4f mean_energy=%.4f kWh' % (
+            name, stats['reward']['mean'], stats['total_energy_kwh']['mean']))
 
 
 if __name__ == '__main__':
