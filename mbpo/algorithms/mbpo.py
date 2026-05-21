@@ -449,11 +449,32 @@ class MBPO(RLAlgorithm):
         model_metrics = self._model.train(train_inputs, train_outputs, **kwargs)
         return model_metrics
 
+    def _sample_model_rollout_start_states(self, batch_size):
+        if not hasattr(self._pool, 'fields') or 'terminals' not in self._pool.fields:
+            return self.sampler.random_batch(batch_size)
+
+        if self._pool.size == 0:
+            return self.sampler.random_batch(batch_size)
+
+        terminals = self._pool.fields['terminals'][:self._pool.size].squeeze(-1)
+        nonterminal_indices = np.where(~terminals)[0]
+        if len(nonterminal_indices) == 0:
+            return self.sampler.random_batch(batch_size)
+
+        replace = len(nonterminal_indices) < batch_size
+        indices = np.random.choice(nonterminal_indices, size=batch_size, replace=replace)
+        observation_keys = getattr(self.sampler.env, 'observation_keys', None)
+        return self._pool.batch_by_indices(
+            indices,
+            field_name_filter='observations',
+            observation_keys=observation_keys,
+        )
+
     def _rollout_model(self, rollout_batch_size, **kwargs):
         print('[ Model Rollout ] Starting | Epoch: {} | Rollout length: {} | Batch size: {}'.format(
             self._epoch, self._rollout_length, rollout_batch_size
         ))
-        batch = self.sampler.random_batch(rollout_batch_size)
+        batch = self._sample_model_rollout_start_states(rollout_batch_size)
         obs = batch['observations']
         steps_added = []
         low = self._training_environment.observation_space.low

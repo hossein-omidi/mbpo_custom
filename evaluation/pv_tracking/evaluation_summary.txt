@@ -1,91 +1,51 @@
-Checkpoint: /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51
-Num rollouts: 10
-Deterministic: False
+Checkpoint: /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9478_2026-05-21_00-42-09ec4ee3ca/checkpoint_2
+Num rollouts: 5
+Deterministic: True
 Max path length: 63
 
 Rollout conditions:
   rollout_1:
-    date: 2020-04-22
-    day_of_year: 113
-    season: spring
+    date: 2020-12-17
+    day_of_year: 352
+    season: fall
     weather_condition: clear
     episode_length: 63
-    total_energy_kwh: 1.283371
+    total_energy_kwh: 0.104563
   rollout_2:
-    date: 2020-07-15
-    day_of_year: 197
-    season: summer
-    weather_condition: clear
+    date: 2020-12-30
+    day_of_year: 365
+    season: winter
+    weather_condition: partly_cloudy
     episode_length: 63
-    total_energy_kwh: 0.812122
+    total_energy_kwh: 0.187549
   rollout_3:
-    date: 2020-07-15
-    day_of_year: 197
-    season: summer
-    weather_condition: clear
+    date: 2020-12-05
+    day_of_year: 340
+    season: fall
+    weather_condition: partly_cloudy
     episode_length: 63
-    total_energy_kwh: 0.484389
+    total_energy_kwh: 0.132537
   rollout_4:
-    date: 2020-01-24
-    day_of_year: 24
-    season: winter
-    weather_condition: clear
+    date: 2020-12-12
+    day_of_year: 347
+    season: fall
+    weather_condition: overcast
     episode_length: 63
-    total_energy_kwh: 0.607973
+    total_energy_kwh: 0.308843
   rollout_5:
-    date: 2020-01-30
-    day_of_year: 30
+    date: 2020-12-30
+    day_of_year: 365
     season: winter
-    weather_condition: clear
+    weather_condition: overcast
     episode_length: 63
-    total_energy_kwh: 0.160975
-  rollout_6:
-    date: 2020-03-20
-    day_of_year: 80
-    season: spring
-    weather_condition: clear
-    episode_length: 63
-    total_energy_kwh: 1.135504
-  rollout_7:
-    date: 2020-08-13
-    day_of_year: 226
-    season: summer
-    weather_condition: clear
-    episode_length: 63
-    total_energy_kwh: 0.857712
-  rollout_8:
-    date: 2020-02-18
-    day_of_year: 49
-    season: winter
-    weather_condition: clear
-    episode_length: 63
-    total_energy_kwh: 0.147313
-  rollout_9:
-    date: 2020-02-27
-    day_of_year: 58
-    season: winter
-    weather_condition: clear
-    episode_length: 63
-    total_energy_kwh: 0.238541
-  rollout_10:
-    date: 2020-06-30
-    day_of_year: 182
-    season: summer
-    weather_condition: clear
-    episode_length: 63
-    total_energy_kwh: 1.326167
+    total_energy_kwh: 0.285693
 
 Rollout rewards:
-  rollout_1: 0.516004
-  rollout_2: 0.140219
-  rollout_3: -0.228151
-  rollout_4: -0.104052
-  rollout_5: -0.554454
-  rollout_6: 0.458342
-  rollout_7: 0.163204
-  rollout_8: -0.537128
-  rollout_9: -0.532281
-  rollout_10: 0.581980
+  rollout_1: -0.017986
+  rollout_2: 0.088603
+  rollout_3: -0.002838
+  rollout_4: 0.176512
+  rollout_5: 0.153987
 
 Rollout lengths:
   rollout_1: 63
@@ -93,10 +53,17 @@ Rollout lengths:
   rollout_3: 63
   rollout_4: 63
   rollout_5: 63
-  rollout_6: 63
-  rollout_7: 63
-  rollout_8: 63
-  rollout_9: 63
-  rollout_10: 63
+
+Baseline comparisons:
+  fixed average reward: -0.865538
+  fixed average energy: 0.394462 kWh
+  fixed average length: 63.00
+  single_axis average reward: -0.519900
+  single_axis average energy: 0.140383 kWh
+  single_axis average length: 63.00
+  sun_seeking average reward: 0.160873
+  sun_seeking average energy: 0.218433 kWh
+  sun_seeking average length: 63.00
 
 Rollout trajectory CSV files are saved under the `rollouts/` subfolder.
+Baseline rollout CSV files are saved under the `baseline_rollouts/` subfolder.
