@@ -78,6 +78,14 @@ def decode_pv_observation(obs):
     }
 
 
+TIME_WINDOWS = OrderedDict([
+    ('morning', (6.0, 11.0)),
+    ('midday', (11.0, 14.0)),
+    ('afternoon', (14.0, 17.0)),
+    ('evening', (17.0, 22.0)),
+])
+
+
 def get_eval_environment(
         variant,
         override_path=None,
@@ -85,7 +93,8 @@ def get_eval_environment(
         test_end_date=None,
         fixed_eval_dates=None,
         eval_randomize_day=None,
-        eval_weather_source=None):
+        eval_weather_source=None,
+        eval_randomize_initial_orientation=False):
     """Build evaluation env; defaults favor diverse held-out-style testing."""
     environment_params = variant['environment_params']
     eval_env_params = (
@@ -120,6 +129,8 @@ def get_eval_environment(
     if eval_weather_source is not None:
         kwargs['weather_source'] = eval_weather_source
 
+    kwargs['randomize_initial_orientation'] = bool(eval_randomize_initial_orientation)
+
     eval_env_params['kwargs'] = kwargs
     return get_environment_from_params(eval_env_params), eval_env_params
 
@@ -131,6 +142,8 @@ def describe_eval_config(eval_env_params):
         'start_date: %s' % kwargs.get('start_date', '(from env default)'),
         'end_date: %s' % kwargs.get('end_date', '(from env default)'),
         'randomize_day: %s' % kwargs.get('randomize_day', True),
+        'randomize_initial_orientation: %s' % kwargs.get(
+            'randomize_initial_orientation', False),
         'weather_source: %s' % kwargs.get('weather_source', '(from env default)'),
         'fixed_eval_dates: %s' % kwargs.get('fixed_eval_dates', None),
         'periods: %s' % kwargs.get('periods', '(from env default)'),
@@ -254,6 +267,125 @@ def compute_total_energy_kwh(path):
     return float(np.sum(power) * 0.25 / 1000.0)
 
 
+def _index_at_max(arr):
+    arr = np.asarray(arr, dtype=np.float64)
+    if len(arr) == 0:
+        return 0
+    return int(np.nanargmax(arr))
+
+
+def analyze_rollout_path(path):
+    """Per-rollout timing diagnostics for reward/power alignment."""
+    infos = path.get('infos', [])
+    rewards = np.asarray(path.get('rewards', []), dtype=np.float64)
+    if len(rewards) == 0:
+        return {}
+
+    times = np.array([info.get('time', np.nan) for info in infos], dtype=np.float64)
+    power = np.array([info.get('power', np.nan) for info in infos], dtype=np.float64)
+    energy = np.array([info.get('energy_kwh', np.nan) for info in infos], dtype=np.float64)
+    movement = np.array([info.get('movement_cost', 0.0) for info in infos], dtype=np.float64)
+
+    i_reward = _index_at_max(rewards)
+    i_power = _index_at_max(power)
+    i_energy = _index_at_max(energy)
+
+    def _snap(i):
+        info = infos[i] if i < len(infos) else {}
+        return {
+            'step': i,
+            'time_hour': float(info.get('time', np.nan)),
+            'reward': float(rewards[i]),
+            'power_w': float(info.get('power', np.nan)),
+            'energy_kwh': float(info.get('energy_kwh', np.nan)),
+            'movement_cost': float(info.get('movement_cost', np.nan)),
+            'tilt_deg': float(info.get('tilt', np.nan)),
+            'azimuth_deg': float(info.get('azimuth', np.nan)),
+            'solar_altitude_deg': float(info.get('solar_altitude_deg', np.nan)),
+            'solar_azimuth_deg': float(info.get('solar_azimuth_deg', np.nan)),
+        }
+
+    by_window = {}
+    for name, (lo, hi) in TIME_WINDOWS.items():
+        mask = (times >= lo) & (times < hi)
+        if not np.any(mask):
+            by_window[name] = {
+                'mean_reward': np.nan, 'mean_power_w': np.nan,
+                'sum_energy_kwh': np.nan, 'sum_movement_cost': np.nan, 'n_steps': 0,
+            }
+            continue
+        by_window[name] = {
+            'mean_reward': float(np.mean(rewards[mask])),
+            'mean_power_w': float(np.mean(power[mask])),
+            'sum_energy_kwh': float(np.sum(energy[mask])),
+            'sum_movement_cost': float(np.sum(movement[mask])),
+            'n_steps': int(np.sum(mask)),
+        }
+
+    meta = get_rollout_metadata(path)
+    peak_power_time = _snap(i_power)['time_hour']
+    peak_reward_time = _snap(i_reward)['time_hour']
+    meta.update({
+        'mean_power_w': float(np.nanmean(power)),
+        'peak_power_w': float(np.nanmax(power)),
+        'peak_power_time_hour': peak_power_time,
+        'peak_reward_time_hour': peak_reward_time,
+        'peak_reward_step': i_reward,
+        'peak_power_step': i_power,
+        'at_peak_reward': _snap(i_reward),
+        'at_peak_power': _snap(i_power),
+        'reward_by_window': by_window,
+        'peak_reward_lag_hours': (
+            float(peak_reward_time - peak_power_time)
+            if np.isfinite(peak_reward_time) and np.isfinite(peak_power_time)
+            else np.nan),
+    })
+    return meta
+
+
+def aggregate_time_windows(paths):
+    """Average per-window stats across rollouts."""
+    agg = {name: defaultdict(list) for name in TIME_WINDOWS}
+    for path in paths:
+        analysis = analyze_rollout_path(path)
+        for name, stats in analysis.get('reward_by_window', {}).items():
+            for key, val in stats.items():
+                if key != 'n_steps' and np.isfinite(val):
+                    agg[name][key].append(val)
+    summary = {}
+    for name, buckets in agg.items():
+        summary[name] = {
+            key: float(np.mean(vals)) if vals else np.nan
+            for key, vals in buckets.items()
+        }
+    return summary
+
+
+def compare_method_table(paths_by_name):
+    """Build comparison rows for policy vs baselines."""
+    rows = []
+    for method, paths in paths_by_name.items():
+        analyses = [analyze_rollout_path(p) for p in paths]
+        rows.append({
+            'method': method,
+            'n_rollouts': len(paths),
+            'total_reward_mean': float(np.mean([a['total_reward'] for a in analyses])),
+            'total_energy_kwh_mean': float(np.mean([a['total_energy_kwh'] for a in analyses])),
+            'mean_power_w_mean': float(np.mean([a['mean_power_w'] for a in analyses])),
+            'peak_power_w_mean': float(np.mean([a['peak_power_w'] for a in analyses])),
+            'peak_power_time_mean': float(np.mean([a['peak_power_time_hour'] for a in analyses])),
+            'peak_reward_time_mean': float(np.mean([a['peak_reward_time_hour'] for a in analyses])),
+            'movement_cost_mean': float(np.mean([a['total_movement_cost'] for a in analyses])),
+            'tilt_mean': float(np.mean([
+                np.nanmean([info.get('tilt', np.nan) for info in p.get('infos', [])])
+                for p in paths])),
+            'azimuth_mean': float(np.mean([
+                np.nanmean([info.get('azimuth', np.nan) for info in p.get('infos', [])])
+                for p in paths])),
+        })
+    return rows
+
+
 def get_rollout_metadata(path):
     infos = path.get('infos', [])
     info0 = infos[0] if infos else {}
@@ -323,6 +455,75 @@ def rollout_time_axis(path, relative=False):
     return times
 
 
+def write_reward_time_report(outdir, paths, paths_by_name=None):
+    """Text report: reward vs power timing and time-window breakdown."""
+    report_path = os.path.join(outdir, 'reward_time_analysis.txt')
+    window_agg = aggregate_time_windows(paths)
+
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write('PV Tracking Reward-Time Analysis\n')
+        f.write('=' * 36 + '\n\n')
+        f.write(
+            'Reward per step = energy_kwh - movement_cost. '
+            'Peak step reward often occurs when movement is low, not when power is highest.\n\n')
+
+        f.write('Learned policy — per rollout peak times:\n')
+        for idx, path in enumerate(paths, 1):
+            a = analyze_rollout_path(path)
+            f.write(
+                '  rollout_%d (%s): peak_power=%.1f W @ %.2f h | '
+                'peak_reward=%.5f @ %.2f h | lag=%.2f h\n' % (
+                    idx, a.get('date', '?'),
+                    a.get('peak_power_w', np.nan), a.get('peak_power_time_hour', np.nan),
+                    a['at_peak_reward']['reward'], a.get('peak_reward_time_hour', np.nan),
+                    a.get('peak_reward_lag_hours', np.nan)))
+            f.write(
+                '    at peak reward: tilt=%.1f az=%.1f solar_alt=%.1f solar_az=%.1f move=%.5f\n' % (
+                    a['at_peak_reward']['tilt_deg'], a['at_peak_reward']['azimuth_deg'],
+                    a['at_peak_reward']['solar_altitude_deg'],
+                    a['at_peak_reward']['solar_azimuth_deg'],
+                    a['at_peak_reward']['movement_cost']))
+
+        f.write('\nLearned policy — mean by time window (avg over rollouts):\n')
+        f.write('  window      mean_reward  mean_power_W  sum_energy   sum_movement\n')
+        for name in TIME_WINDOWS:
+            w = window_agg.get(name, {})
+            f.write('  %-10s  %11.5f  %11.1f  %10.5f  %12.5f\n' % (
+                name,
+                w.get('mean_reward', np.nan),
+                w.get('mean_power_w', np.nan),
+                w.get('sum_energy_kwh', np.nan),
+                w.get('sum_movement_cost', np.nan)))
+
+        if paths_by_name:
+            f.write('\nMethod comparison (same eval settings):\n')
+            rows = compare_method_table(paths_by_name)
+            f.write(
+                '  method           reward    energy    mean_pwr  peak_pwr  '
+                'peak_pwr_t  peak_rew_t  movement\n')
+            for row in rows:
+                f.write(
+                    '  %-16s %8.4f %8.4f %8.1f %8.1f %8.2f %8.2f %8.4f\n' % (
+                        row['method'],
+                        row['total_reward_mean'],
+                        row['total_energy_kwh_mean'],
+                        row['mean_power_w_mean'],
+                        row['peak_power_w_mean'],
+                        row['peak_power_time_mean'],
+                        row['peak_reward_time_mean'],
+                        row['movement_cost_mean']))
+
+        f.write('\nInterpretation:\n')
+        f.write(
+            '  - If evening mean_reward is highest while midday mean_power is low, the agent '
+            'may be minimizing movement (low penalty) rather than maximizing energy.\n')
+        f.write(
+            '  - Compare total_energy_kwh and peak_power_time across methods; '
+            'reward alone is not a proxy for tracking quality.\n')
+
+    return report_path
+
+
 def save_rollout_csv(outdir, paths, prefix='rollout'):
     os.makedirs(outdir, exist_ok=True)
     for idx, path in enumerate(paths, start=1):
@@ -335,7 +536,9 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
         header = [
             'step', 'time_hour', 'reward', 'terminal',
             'power_w', 'energy_kwh', 'movement_cost',
+            'reward_energy', 'reward_movement',
             'tilt_deg', 'azimuth_deg',
+            'solar_zenith_deg', 'solar_azimuth_deg', 'solar_altitude_deg',
             'date', 'season', 'weather_condition', 'weather_source',
             'action_tilt', 'action_azimuth',
         ]
@@ -352,8 +555,13 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
                 info.get('power', ''),
                 info.get('energy_kwh', ''),
                 info.get('movement_cost', ''),
+                info.get('reward_energy', info.get('energy_kwh', '')),
+                info.get('reward_movement', info.get('movement_cost', '')),
                 info.get('tilt', ''),
                 info.get('azimuth', ''),
+                info.get('solar_zenith_deg', ''),
+                info.get('solar_azimuth_deg', ''),
+                info.get('solar_altitude_deg', ''),
                 info.get('date', ''),
                 info.get('season', ''),
                 info.get('weather_condition', ''),

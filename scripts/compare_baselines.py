@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compare a trained PV tracking policy against simple baselines.
 
-Uses the same evaluation environment settings, seeds, and metrics as
-scripts/evaluate_agent.py so comparisons are fair.
+Uses the same evaluation environment settings, per-rollout seeds, and
+metrics as scripts/evaluate_agent.py (via scripts/eval_utils.py).
 """
 
 import argparse
@@ -24,12 +24,14 @@ from softlearning.policies.utils import get_policy_from_variant
 from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
 
 from eval_utils import (
+    analyze_rollout_path,
+    compare_method_table,
     describe_eval_config,
     get_eval_environment,
-    get_rollout_metadata,
     make_baseline_rollout,
     summarize_paths,
     validate_eval_coverage,
+    write_reward_time_report,
 )
 
 
@@ -79,14 +81,13 @@ def load_policy_weights(checkpoint_dir):
     raise KeyError('policy_weights not found in checkpoint.pkl')
 
 
-def run_policy_rollout(policy, env, max_length=63, seed=None):
+def run_policy_rollout(policy, env, max_length=63, seed=None, deterministic=True):
     if seed is not None and hasattr(env, 'seed'):
         env.seed(seed)
 
     observations = []
     actions = []
     rewards = []
-    terminals = []
     infos = []
 
     obs = env.reset()
@@ -94,24 +95,23 @@ def run_policy_rollout(policy, env, max_length=63, seed=None):
     step = 0
     convert = getattr(env, 'convert_to_active_observation', lambda x: x)
 
-    while not done and step < max_length:
-        active_obs = convert(obs)
-        action = policy.actions_np([active_obs])[0]
-        next_obs, reward, done, info = env.step(action)
+    with policy.set_deterministic(deterministic):
+        while not done and step < max_length:
+            active_obs = convert(obs)
+            action = policy.actions_np([active_obs])[0]
+            next_obs, reward, done, info = env.step(action)
 
-        observations.append(obs)
-        actions.append(action)
-        rewards.append(reward)
-        terminals.append(done)
-        infos.append(info)
-        obs = next_obs
-        step += 1
+            observations.append(obs)
+            actions.append(action)
+            rewards.append(reward)
+            infos.append(info)
+            obs = next_obs
+            step += 1
 
     return {
         'observations': np.asarray(observations),
         'actions': np.asarray(actions),
         'rewards': np.asarray(rewards),
-        'terminals': np.asarray(terminals),
         'infos': infos,
     }
 
@@ -167,34 +167,34 @@ def main():
     policy_paths = []
     baseline_paths = {name: [] for name in args.baseline_types}
 
-    with policy.set_deterministic(args.deterministic):
-        for idx in range(args.num_rollouts):
-            eval_env, _ = get_eval_environment(
-                variant,
-                test_start_date=args.test_start_date,
-                test_end_date=args.test_end_date,
-                fixed_eval_dates=args.fixed_eval_dates,
-            )
-            policy_paths.append(
-                run_policy_rollout(policy, eval_env, args.max_path_length, seed=idx))
+    for idx in range(args.num_rollouts):
+        env, _ = get_eval_environment(
+            variant,
+            test_start_date=args.test_start_date,
+            test_end_date=args.test_end_date,
+            fixed_eval_dates=args.fixed_eval_dates,
+        )
+        policy_paths.append(
+            run_policy_rollout(policy, env, args.max_path_length, seed=idx,
+                               deterministic=args.deterministic))
 
     for name in args.baseline_types:
         for idx in range(args.num_rollouts):
-            baseline_env, _ = get_eval_environment(
+            env, _ = get_eval_environment(
                 variant,
                 test_start_date=args.test_start_date,
                 test_end_date=args.test_end_date,
                 fixed_eval_dates=args.fixed_eval_dates,
             )
             baseline_paths[name].append(
-                make_baseline_rollout(
-                    baseline_env, name, args.max_path_length, seed=idx))
+                make_baseline_rollout(env, name, args.max_path_length, seed=idx))
+
+    paths_by_name = {'learned_policy': policy_paths}
+    paths_by_name.update(baseline_paths)
 
     policy_stats = summarize_paths(policy_paths)
-    baseline_summaries = {
-        name: summarize_paths(baseline_paths[name])
-        for name in args.baseline_types
-    }
+    baseline_summaries = {name: summarize_paths(baseline_paths[name]) for name in args.baseline_types}
+    comparison_rows = compare_method_table(paths_by_name)
 
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write('PV Tracking Baseline Comparison\n')
@@ -213,13 +213,23 @@ def main():
             _write_stats(f, '    reward', stats['reward'])
             _write_stats(f, '    energy_kwh', stats['total_energy_kwh'])
             _write_stats(f, '    movement', stats['total_movement_cost'])
-        f.write('\nPer-rollout (learned policy):\n')
-        for idx, path in enumerate(policy_paths, 1):
-            meta = get_rollout_metadata(path)
+        f.write('\nTiming comparison (mean over rollouts):\n')
+        f.write(
+            '  method           reward    energy    mean_pwr  peak_pwr  '
+            'peak_pwr_t  peak_rew_t  movement\n')
+        for row in comparison_rows:
             f.write(
-                '  %d: date=%s season=%s weather=%s reward=%.4f energy=%.4f\n' % (
-                    idx, meta['date'], meta['season'], meta['weather_condition'],
-                    meta['total_reward'], meta['total_energy_kwh']))
+                '  %-16s %8.4f %8.4f %8.1f %8.1f %8.2f %8.2f %8.4f\n' % (
+                    row['method'],
+                    row['total_reward_mean'],
+                    row['total_energy_kwh_mean'],
+                    row['mean_power_w_mean'],
+                    row['peak_power_w_mean'],
+                    row['peak_power_time_mean'],
+                    row['peak_reward_time_mean'],
+                    row['movement_cost_mean']))
+
+    write_reward_time_report(args.outdir, policy_paths, paths_by_name=paths_by_name)
 
     print('Baseline comparison saved to:', summary_path)
     print('Learned policy: mean_reward=%.4f mean_energy=%.4f kWh' % (

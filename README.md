@@ -149,91 +149,168 @@ mbpo run_local examples.development \
 - Use `start_date`/`end_date` to define your climate range and evaluate over hold-out day ranges.
 - If training is unstable, reduce `rollout_batch_size` or shorten model rollout length.
 
-## Evaluation and generalization
+## Reward, state space, and evaluation (read before interpreting plots)
 
-Evaluation scripts (`scripts/evaluate_agent.py`, `scripts/compare_baselines.py`) share
-`scripts/eval_utils.py` so the learned policy and baselines use the same environment
-settings, per-rollout seeds, and metrics. By default, evaluation uses **random days**
-across the configured date range and stochastic weather (from the training variant
-unless overridden).
+### Reward function (`mbpo/env/pv_tracking.py`)
 
-### Basic evaluation (diverse random days)
+Per step:
 
-```bash
-python scripts/evaluate_agent.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
-  --outdir evaluation/pv_tracking \
-  --num-rollouts 10 \
-  --max-path-length 63 \
-  --deterministic
+```text
+energy_kwh     = power_W * (15 min as hours) / 1000
+movement_cost  = movement_penalty * (|Δtilt|/max_Δtilt + |Δazimuth|/max_Δazimuth)
+reward         = energy_kwh - movement_cost
 ```
 
-Use at least **10 rollouts** for stable estimates when `randomize_day=True` (the script
-warns if fewer). Outputs include `evaluation_summary.txt`, `evaluation_summary.json`,
-per-rollout CSVs, combined time-series plots, and seasonal breakdown.
+This is **physically meaningful** for maximizing collected energy with an actuator penalty. It is **not** cumulative energy in the reward; SAC sums per-step rewards over the episode.
 
-### Generalization testing
+**Important:** With `movement_penalty=0.01`, a full two-axis move costs up to **0.02** per step while peak energy is often only **~0.02–0.03** kWh per step. The agent can earn **positive reward late in the day** by moving little (low penalty) while still collecting moderate power — even when **peak power occurs earlier** (typically afternoon). This is visible in `reward_time_analysis.txt` and is **not a plotting bug**.
 
-- Use `--test-start-date` and `--test-end-date` to evaluate on a different date range from training.
-- Use `--fixed-eval-dates` to evaluate on an exact list of held-out calendar days.
-- Evaluate separately by season to measure robustness.
-- Use `--compare-baselines` to compare against fixed and rule-based strategies.
+Use **total_energy_kwh** and **peak_power_time** to judge tracking quality, not peak step reward alone.
 
-### Example hold-out evaluation
+### Observation vector (15-D, sufficient for tracking)
+
+| Index | Feature | Role |
+|-------|---------|------|
+| 0 | solar zenith / 180 | sun elevation proxy |
+| 1–2 | solar azimuth sin/cos | sun direction |
+| 3–5 | DNI, DHI, GHI / 2000 | irradiance |
+| 6 | temperature / 50 | weather context |
+| 7 | panel tilt / 90 | actuator state |
+| 8–9 | panel azimuth sin/cos | actuator state |
+| 10 | last power / 2000 | feedback |
+| 11–12 | time of day sin/cos | clock |
+| 13–14 | day of year sin/cos | season |
+
+No critical variable is missing for single-axis/day-ahead tracking. Cyclic encoding matches the model rollout post-processing in `mbpo/static/pv_tracking.py`.
+
+### Hyperparameters (current defaults — review, do not change blindly)
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `movement_penalty` | 0.01 | **High vs per-step energy** — main driver of “late-day reward” behavior |
+| `real_ratio` | 0.5 | Standard MBPO; keep if model rollouts are stable |
+| `rollout_schedule` | [20,120,1,3] | Conservative imagined horizon |
+| `discount` | 0.99 | OK for 63-step days |
+| `reward_scale` | 1.0 | OK (do not inflate to hide movement penalty) |
+| `target_entropy` / `min_alpha` | -2 / 0.05 | OK for 2D actions |
+| `eval_n_episodes` | 5 | Training-time eval only; use ≥10 rollouts in `evaluate_agent.py` |
+
+**Risky if training is unstable:** `real_ratio` too high with poor model terminals (addressed in `mbpo/static/pv_tracking.py`), `movement_penalty` too low (agent jitters), `movement_penalty` too high (agent barely moves).
+
+---
+
+## Evaluation and generalization
+
+**Project root:** `/home/ecer/PVRL/mbpo`  
+**Training outputs:** `/home/ecer/ray_mbpo/PVTracking/pv_tracking/`
+
+### Find your checkpoint directory
+
+```bash
+ls -d /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:*/
+ls /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/
+```
+
+Use a folder such as `checkpoint_14` or `best_eval_checkpoint` (not `params.json` alone). Example path:
+
+```text
+/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14
+```
+
+Evaluation defaults (via `scripts/eval_utils.py`):
+
+- `randomize_day=True` unless you pass hold-out or fixed dates
+- `randomize_initial_orientation=False` for fair policy vs baseline comparison
+- Same `seed=rollout_index` for policy and baselines on each rollout
+
+### Basic evaluation (random days over the training year)
+
+```bash
+cd /home/ecer/PVRL/mbpo
+conda activate mbpo
+
+python scripts/evaluate_agent.py \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_tracking \
+  --num-rollouts 10 \
+  --max-path-length 63 \
+  --deterministic \
+  --compare-baselines
+```
+
+### Held-out month (separate from full-year training)
 
 ```bash
 python scripts/evaluate_agent.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
-  --outdir evaluation/pv_tracking \
-  --num-rollouts 5 \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_holdout_dec2020 \
+  --num-rollouts 10 \
   --max-path-length 63 \
   --deterministic \
   --compare-baselines \
   --test-start-date 2020-12-01 \
   --test-end-date 2020-12-31
-
-# Exact held-out evaluation on selected days
-python scripts/evaluate_agent.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
-  --outdir evaluation/pv_tracking_fixed \
-  --num-rollouts 5 \
-  --max-path-length 63 \
-  --deterministic \
-  --fixed-eval-dates 2020-12-01,2020-03-21,2020-06-21,2020-09-22
 ```
 
-### Baseline comparison helper
-
-A lightweight helper script compares the learned policy against simple baselines using the same PV energy and movement-cost metrics.
+### Fixed seasonal dates (reproducible cross-season comparison)
 
 ```bash
-python scripts/compare_baselines.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
-  --outdir evaluation/pv_tracking \
-  --num-rollouts 10 \
-  --max-path-length 63
-
-# Use exact held-out days for policy + baseline comparison
-python scripts/compare_baselines.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:<seed>_<timestamp>/checkpoint_<N>" \
-  --outdir evaluation/pv_tracking_fixed \
-  --num-rollouts 10 \
+python scripts/evaluate_agent.py \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_tracking_seasonal \
+  --num-rollouts 4 \
   --max-path-length 63 \
+  --deterministic \
+  --compare-baselines \
   --fixed-eval-dates 2020-03-21,2020-06-21,2020-09-22,2020-12-21
 ```
 
-This script evaluates the learned policy and the following baselines:
-- `fixed_no_motion` — keep the current tracker orientation unchanged
-- `sun_tracking` — incremental action toward the current sun direction
+### Baseline-only comparison
 
-### Evaluation output
+```bash
+python scripts/compare_baselines.py \
+  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_baselines \
+  --num-rollouts 10 \
+  --max-path-length 63 \
+  --deterministic \
+  --test-start-date 2020-12-01 \
+  --test-end-date 2020-12-31
+```
 
-- `evaluation_summary.txt` — aggregate mean/std/min/max, per-season stats, per-rollout conditions
-- `evaluation_summary.json` — same metrics in machine-readable form
-- `evaluation_rewards.png`, `evaluation_by_season.png` — aggregate performance
-- `rollouts/rollout_<n>.csv` — step, time, power, energy, movement, tilt, azimuth, weather, actions, obs
-- `rollout_plots/rollout_<n>_combined.png` — power, cumulative energy, tilt, azimuth, actions, reward/movement vs time-of-day
-- `baseline_rollouts/` — baseline trajectories when `--compare-baselines` is used
+Baselines:
+
+- `fixed_no_motion` — no movement (tilt=30°, azimuth=180° targets)
+- `sun_tracking` — each step moves toward current sun zenith/azimuth
+
+### Reward–time analysis and plots
+
+The evaluator writes:
+
+| File | Content |
+|------|---------|
+| `evaluation_summary.txt` / `.json` | Aggregates, per-rollout peaks, seasonal/weather breakdown |
+| `reward_time_analysis.txt` | **Peak reward vs peak power times**, morning/midday/afternoon/evening means |
+| `evaluation_reward_by_time_window.png` | Bar chart: mean reward and power by window |
+| `evaluation_method_comparison.png` | Policy vs baselines (reward, energy, movement) |
+| `rollouts/rollout_<n>.csv` | Full trajectories with solar angles and reward components |
+| `rollout_plots/rollout_<n>_combined.png` | Time series with **vertical lines** at peak power and peak reward |
+
+Re-plot one CSV:
+
+```bash
+python scripts/plot_rollout_trajectory.py \
+  --csv /home/ecer/PVRL/mbpo/evaluation/pv_tracking/rollouts/rollout_1.csv \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_tracking/rollout_plots
+```
+
+### How to interpret results
+
+1. **Total energy_kwh** — primary physical performance metric.  
+2. **Peak power time** — should align with high sun (often ~11:00–14:00 local).  
+3. **Peak reward time** — often **later** (16:00–20:00) if the policy minimizes movement; compare to peak power time in `reward_time_analysis.txt`.  
+4. **Evening mean reward > midday** with **zero morning power** — policy is optimizing step reward via low movement, not good tracking.  
+5. Compare **learned_policy** vs **fixed_no_motion** / **sun_tracking** on the same dates before trusting total reward.
 
 ## Scripts and utilities
 
@@ -261,10 +338,10 @@ To add a new environment:
 
 ## Notes on the PV tracking design
 
-- Episodes are defined as a single day, which is appropriate for solar tracking.
-- The environment is designed to sample different days and weather conditions to avoid overfitting to one season.
-- Reward is based on collected energy with a small motion penalty, which matches the optimization objective.
-- The model-based pipeline is compatible because it uses the same `obs, action, reward, next_obs` transitions as real rollouts.
+- Episodes are one day (63 × 15 min steps from 06:00).
+- Reward = incremental energy minus movement penalty (see **Reward, state space, and evaluation** above).
+- Step reward can be maximized late in the day without maximizing power; always report energy and peak power time.
+- Evaluation uses `scripts/eval_utils.py` for consistent env settings and timing diagnostics.
 
 ## Reference
 

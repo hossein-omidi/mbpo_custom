@@ -3,71 +3,90 @@ PV Tracking Evaluation Summary
 Checkpoint: /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14
 Deterministic policy: True
 Max path length: 63
-Num rollouts: 5
+Num rollouts: 10
 
 Evaluation environment:
-  start_date: 2020-12-01
+  start_date: 2020-01-01
   end_date: 2020-12-31
   randomize_day: True
+  randomize_initial_orientation: False
   weather_source: random
   fixed_eval_dates: None
   periods: 64
   freq: 15min
 
-Warnings:
-  - Only 5 rollouts with randomize_day=True; use at least 10 for stable estimates across days/weather.
-
 Aggregate metrics (learned policy):
-  Total reward (n=5):
-  mean=0.001801  std=0.043676  min=-0.066241  max=0.051906
-  Total energy (kWh) (n=5):
-  mean=0.380304  std=0.065074  min=0.283722  max=0.443242
-  Total movement cost (n=5):
-  mean=0.378503  std=0.038781  min=0.314252  max=0.421597
-  Episode length (n=5):
+  Total reward (n=10):
+  mean=0.111233  std=0.288893  min=-0.210877  max=0.506674
+  Total energy (kWh) (n=10):
+  mean=0.592798  std=0.161799  min=0.350709  max=0.809311
+  Total movement cost (n=10):
+  mean=0.481565  std=0.152744  min=0.282058  max=0.719534
+  Episode length (n=10):
   mean=63.000000  std=0.000000  min=63.000000  max=63.000000
 
 By season (learned policy):
-  fall:
-    Reward (n=3):
-  mean=0.006421  std=0.051921  min=-0.066241  max=0.051906
-    Energy kWh (n=3):
-  mean=0.391976  std=0.050483  min=0.323312  max=0.443242
-  winter:
+  spring:
     Reward (n=2):
-  mean=-0.005128  std=0.025401  min=-0.030530  max=0.020273
+  mean=-0.126199  std=0.009541  min=-0.135740  max=-0.116658
     Energy kWh (n=2):
-  mean=0.362796  std=0.079074  min=0.283722  max=0.441871
+  mean=0.576134  std=0.007660  min=0.568474  max=0.583794
+  summer:
+    Reward (n=4):
+  mean=0.454749  std=0.082116  min=0.312615  max=0.506674
+    Energy kWh (n=4):
+  mean=0.765035  std=0.061798  min=0.659480  max=0.809311
+  winter:
+    Reward (n=4):
+  mean=-0.113567  std=0.071654  min=-0.210877  max=-0.011268
+    Energy kWh (n=4):
+  mean=0.428895  std=0.070215  min=0.350709  max=0.537969
 
 By weather condition (learned policy):
-  clear: mean_reward=-0.0662 mean_energy=0.3233 (n=1)
-  overcast: mean_reward=0.0107 mean_energy=0.3465 (n=2)
-  partly_cloudy: mean_reward=0.0269 mean_energy=0.4426 (n=2)
+  clear: mean_reward=-0.1171 mean_energy=0.5302 (n=3)
+  overcast: mean_reward=0.0514 mean_energy=0.5157 (n=3)
+  partly_cloudy: mean_reward=0.3274 mean_energy=0.6976 (n=4)
 
-Per-rollout detail:
-  rollout_1: date=2020-12-17 season=fall weather=clear reward=-0.0662 energy_kwh=0.3233 movement=0.3896 length=63
-  rollout_2: date=2020-12-30 season=winter weather=partly_cloudy reward=0.0203 energy_kwh=0.4419 movement=0.4216 length=63
-  rollout_3: date=2020-12-05 season=fall weather=partly_cloudy reward=0.0336 energy_kwh=0.4432 movement=0.4096 length=63
-  rollout_4: date=2020-12-12 season=fall weather=overcast reward=0.0519 energy_kwh=0.4094 movement=0.3575 length=63
-  rollout_5: date=2020-12-30 season=winter weather=overcast reward=-0.0305 energy_kwh=0.2837 movement=0.3143 length=63
+Per-rollout detail (with peak times):
+  rollout_1: date=2020-04-22 season=spring weather=clear reward=-0.1167 energy_kwh=0.5685 movement=0.6851
+    peak_power=148.0 W @ 18.25 h | peak_reward=0.03095 @ 18.25 h | mean_power=36.1 W
+  rollout_2: date=2020-07-15 season=summer weather=partly_cloudy reward=0.5014 energy_kwh=0.7835 movement=0.2821
+    peak_power=177.7 W @ 18.50 h | peak_reward=0.03898 @ 18.25 h | mean_power=49.7 W
+  rollout_3: date=2020-07-15 season=summer weather=partly_cloudy reward=0.5067 energy_kwh=0.8093 movement=0.3026
+    peak_power=176.8 W @ 19.25 h | peak_reward=0.03642 @ 19.25 h | mean_power=51.4 W
+  rollout_4: date=2020-01-24 season=winter weather=clear reward=-0.0989 energy_kwh=0.4383 movement=0.5372
+    peak_power=107.6 W @ 16.00 h | peak_reward=0.01679 @ 18.25 h | mean_power=27.8 W
+  rollout_5: date=2020-01-30 season=winter weather=overcast reward=-0.2109 energy_kwh=0.3507 movement=0.5616
+    peak_power=103.7 W @ 16.25 h | peak_reward=0.01792 @ 19.50 h | mean_power=22.3 W
+  rollout_6: date=2020-03-20 season=spring weather=clear reward=-0.1357 energy_kwh=0.5838 movement=0.7195
+    peak_power=138.0 W @ 17.75 h | peak_reward=0.02693 @ 17.00 h | mean_power=37.1 W
+  rollout_7: date=2020-08-13 season=summer weather=overcast reward=0.4983 energy_kwh=0.8078 movement=0.3096
+    peak_power=169.6 W @ 19.25 h | peak_reward=0.03706 @ 18.75 h | mean_power=51.3 W
+  rollout_8: date=2020-02-18 season=winter weather=partly_cloudy reward=-0.0113 energy_kwh=0.5380 movement=0.5492
+    peak_power=124.4 W @ 18.50 h | peak_reward=0.03040 @ 19.75 h | mean_power=34.2 W
+  rollout_9: date=2020-02-27 season=winter weather=overcast reward=-0.1332 energy_kwh=0.3886 movement=0.5219
+    peak_power=122.6 W @ 19.25 h | peak_reward=0.02537 @ 19.00 h | mean_power=24.7 W
+  rollout_10: date=2020-06-30 season=summer weather=partly_cloudy reward=0.3126 energy_kwh=0.6595 movement=0.3469
+    peak_power=171.1 W @ 18.00 h | peak_reward=0.03481 @ 18.00 h | mean_power=41.9 W
 
 Baseline comparison (same env settings, matched seeds):
   fixed_no_motion:
-    Reward (n=5):
-  mean=0.447019  std=0.123334  min=0.293438  max=0.570227
-    Energy kWh (n=5):
-  mean=0.610850  std=0.125476  min=0.427496  max=0.740018
-    Movement cost (n=5):
-  mean=0.163831  std=0.032089  min=0.126064  max=0.210228
+    Reward (n=10):
+  mean=0.756136  std=0.149020  min=0.469075  max=0.959442
+    Energy kWh (n=10):
+  mean=0.756136  std=0.149020  min=0.469075  max=0.959442
+    Movement cost (n=10):
+  mean=0.000000  std=0.000000  min=0.000000  max=0.000000
   sun_tracking:
-    Reward (n=5):
-  mean=0.118519  std=0.168619  min=-0.132268  max=0.291419
-    Energy kWh (n=5):
-  mean=0.782165  std=0.172391  min=0.529438  max=0.972906
-    Movement cost (n=5):
-  mean=0.663645  std=0.009122  min=0.655812  max=0.681488
+    Reward (n=10):
+  mean=0.104150  std=0.181582  min=-0.241149  max=0.406584
+    Energy kWh (n=10):
+  mean=0.944087  std=0.195013  min=0.569983  max=1.274193
+    Movement cost (n=10):
+  mean=0.839937  std=0.023593  min=0.809462  max=0.871316
 
 Outputs:
   rollouts/rollout_<n>.csv — full trajectories
   rollout_plots/rollout_<n>_combined.png — time-series panels
   evaluation_rewards.png, evaluation_by_season.png
+  reward_time_analysis.txt — peak times and window breakdown

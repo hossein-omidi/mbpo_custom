@@ -47,6 +47,10 @@ from softlearning.samplers import rollout
 from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
 
 from eval_utils import (
+    TIME_WINDOWS,
+    analyze_rollout_path,
+    aggregate_time_windows,
+    compare_method_table,
     describe_eval_config,
     get_eval_environment,
     get_rollout_metadata,
@@ -56,6 +60,7 @@ from eval_utils import (
     summarize_paths,
     validate_eval_coverage,
     rollout_time_axis,
+    write_reward_time_report,
 )
 
 
@@ -437,15 +442,21 @@ def save_summary(
                     stats['reward']['count'],
                 ))
 
-        f.write('\nPer-rollout detail:\n')
+        f.write('\nPer-rollout detail (with peak times):\n')
         for idx, path in enumerate(paths, 1):
-            meta = get_rollout_metadata(path)
+            meta = analyze_rollout_path(path)
             f.write(
                 '  rollout_%d: date=%s season=%s weather=%s '
-                'reward=%.4f energy_kwh=%.4f movement=%.4f length=%d\n' % (
+                'reward=%.4f energy_kwh=%.4f movement=%.4f\n' % (
                     idx, meta['date'], meta['season'], meta['weather_condition'],
                     meta['total_reward'], meta['total_energy_kwh'],
-                    meta['total_movement_cost'], meta['episode_length']))
+                    meta['total_movement_cost']))
+            f.write(
+                '    peak_power=%.1f W @ %.2f h | peak_reward=%.5f @ %.2f h | '
+                'mean_power=%.1f W\n' % (
+                    meta['peak_power_w'], meta['peak_power_time_hour'],
+                    meta['at_peak_reward']['reward'], meta['peak_reward_time_hour'],
+                    meta['mean_power_w']))
 
         if baseline_stats:
             f.write('\nBaseline comparison (same env settings, matched seeds):\n')
@@ -459,7 +470,9 @@ def save_summary(
         f.write('  rollouts/rollout_<n>.csv — full trajectories\n')
         f.write('  rollout_plots/rollout_<n>_combined.png — time-series panels\n')
         f.write('  evaluation_rewards.png, evaluation_by_season.png\n')
+        f.write('  reward_time_analysis.txt — peak times and window breakdown\n')
 
+    per_rollout_analysis = [analyze_rollout_path(p) for p in paths]
     payload = {
         'checkpoint': checkpoint_dir,
         'deterministic': deterministic,
@@ -467,7 +480,8 @@ def save_summary(
         'eval_config': eval_env_params.get('kwargs', {}),
         'warnings': warnings or [],
         'policy': policy_stats,
-        'per_rollout': [get_rollout_metadata(p) for p in paths],
+        'per_rollout': per_rollout_analysis,
+        'reward_by_time_window': aggregate_time_windows(paths),
     }
     if season_stats:
         payload['by_season'] = season_stats
@@ -519,8 +533,67 @@ def plot_by_season(outdir, paths):
     return filepath
 
 
+def plot_reward_time_windows(outdir, paths):
+    window_agg = aggregate_time_windows(paths)
+    windows = list(TIME_WINDOWS.keys())
+    x = np.arange(len(windows))
+    mean_reward = [window_agg.get(w, {}).get('mean_reward', np.nan) for w in windows]
+    mean_power = [window_agg.get(w, {}).get('mean_power_w', np.nan) for w in windows]
+
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(9, 6))
+    axes[0].bar(x, mean_reward, color='#d62728', alpha=0.85)
+    axes[0].set_ylabel('Mean step reward')
+    axes[0].set_title('Reward by time window (avg over rollouts)')
+    axes[0].grid(axis='y', linestyle='--', alpha=0.4)
+
+    axes[1].bar(x, mean_power, color='#1f77b4', alpha=0.85)
+    axes[1].set_ylabel('Mean power (W)')
+    axes[1].set_title('Power by time window (avg over rollouts)')
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(windows)
+    axes[1].grid(axis='y', linestyle='--', alpha=0.4)
+
+    filepath = os.path.join(outdir, 'evaluation_reward_by_time_window.png')
+    fig.tight_layout()
+    fig.savefig(filepath, dpi=150)
+    plt.close(fig)
+    return filepath
+
+
+def plot_method_comparison(outdir, paths_by_name):
+    rows = compare_method_table(paths_by_name)
+    methods = [r['method'] for r in rows]
+    x = np.arange(len(methods))
+    width = 0.35
+
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    axes[0].bar(x, [r['total_reward_mean'] for r in rows], color='#d62728')
+    axes[0].set_title('Total reward (mean)')
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(methods, rotation=15, ha='right')
+
+    axes[1].bar(x, [r['total_energy_kwh_mean'] for r in rows], color='#1f77b4')
+    axes[1].set_title('Total energy kWh (mean)')
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(methods, rotation=15, ha='right')
+
+    axes[2].bar(x, [r['movement_cost_mean'] for r in rows], color='#7f7f7f')
+    axes[2].set_title('Movement cost (mean)')
+    axes[2].set_xticks(x)
+    axes[2].set_xticklabels(methods, rotation=15, ha='right')
+
+    for ax in axes:
+        ax.grid(axis='y', linestyle='--', alpha=0.4)
+
+    filepath = os.path.join(outdir, 'evaluation_method_comparison.png')
+    fig.tight_layout()
+    fig.savefig(filepath, dpi=150)
+    plt.close(fig)
+    return filepath
+
+
 def plot_rollout_combined(outdir, path, idx):
-    meta = get_rollout_metadata(path)
+    meta = analyze_rollout_path(path)
     infos = path.get('infos', [])
     x = rollout_time_axis(path, relative=False)
     x_label = 'Time of day (hour)' if infos and 'time' in infos[0] else 'Step'
@@ -545,8 +618,15 @@ def plot_rollout_combined(outdir, path, idx):
     fig, axes = plt.subplots(6, 1, sharex=True, figsize=(11, 14))
     fig.suptitle(title, fontsize=11)
 
-    axes[0].plot(x, power, color='#1f77b4', linewidth=1.5)
+    t_peak_power = meta['peak_power_time_hour']
+    t_peak_reward = meta['peak_reward_time_hour']
+
+    axes[0].plot(x, power, color='#1f77b4', linewidth=1.5, label='power')
+    if np.isfinite(t_peak_power):
+        axes[0].axvline(t_peak_power, color='#1f77b4', linestyle=':', alpha=0.8,
+                        label='peak power')
     axes[0].set_ylabel('Power (W)')
+    axes[0].legend(loc='upper left', fontsize=8)
 
     axes[1].plot(x, cumulative_energy, color='#9467bd', linewidth=1.5)
     axes[1].set_ylabel('Cum. energy (kWh)')
@@ -566,9 +646,13 @@ def plot_rollout_combined(outdir, path, idx):
     axes[5].plot(x, rewards, color='#d62728', label='reward', linewidth=1.2)
     ax_twin = axes[5].twinx()
     ax_twin.plot(x, movement, color='#7f7f7f', linestyle='--', label='movement', linewidth=1.0)
+    if np.isfinite(t_peak_reward):
+        axes[5].axvline(t_peak_reward, color='#d62728', linestyle=':', alpha=0.8,
+                        label='peak reward')
     axes[5].set_ylabel('Reward')
     ax_twin.set_ylabel('Movement cost')
     axes[5].set_xlabel(x_label)
+    axes[5].legend(loc='upper left', fontsize=7)
 
     for ax in axes:
         ax.grid(True, linestyle='--', alpha=0.35)
@@ -662,6 +746,11 @@ def main(args):
                 baseline_paths_by_name[name],
                 prefix='rollout')
 
+    paths_by_name = {'learned_policy': paths}
+    if args.compare_baselines:
+        for name, bpaths in baseline_paths_by_name.items():
+            paths_by_name[name] = bpaths
+
     summary_path, json_path = save_summary(
         args.outdir,
         checkpoint_path,
@@ -673,10 +762,15 @@ def main(args):
         report_by_season=not args.no_report_by_season,
         warnings=eval_warnings)
 
+    reward_time_report = write_reward_time_report(
+        args.outdir, paths, paths_by_name=paths_by_name if args.compare_baselines else None)
+
     reward_plot = plot_rewards(args.outdir, paths)
-    plot_files = [reward_plot]
+    plot_files = [reward_plot, plot_reward_time_windows(args.outdir, paths)]
     if not args.no_report_by_season and len(paths) > 1:
         plot_files.append(plot_by_season(args.outdir, paths))
+    if args.compare_baselines and len(paths_by_name) > 1:
+        plot_files.append(plot_method_comparison(args.outdir, paths_by_name))
 
     rollout_plot_files = []
     for idx, path in enumerate(paths, start=1):
@@ -686,6 +780,7 @@ def main(args):
     print('Saved:')
     print('  %s' % summary_path)
     print('  %s' % json_path)
+    print('  %s' % reward_time_report)
     for p in plot_files:
         print('  %s' % p)
     print('  %s' % rollouts_dir)
