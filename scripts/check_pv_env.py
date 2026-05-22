@@ -1,3 +1,4 @@
+import argparse
 import gym
 import numpy as np
 
@@ -5,23 +6,79 @@ import numpy as np
 import softlearning.environments.adapters.gym_adapter  # noqa: F401
 
 
+def validate_weather_profile(env):
+    """Sanity-check irradiance/temperature weather table vs pvlib solar position."""
+    inner = env.unwrapped
+    profile = inner.weather_profile
+    times = profile.index
+    solar = inner.location.get_solarposition(times)
+    cos_zenith = np.cos(np.deg2rad(solar['zenith'].clip(0.0, 90.0).values))
+    poa_direct = profile['dni'].values * np.maximum(cos_zenith, 0.0)
+    dhi_residual = profile['ghi'].values - poa_direct
+    dhi_expected = np.clip(dhi_residual, 0.0, profile['ghi'].values)
+    max_dhi_err = float(np.max(np.abs(profile['dhi'].values - dhi_expected)))
+    if inner.weather_source != 'clearsky':
+        assert max_dhi_err < 1e-6, (
+            'Random weather DHI should satisfy ghi ~= dni*cos(zenith) + dhi; '
+            'max error {:.4g}'.format(max_dhi_err))
+    assert (profile['dni'].values >= 0).all()
+    assert (profile['dhi'].values >= 0).all()
+    assert (profile['ghi'].values >= 0).all()
+    assert len(profile) == len(times) == inner.periods
+    print('weather_source:', inner.weather_source)
+    print('irradiance units: W/m^2 (pvlib clearsky base)')
+    print('dni  min/max: {:.1f} / {:.1f}'.format(profile['dni'].min(), profile['dni'].max()))
+    print('dhi  min/max: {:.1f} / {:.1f}'.format(profile['dhi'].min(), profile['dhi'].max()))
+    print('ghi  min/max: {:.1f} / {:.1f}'.format(profile['ghi'].min(), profile['ghi'].max()))
+    print('temp min/max (C): {:.1f} / {:.1f}'.format(
+        profile['temperature'].min(), profile['temperature'].max()))
+    print('weather profile alignment: OK ({} timestamps)'.format(len(times)))
+
+
 def main():
-    env = gym.make('PVTracking-v0')
+    parser = argparse.ArgumentParser(description='Smoke-test PVTracking-v0.')
+    parser.add_argument(
+        '--observation-mode',
+        choices=('legacy', 'physical'),
+        default='legacy',
+        help='Observation layout (default: legacy for checkpoint compatibility).',
+    )
+    parser.add_argument(
+        '--log-obs',
+        action='store_true',
+        help='Print named observation features on reset and first step.',
+    )
+    parser.add_argument(
+        '--validate-weather',
+        action='store_true',
+        help='Check irradiance units, DHI consistency, and timestamp alignment.',
+    )
+    args = parser.parse_args()
+
+    env = gym.make(
+        'PVTracking-v0',
+        observation_mode=args.observation_mode,
+        log_observations=args.log_obs,
+    )
+    inner = env.unwrapped
     obs = env.reset()
+    if args.validate_weather:
+        validate_weather_profile(env)
+    print('observation_mode:', getattr(inner, 'observation_mode', 'legacy'))
+    print('feature_names:', getattr(inner, 'obs_feature_names', []))
     print('reset obs shape:', np.asarray(obs).shape)
     print('action space:', env.action_space)
     print('obs space:', env.observation_space)
 
-    for step in range(10):
+    for step in range(3):
         action = env.action_space.sample()
         next_obs, reward, done, info = env.step(action)
         print(
-            f'step={step}',
-            f'action={action}',
-            f'reward={reward:.4f}',
-            f'done={done}',
-            f'obs_shape={np.asarray(next_obs).shape}',
-            f'info_keys={list(info.keys())}',
+            'step={}'.format(step),
+            'action={}'.format(action),
+            'reward={:.4f}'.format(reward),
+            'done={}'.format(done),
+            'cos_aoi={:.4f}'.format(info.get('cos_aoi', float('nan'))),
         )
         if done:
             print('done at step', step)

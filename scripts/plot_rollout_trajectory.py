@@ -90,20 +90,23 @@ def plot_rollout(data, outdir, name):
     if name is None:
         name = 'rollout_combined'
 
-    time = data.get('time')
-    if time is not None and np.isfinite(time).all():
-        if np.nanmax(time) <= 24.0 and np.nanmin(time) >= 0.0:
-            time = time - time[0]
+    time = data.get('clock_hour_utc')
+    x_label = 'Clock hour UTC (post-step)'
+    if time is None or not np.isfinite(time).all():
+        time = data.get('clock_hour_env_tz', data.get('time'))
+        if time is None or not np.isfinite(np.asarray(time, dtype=np.float64)).all():
+            time = None
         else:
-            time = (time - time[0]) / 3600.0
-        x_label = 'Time (hours)'
+            x_label = 'Clock hour UTC (legacy column name, post-step)'
+    if time is not None and np.isfinite(time).all():
+        time = np.asarray(time, dtype=np.float64)
     else:
         time = np.arange(len(data.get('reward', [])), dtype=np.float64)
         x_label = 'Step'
 
-    power = data.get('power', np.full_like(time, np.nan))
-    tilt = data.get('tilt', np.full_like(time, np.nan))
-    azimuth = data.get('azimuth', np.full_like(time, np.nan))
+    power = data.get('power_w', data.get('power', np.full_like(time, np.nan)))
+    tilt = data.get('tilt_deg', data.get('tilt', np.full_like(time, np.nan)))
+    azimuth = data.get('azimuth_deg', data.get('azimuth', np.full_like(time, np.nan)))
     reward = data.get('reward', np.full_like(time, np.nan))
 
     fig, axes = plt.subplots(4, 1, sharex=True, figsize=(10, 12))

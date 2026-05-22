@@ -24,13 +24,18 @@ from softlearning.policies.utils import get_policy_from_variant
 from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
 
 from eval_utils import (
-    analyze_rollout_path,
+    EVAL_PROTOCOL_INHERIT,
+    EVAL_PROTOCOL_LEGACY_UTC,
+    EVAL_PROTOCOL_UTC,
     compare_method_table,
     describe_eval_config,
     get_eval_environment,
     make_baseline_rollout,
+    run_learned_policy_rollout,
     summarize_paths,
     validate_eval_coverage,
+    validate_policy_environment_observation_dims,
+    write_eval_scenario_confirmation,
     write_reward_time_report,
 )
 
@@ -81,41 +86,6 @@ def load_policy_weights(checkpoint_dir):
     raise KeyError('policy_weights not found in checkpoint.pkl')
 
 
-def run_policy_rollout(policy, env, max_length=63, seed=None, deterministic=True):
-    if seed is not None and hasattr(env, 'seed'):
-        env.seed(seed)
-
-    observations = []
-    actions = []
-    rewards = []
-    infos = []
-
-    obs = env.reset()
-    done = False
-    step = 0
-    convert = getattr(env, 'convert_to_active_observation', lambda x: x)
-
-    with policy.set_deterministic(deterministic):
-        while not done and step < max_length:
-            active_obs = convert(obs)
-            action = policy.actions_np([active_obs])[0]
-            next_obs, reward, done, info = env.step(action)
-
-            observations.append(obs)
-            actions.append(action)
-            rewards.append(reward)
-            infos.append(info)
-            obs = next_obs
-            step += 1
-
-    return {
-        'observations': np.asarray(observations),
-        'actions': np.asarray(actions),
-        'rewards': np.asarray(rewards),
-        'infos': infos,
-    }
-
-
 def _write_stats(f, label, stats):
     f.write('%s (n=%d): mean=%.4f std=%.4f min=%.4f max=%.4f\n' % (
         label, stats['count'], stats['mean'], stats['std'], stats['min'], stats['max']))
@@ -139,6 +109,14 @@ def main():
                         help='Baselines to compare')
     parser.add_argument('--min-rollouts', type=int, default=10,
                         help='Warn if fewer rollouts with randomize_day=True')
+    parser.add_argument('--debug-first-rollout', action='store_true',
+                        help='Log observation shapes for the first learned-policy rollout only')
+    parser.add_argument(
+        '--eval-protocol',
+        type=str,
+        default=EVAL_PROTOCOL_INHERIT,
+        choices=(EVAL_PROTOCOL_INHERIT, EVAL_PROTOCOL_UTC, EVAL_PROTOCOL_LEGACY_UTC),
+        help='UTC episode grid 06:00-21:45 (inherit/utc/legacy_utc are equivalent).')
     args = parser.parse_args()
 
     checkpoint_dir = resolve_checkpoint_path(args.checkpoint)
@@ -154,12 +132,18 @@ def main():
         test_start_date=args.test_start_date,
         test_end_date=args.test_end_date,
         fixed_eval_dates=args.fixed_eval_dates,
+        eval_protocol=args.eval_protocol,
     )
     for warning in validate_eval_coverage(args.num_rollouts, eval_env_params, args.min_rollouts):
         print('[compare_baselines] WARNING: %s' % warning)
 
     policy = get_policy_from_variant(variant, eval_env, Qs=[None])
     policy.set_weights(policy_weights)
+    dim_info = validate_policy_environment_observation_dims(
+        policy, eval_env, policy_weights=policy_weights, eval_env_params=eval_env_params)
+    print('[compare_baselines] Verified policy_input_dim=%d env_observation_dim=%d '
+          'observation_mode=%r' % (
+              dim_info['policy_dim'], dim_info['env_dim'], dim_info['env_mode']))
 
     os.makedirs(args.outdir, exist_ok=True)
     summary_path = os.path.join(args.outdir, 'baseline_comparison_summary.txt')
@@ -173,10 +157,18 @@ def main():
             test_start_date=args.test_start_date,
             test_end_date=args.test_end_date,
             fixed_eval_dates=args.fixed_eval_dates,
+            eval_protocol=args.eval_protocol,
         )
         policy_paths.append(
-            run_policy_rollout(policy, env, args.max_path_length, seed=idx,
-                               deterministic=args.deterministic))
+            run_learned_policy_rollout(
+                policy,
+                env,
+                args.max_path_length,
+                seed=idx,
+                deterministic=args.deterministic,
+                policy_input_dim=dim_info['policy_dim'],
+                debug_first_step=(args.debug_first_rollout and idx == 0),
+            ))
 
     for name in args.baseline_types:
         for idx in range(args.num_rollouts):
@@ -185,6 +177,7 @@ def main():
                 test_start_date=args.test_start_date,
                 test_end_date=args.test_end_date,
                 fixed_eval_dates=args.fixed_eval_dates,
+                eval_protocol=args.eval_protocol,
             )
             baseline_paths[name].append(
                 make_baseline_rollout(env, name, args.max_path_length, seed=idx))
@@ -201,6 +194,9 @@ def main():
         f.write('Checkpoint: %s\n' % checkpoint_dir)
         f.write('Deterministic: %s\n' % args.deterministic)
         f.write('Rollouts per method: %d\n' % args.num_rollouts)
+        f.write('Policy input dim: %d\n' % dim_info['policy_dim'])
+        f.write('Env observation dim: %d (mode=%r)\n' % (
+            dim_info['env_dim'], dim_info['env_mode']))
         f.write('\nEvaluation environment:\n')
         for line in describe_eval_config(eval_env_params):
             f.write('  %s\n' % line)
@@ -213,7 +209,7 @@ def main():
             _write_stats(f, '    reward', stats['reward'])
             _write_stats(f, '    energy_kwh', stats['total_energy_kwh'])
             _write_stats(f, '    movement', stats['total_movement_cost'])
-        f.write('\nTiming comparison (mean over rollouts):\n')
+        f.write('\nTiming comparison (mean over rollouts; peak_pwr_t is env clock hour UTC):\n')
         f.write(
             '  method           reward    energy    mean_pwr  peak_pwr  '
             'peak_pwr_t  peak_rew_t  movement\n')
@@ -230,8 +226,11 @@ def main():
                     row['movement_cost_mean']))
 
     write_reward_time_report(args.outdir, policy_paths, paths_by_name=paths_by_name)
+    scenario_report = write_eval_scenario_confirmation(
+        args.outdir, eval_env_params, paths_by_name, args.max_path_length)
 
     print('Baseline comparison saved to:', summary_path)
+    print('Scenario confirmation:', scenario_report)
     print('Learned policy: mean_reward=%.4f mean_energy=%.4f kWh' % (
         policy_stats['reward']['mean'], policy_stats['total_energy_kwh']['mean']))
     for name, stats in baseline_summaries.items():

@@ -58,39 +58,88 @@ The conda environment installs dependencies from `environment/requirements.txt`,
 
 MuJoCo is not required for PV tracking. It is only needed for classic MBPO benchmarks like Hopper and HalfCheetah.
 
-## Quick validation (no training)
+## PV tracking: end-to-end workflow
+
+Use this order every time you train or evaluate. All steps assume **UTC** time (`tz='UTC'`, grid **06:00–21:45 UTC**, **63** steps/day). Details: [docs/PV_TRACKING_TIME_AND_CHECKPOINTS.md](docs/PV_TRACKING_TIME_AND_CHECKPOINTS.md).
+
+| Step | What | Commands (below) |
+|------|------|------------------|
+| 0 | Pre-flight checks (env, time, config) | [§ Step 0](#step-0-pre-training-checks) |
+| 1 | Train MBPO | [§ Step 1](#step-1-training) |
+| 2 | Monitor run + pick checkpoint | [§ Step 2](#step-2-during-and-after-training) |
+| 3 | Post-training eval + plots | [§ Step 3](#step-3-post-training-evaluation) |
+| 4 | Interpret results | [§ Interpretation](#how-to-interpret-results) |
+
+**Paths (adjust if yours differ):**
+
+- Repo: `/home/ecer/PVRL/mbpo`
+- Ray trials: `~/ray_mbpo/PVTracking/pv_tracking/seed:<id>/`
+- Eval outputs: `/home/ecer/PVRL/mbpo/evaluation/<run_name>/`
+
+---
+
+## Step 0: Pre-training checks
+
+Run these **before** starting a long training job. They do not modify code.
 
 ```bash
 conda activate mbpo
-cd mbpo
+cd /home/ecer/PVRL/mbpo
 
-# 1) Check the PV environment and action/observation shapes
-python scripts/check_pv_env.py
+# A) Environment smoke test (shapes, one reset/step)
+python scripts/check_pv_env.py --observation-mode physical --log-obs
 
-# 2) Validate the PV rollout schedule and observation scaling
+# B) Rollout schedule + observation scaling vs config
 python scripts/validate_pv_rollouts.py
 
-# 3) Dry-run the training config and verify variant wiring
+# C) End-to-end UTC + horizon uniformity (train / eval / baselines / plots)
+python scripts/verify_utc_uniformity.py
+
+# D) UTC time / pvlib alignment (December example)
+python scripts/solar_time_sanity.py --date 2020-12-21
+python scripts/solar_time_sanity.py --date 2020-12-21 --env-rollout
+
+# E) Dry-run: variant wiring, prints tz / start_time / periods at startup
 mbpo run_example_dry examples.development \
   --config=examples.config.pv_tracking.0 \
   --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
 ```
 
-Expect output showing the observation and action shapes, rollout schedule, and a dry-run variant summary.
+**Expect from current config** (`examples/config/pv_tracking/0.py`):
 
-## Training PV tracking
+- `observation_mode='physical'` → **11-D** observations (legacy **15-D** only if you remove `observation_mode` from config).
+- `tz='UTC'`, `start_time='06:00'`, `periods=64`, `epoch_length=63`.
+- At **35°N, 106°W** in **December**, ~**33/64** episode timestamps are **night** (solar altitude ≤ 0°); zero power on the plot before ~**14:15 UTC** is normal, not a bug.
 
-### Basic command
+Optional: compare with local time **for human reading only** (not used in training):
+
+```bash
+python scripts/solar_time_sanity.py --date 2020-12-21 --compare-tz America/Denver
+```
+
+---
+
+## Step 1: Training
+
+### Start training
 
 ```bash
 conda activate mbpo
-cd mbpo
+cd /home/ecer/PVRL/mbpo
 
 mbpo run_local examples.development \
   --config=examples.config.pv_tracking.0 \
   --gpus=0 --trial-gpus=0 \
   --cpus=2 --trial-cpus=1
 ```
+
+At startup, look for a line like:
+
+```text
+PVTracking training env check: tz='UTC' start_time='06:00' periods=64 (63 steps), observation_mode='physical' ...
+```
+
+If `tz` is not `UTC` or `periods` ≠ 64, fix `examples/config/pv_tracking/0.py` before relying on results.
 
 ### What the training does
 
@@ -100,7 +149,161 @@ mbpo run_local examples.development \
 4. **Model training** — MBPO trains an ensemble dynamics model on real transitions.
 5. **Imagined rollouts** — the learned model generates synthetic transitions to augment training.
 6. **Policy optimization** — SAC updates the policy using mixed real/model batches.
-7. **Checkpointing** — model and policy state are saved periodically.
+7. **Checkpointing** — `latest_checkpoint/`, `checkpoint_<epoch>/`, and **`best_eval_checkpoint/`** when `evaluation/return-average` improves.
+
+---
+
+## Step 2: During and after training
+
+### Find the trial directory
+
+```bash
+# List recent seeds
+ls -lt ~/ray_mbpo/PVTracking/pv_tracking/ | head
+
+# Set this to your run (copy from ls output)
+export TRIAL=~/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed
+
+ls -la "$TRIAL"
+ls "$TRIAL"/checkpoint_* "$TRIAL"/best_eval_checkpoint 2>/dev/null
+```
+
+### Monitor training metrics
+
+```bash
+# Training curves (return, Q-loss, etc.)
+python scripts/plot_training_progress.py "$TRIAL"
+
+# Raw log (last lines)
+tail -30 "$TRIAL/progress.csv"
+```
+
+### Checkpoint selection (scientific)
+
+| Checkpoint | When to use |
+|------------|-------------|
+| `best_eval_checkpoint/` | Default — best **training-time** `evaluation/return-average` |
+| `checkpoint_<N>/` | Compare a specific epoch |
+| `latest_checkpoint/` | Resume / debug only |
+
+**Training metric ≠ best energy on hold-out days.** After training, confirm with **total_energy_kwh** vs baselines (Step 3).
+
+Rank checkpoints on fixed December dates:
+
+```bash
+export TRIAL=~/ray_mbpo/PVTracking/pv_tracking/seed:YOUR_SEED_DIR
+
+python scripts/select_best_checkpoint.py "$TRIAL" \
+  --deterministic \
+  --compare-baselines \
+  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28 \
+  --num-rollouts 4 \
+  --max-path-length 63
+```
+
+Use the path printed as “Recommended for reporting” for Step 3, or `best_eval_checkpoint` if it ranks first.
+
+```bash
+export CKPT="$TRIAL/best_eval_checkpoint"
+```
+
+---
+
+## Step 3: Post-training evaluation
+
+Full pipeline: load checkpoint → rollouts (same UTC MDP as training) → baselines → CSV → plots → reports.
+
+**Always pass:** `--max-path-length 63`, `--eval-protocol inherit`, and `--deterministic` for reporting.
+
+### 3a) Standard hold-out (December, fixed dates, with baselines)
+
+```bash
+conda activate mbpo
+cd /home/ecer/PVRL/mbpo
+
+export CKPT="$TRIAL/best_eval_checkpoint"   # or checkpoint from select_best_checkpoint.py
+
+python scripts/evaluate_agent.py "$CKPT" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_final_utc \
+  --eval-protocol inherit \
+  --max-path-length 63 \
+  --num-rollouts 10 \
+  --deterministic \
+  --compare-baselines \
+  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28
+```
+
+### 3b) Random days over the training year (generalization)
+
+```bash
+python scripts/evaluate_agent.py "$CKPT" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_tracking_random \
+  --eval-protocol inherit \
+  --max-path-length 63 \
+  --num-rollouts 10 \
+  --deterministic \
+  --compare-baselines
+```
+
+### 3c) Held-out month (random days in December only)
+
+```bash
+python scripts/evaluate_agent.py "$CKPT" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_holdout_dec2020 \
+  --eval-protocol inherit \
+  --max-path-length 63 \
+  --num-rollouts 10 \
+  --deterministic \
+  --compare-baselines \
+  --test-start-date 2020-12-01 \
+  --test-end-date 2020-12-31
+```
+
+### 3d) Seasonal equinox/solstice dates
+
+```bash
+python scripts/evaluate_agent.py "$CKPT" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_tracking_seasonal \
+  --eval-protocol inherit \
+  --max-path-length 63 \
+  --num-rollouts 4 \
+  --deterministic \
+  --compare-baselines \
+  --fixed-eval-dates 2020-03-21,2020-06-21,2020-09-22,2020-12-21
+```
+
+### 3e) Baselines only (no neural policy)
+
+```bash
+python scripts/compare_baselines.py "$CKPT" \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_baselines_dec \
+  --eval-protocol inherit \
+  --max-path-length 63 \
+  --num-rollouts 10 \
+  --deterministic \
+  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28
+```
+
+### 3f) Re-plot one rollout CSV
+
+```bash
+python scripts/plot_rollout_trajectory.py \
+  --csv /home/ecer/PVRL/mbpo/evaluation/pv_final_utc/rollouts/rollout_3.csv \
+  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_final_utc/rollout_plots
+```
+
+### Post-training outputs (what to open)
+
+| File | Purpose |
+|------|---------|
+| `evaluation_summary.txt` / `.json` | Mean reward, **total_energy_kwh**, movement, per-season stats |
+| `eval_scenario_confirmation.txt` | **Fairness:** same UTC grid, seeds, dates for policy + baselines; **sunrise/sunset UTC** per date |
+| `reward_time_analysis.txt` | Peak power/reward **UTC hours**, solar-altitude windows |
+| `evaluation_method_comparison.png` | Policy vs baselines (energy, reward, movement) |
+| `evaluation_reward_by_solar_altitude.png` | Physics-based windows (preferred for “midday sun”) |
+| `evaluation_reward_by_time_window.png` | UTC clock windows (winter “midday” may be night) |
+| `rollouts/rollout_<n>.csv` | Per-step `clock_hour_utc`, power, `solar_altitude_deg` |
+| `rollout_plots/rollout_<n>_combined.png` | UTC x-axis; **gray = night** (solar alt ≤ 0°) |
 
 ### Important environment concepts
 
@@ -108,7 +311,7 @@ mbpo run_local examples.development \
 - `randomize_day` ensures episodes are drawn from across the year.
 - `weather_source='random'` enables daily weather variation.
 - `randomize_initial_orientation` lets the tracker start from different angles.
-- `max_path_length=63` corresponds to a single day of 15-minute steps.
+- One PV day = **64 timestamps** at **15 min** from **06:00** → **21:45** (**63** `env.step()` calls). `max_path_length=63` and `epoch_length=63` must stay aligned.
 
 ## Key parameters and guidance
 
@@ -117,7 +320,7 @@ mbpo run_local examples.development \
 | Parameter | Type | Default | Purpose | Guidance |
 |-----------|------|---------|---------|----------|
 | `n_epochs` | int | 200 | Number of training epochs | Longer for better convergence; use 200–500 for PV tracking |
-| `epoch_length` | int | 64 | Real env steps per epoch | Keep at 63 for one full day; increase only if you want multi-day episodes |
+| `epoch_length` | int | 63 | Real env steps per epoch | Must match one day (63 steps); do not use 64 unless you change `periods` |
 | `n_initial_exploration_steps` | int | 630 | Real exploration steps before learning | Use `max_path_length * 10` to ensure enough coverage before training |
 | `model_train_freq` | int | 100 | Train model every this many env steps | 100 is reasonable; lower if model needs faster adaptation |
 | `rollout_batch_size` | int | 300 | Imagined samples per rollout phase | Use a smaller batch size for more stable PV training |
@@ -133,13 +336,14 @@ mbpo run_local examples.development \
 |-----------|---------|------------------|
 | `start_date` | `2020-01-01` | first candidate training day |
 | `end_date` | `2020-12-31` | last candidate training day |
-| `start_time` | `06:00` | first step of each episode |
-| `periods` | `64` | number of timesteps per episode |
-| `freq` | `15min` | timestep resolution |
+| `tz` | `UTC` | pvlib `Location.tz` and env clock (`info['clock_hour_utc']`) |
+| `start_time` | `06:00` | episode grid start (UTC morning on the index) |
+| `periods` | `64` | timestamps per episode (63 actions) |
+| `freq` | `15min` | timestep resolution → 06:00–21:45 UTC |
 | `weather_source` | `random` | choose between `clearsky` and `random` weather |
 | `temperature` | `23.0` | base ambient temperature |
 | `wind_speed` | `2.0` | base wind speed |
-| `movement_penalty` | `0.01` | cost for motion to discourage unnecessary movement |
+| `movement_penalty` | `0.0001` | cost for motion (config default; increase only with care) |
 
 ### Choosing parameters
 
@@ -163,31 +367,25 @@ reward         = energy_kwh - movement_cost
 
 This is **physically meaningful** for maximizing collected energy with an actuator penalty. It is **not** cumulative energy in the reward; SAC sums per-step rewards over the episode.
 
-**Important:** With `movement_penalty=0.01`, a full two-axis move costs up to **0.02** per step while peak energy is often only **~0.02–0.03** kWh per step. The agent can earn **positive reward late in the day** by moving little (low penalty) while still collecting moderate power — even when **peak power occurs earlier** (typically afternoon). This is visible in `reward_time_analysis.txt` and is **not a plotting bug**.
+**Important:** Step reward = energy − movement. Peak **step reward** time often differs from peak **power** time (movement penalty). Use **total_energy_kwh** for tracking quality. This is visible in `reward_time_analysis.txt` and is **not a plotting bug**.
 
 Use **total_energy_kwh** and **peak_power_time** to judge tracking quality, not peak step reward alone.
 
-### Observation vector (15-D, sufficient for tracking)
+### Observation vector
 
-| Index | Feature | Role |
-|-------|---------|------|
-| 0 | solar zenith / 180 | sun elevation proxy |
-| 1–2 | solar azimuth sin/cos | sun direction |
-| 3–5 | DNI, DHI, GHI / 2000 | irradiance |
-| 6 | temperature / 50 | weather context |
-| 7 | panel tilt / 90 | actuator state |
-| 8–9 | panel azimuth sin/cos | actuator state |
-| 10 | last power / 2000 | feedback |
-| 11–12 | time of day sin/cos | clock |
-| 13–14 | day of year sin/cos | season |
+**Legacy (default, 15-D):** matches existing checkpoints. Index 10 is **current** power (not previous-step). Time/day sin/cos are largely redundant with solar angles and can encourage calendar overfitting — see [docs/PV_TRACKING_OBSERVATION_REVIEW.md](docs/PV_TRACKING_OBSERVATION_REVIEW.md).
 
-No critical variable is missing for single-axis/day-ahead tracking. Cyclic encoding matches the model rollout post-processing in `mbpo/static/pv_tracking.py`.
+**Recommended for new training (11-D physical):** set `observation_mode='physical'` in `environment_kwargs` — sensor/actuator fields + `cos_aoi` only (no `episode_progress`, clock, or calendar in the policy vector). MBPO horizon uses solar-time decoding in `StaticFns` (not in obs). **Retrain required** after switching.
+
+```bash
+python scripts/check_pv_env.py --observation-mode physical --log-obs
+```
 
 ### Hyperparameters (current defaults — review, do not change blindly)
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| `movement_penalty` | 0.01 | **High vs per-step energy** — main driver of “late-day reward” behavior |
+| `movement_penalty` | 0.0001 | Low default; raising it discourages motion (may freeze tracker) |
 | `real_ratio` | 0.5 | Standard MBPO; keep if model rollouts are stable |
 | `rollout_schedule` | [20,120,1,3] | Conservative imagined horizon |
 | `discount` | 0.99 | OK for 63-step days |
@@ -199,132 +397,81 @@ No critical variable is missing for single-axis/day-ahead tracking. Cyclic encod
 
 ---
 
-## Evaluation and generalization
+## Time standard (UTC) — read before plots
 
-**Project root:** `/home/ecer/PVRL/mbpo`  
-**Training outputs:** `/home/ecer/ray_mbpo/PVTracking/pv_tracking/`
+| Setting | Value |
+|---------|--------|
+| `tz` | **`UTC`** everywhere (config, env, pvlib, train, eval, CSV, plots) |
+| Episode grid | **06:00–21:45 UTC**, 64 timestamps, **63** actions |
+| Eval flag | `--eval-protocol inherit` (same as `utc` / `legacy_utc`) |
+| Plot x-axis | `clock_hour_utc` — **not** Denver local time |
 
-### Find your checkpoint directory
+**Winter at 35°N, 106°W:** sunrise ≈ **14:15 UTC**, GHI peak ≈ **19:00 UTC**. Zero power from **06:00–~14:00 UTC** = **night** (solar altitude &lt; 0°), not a train/test bug. Gray bands on rollout plots mark those steps.
+
+**Do not** change `tz`, `start_time`, or `periods` without **retraining** (different MDP).
+
+Baselines (fair comparison, same seeds/dates):
+
+- `fixed_no_motion` — panel held near tilt=30°, azimuth=180°
+- `sun_tracking` — myopic step toward current sun position
+
+More detail: [docs/PV_TRACKING_TIME_AND_CHECKPOINTS.md](docs/PV_TRACKING_TIME_AND_CHECKPOINTS.md).
+
+---
+
+## Command cheat sheet (copy-paste)
+
+Set once per session:
 
 ```bash
-ls -d /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:*/
-ls /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/
-```
-
-Use a folder such as `checkpoint_14` or `best_eval_checkpoint` (not `params.json` alone). Example path:
-
-```text
-/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14
-```
-
-Evaluation defaults (via `scripts/eval_utils.py`):
-
-- `randomize_day=True` unless you pass hold-out or fixed dates
-- `randomize_initial_orientation=False` for fair policy vs baseline comparison
-- Same `seed=rollout_index` for policy and baselines on each rollout
-
-### Basic evaluation (random days over the training year)
-
-```bash
-cd /home/ecer/PVRL/mbpo
 conda activate mbpo
-
-python scripts/evaluate_agent.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14" \
-  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_tracking \
-  --num-rollouts 10 \
-  --max-path-length 63 \
-  --deterministic \
-  --compare-baselines
+cd /home/ecer/PVRL/mbpo
+export TRIAL=~/ray_mbpo/PVTracking/pv_tracking/seed:YOUR_SEED_DIR
+export CKPT="$TRIAL/best_eval_checkpoint"
 ```
 
-### Held-out month (separate from full-year training)
-
-```bash
-python scripts/evaluate_agent.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14" \
-  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_holdout_dec2020 \
-  --num-rollouts 10 \
-  --max-path-length 63 \
-  --deterministic \
-  --compare-baselines \
-  --test-start-date 2020-12-01 \
-  --test-end-date 2020-12-31
-```
-
-### Fixed seasonal dates (reproducible cross-season comparison)
-
-```bash
-python scripts/evaluate_agent.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14" \
-  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_tracking_seasonal \
-  --num-rollouts 4 \
-  --max-path-length 63 \
-  --deterministic \
-  --compare-baselines \
-  --fixed-eval-dates 2020-03-21,2020-06-21,2020-09-22,2020-12-21
-```
-
-### Baseline-only comparison
-
-```bash
-python scripts/compare_baselines.py \
-  "/home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed/checkpoint_14" \
-  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_baselines \
-  --num-rollouts 10 \
-  --max-path-length 63 \
-  --deterministic \
-  --test-start-date 2020-12-01 \
-  --test-end-date 2020-12-31
-```
-
-Baselines:
-
-- `fixed_no_motion` — no movement (tilt=30°, azimuth=180° targets)
-- `sun_tracking` — each step moves toward current sun zenith/azimuth
-
-### Reward–time analysis and plots
-
-The evaluator writes:
-
-| File | Content |
+| Goal | Command |
 |------|---------|
-| `evaluation_summary.txt` / `.json` | Aggregates, per-rollout peaks, seasonal/weather breakdown |
-| `reward_time_analysis.txt` | **Peak reward vs peak power times**, morning/midday/afternoon/evening means |
-| `evaluation_reward_by_time_window.png` | Bar chart: mean reward and power by window |
-| `evaluation_method_comparison.png` | Policy vs baselines (reward, energy, movement) |
-| `rollouts/rollout_<n>.csv` | Full trajectories with solar angles and reward components |
-| `rollout_plots/rollout_<n>_combined.png` | Time series with **vertical lines** at peak power and peak reward |
+| Pre-check env | `python scripts/check_pv_env.py --observation-mode physical` |
+| **UTC + horizon audit** | `python scripts/verify_utc_uniformity.py` |
+| Pre-check time/pvlib | `python scripts/solar_time_sanity.py --date 2020-12-21 --env-rollout` |
+| Train | `mbpo run_local examples.development --config=examples.config.pv_tracking.0 --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1` |
+| Plot training | `python scripts/plot_training_progress.py "$TRIAL"` |
+| Rank checkpoints | `python scripts/select_best_checkpoint.py "$TRIAL" --deterministic --compare-baselines --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28` |
+| Full eval + baselines | `python scripts/evaluate_agent.py "$CKPT" --outdir evaluation/pv_final_utc --eval-protocol inherit --max-path-length 63 --num-rollouts 10 --deterministic --compare-baselines --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28` |
+| Baselines only | `python scripts/compare_baselines.py "$CKPT" --outdir evaluation/pv_baselines --eval-protocol inherit --max-path-length 63 --deterministic --fixed-eval-dates 2020-12-21` |
 
-Re-plot one CSV:
+Evaluation scripts batch observations correctly via `prepare_policy_observation_batch()` — do not call `policy.actions_np([obs_vector])` on a 1-D vector.
 
-```bash
-python scripts/plot_rollout_trajectory.py \
-  --csv /home/ecer/PVRL/mbpo/evaluation/pv_tracking/rollouts/rollout_1.csv \
-  --outdir /home/ecer/PVRL/mbpo/evaluation/pv_tracking/rollout_plots
-```
+---
 
-### How to interpret results
+## How to interpret results
 
 1. **Total energy_kwh** — primary physical performance metric.  
-2. **Peak power time** — should align with high sun (often ~11:00–14:00 local).  
-3. **Peak reward time** — often **later** (16:00–20:00) if the policy minimizes movement; compare to peak power time in `reward_time_analysis.txt`.  
-4. **Evening mean reward > midday** with **zero morning power** — policy is optimizing step reward via low movement, not good tracking.  
-5. Compare **learned_policy** vs **fixed_no_motion** / **sun_tracking** on the same dates before trusting total reward.
+2. **Rollout plots** — x-axis is **UTC**; winter peaks often **17–20h UTC** at this longitude.  
+3. **Solar-altitude windows** — use `evaluation_reward_by_solar_altitude.png` for physics.  
+4. **UTC clock windows** — labels like “midday” are UTC, not Denver local.  
+5. Compare all methods in `eval_scenario_confirmation.txt` (same dates, seeds, weather, horizon).  
+6. **Do not** change `tz` or episode grid without retraining (different MDP).
 
 ## Scripts and utilities
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/check_pv_env.py` | Smoke-test the environment and action/observation shapes |
-| `scripts/evaluate_agent.py` | Evaluate a saved checkpoint and save rollout plots |
-| `scripts/plot_rollout_trajectory.py` | Plot a single rollout CSV file |
-| `scripts/plot_training_progress.py` | Plot training metrics from `progress.csv` |
-| `scripts/plot_ray_results.py` | Plot Ray trial resource/status logs |
-| `scripts/evaluate_and_viskit.py` | Run evaluation and optionally launch viskit |
-| `scripts/export_policy_weights.py` | Export policy weights from older checkpoints |
-| `scripts/validate_pv_rollouts.py` | Validate PV rollout schedule and environment observation scaling |
-| `scripts/compare_baselines.py` | Compare a trained PV policy against fixed/sun-tracking baselines |
+| `scripts/check_pv_env.py` | Pre-training: env smoke test, obs/action shapes |
+| `scripts/validate_pv_rollouts.py` | Pre-training: schedule + obs scaling vs config |
+| `scripts/verify_utc_uniformity.py` | **Pre/post:** end-to-end UTC, 63-step horizon, plot index audit |
+| `scripts/solar_time_sanity.py` | Pre/post: UTC grid vs pvlib solar position / GHI |
+| `scripts/evaluate_agent.py` | **Post-training:** rollouts, baselines, CSV, plots, reports |
+| `scripts/compare_baselines.py` | **Post-training:** baselines only (no policy forward pass) |
+| `scripts/select_best_checkpoint.py` | **Post-training:** rank checkpoints by hold-out energy |
+| `scripts/plot_training_progress.py` | **During training:** curves from `progress.csv` |
+| `scripts/plot_rollout_trajectory.py` | Re-plot one `rollout_*.csv` |
+| `scripts/plot_ray_results.py` | Ray trial resource/status logs |
+| `scripts/evaluate_and_viskit.py` | Evaluation + optional viskit |
+| `scripts/export_policy_weights.py` | Export weights from older checkpoints |
+| `docs/PV_TRACKING_TIME_AND_CHECKPOINTS.md` | UTC time standard, grid design, checkpoint protocol |
+| `docs/PV_TRACKING_OBSERVATION_REVIEW.md` | Legacy vs physical observation notes |
 
 ## Extending the project
 

@@ -6,14 +6,20 @@ Max path length: 63
 Num rollouts: 10
 
 Evaluation environment:
+  eval_protocol: inherit
+  episode_preset: (from variant / env defaults)
+  tz (env clock): (env default UTC)
+  start_time: 06:00
+  periods: 64 (63 env steps)
+  freq: 15min
+  site_local_tz (plots/reports): America/Denver
   start_date: 2020-01-01
   end_date: 2020-12-31
   randomize_day: True
   randomize_initial_orientation: False
   weather_source: random
+  observation_mode: legacy (default)
   fixed_eval_dates: None
-  periods: 64
-  freq: 15min
 
 Aggregate metrics (learned policy):
   Total reward (n=10):

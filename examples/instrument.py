@@ -20,6 +20,7 @@ import uuid
 from pprint import pformat
 import pdb
 
+import numpy as np
 import ray
 from ray import tune
 from ray.autoscaler.commands import exec_cluster
@@ -201,6 +202,29 @@ Number of total trials (including samples/seeds): {total_number_of_trials}
 """
 
     print(experiments_info_text)
+
+    training_env_params = variant_spec.get('environment_params', {}).get('training', {})
+    if training_env_params.get('domain') == 'PVTracking':
+        from softlearning.environments.utils import get_environment_from_params
+        training_env = get_environment_from_params(training_env_params)
+        obs = training_env.reset()
+        inner = training_env.unwrapped
+        kwargs = training_env_params.get('kwargs', {})
+        print(
+            'PVTracking training env check: '
+            'tz={!r} start_time={!r} periods={} ({} steps), '
+            'observation_mode={!r} (env={!r}), obs_space={}, reset_shape={}'.format(
+                getattr(inner.location, 'tz', kwargs.get('tz', 'UTC')),
+                getattr(inner, 'start_time', kwargs.get('start_time')),
+                getattr(inner, 'periods', kwargs.get('periods')),
+                getattr(inner, 'num_action_steps', '?'),
+                kwargs.get('observation_mode', 'legacy'),
+                getattr(inner, 'observation_mode', 'unknown'),
+                training_env.observation_space.shape,
+                np.asarray(obs).shape,
+            )
+        )
+        training_env.close()
 
 
 def run_example_local(example_module_name, example_argv, local_mode=False):

@@ -48,10 +48,13 @@ from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
 
 from eval_utils import (
     TIME_WINDOWS,
+    SOLAR_ALTITUDE_WINDOWS,
     analyze_rollout_path,
     aggregate_time_windows,
+    aggregate_solar_altitude_windows,
     compare_method_table,
     describe_eval_config,
+    env_timezone_from_paths,
     get_eval_environment,
     get_rollout_metadata,
     make_baseline_rollout,
@@ -59,7 +62,14 @@ from eval_utils import (
     summarize_by_group,
     summarize_paths,
     validate_eval_coverage,
+    validate_policy_environment_observation_dims,
+    EVAL_PROTOCOL_LEGACY_UTC,
+    EVAL_PROTOCOL_INHERIT,
+    EVAL_PROTOCOL_UTC,
     rollout_time_axis,
+    rollout_xlabel,
+    night_intervals_from_path,
+    write_eval_scenario_confirmation,
     write_reward_time_report,
 )
 
@@ -148,6 +158,12 @@ def parse_args():
         default=None,
         choices=('random', 'clearsky'),
         help='Override weather_source for evaluation (default: use variant config).')
+    parser.add_argument(
+        '--eval-protocol',
+        type=str,
+        default=EVAL_PROTOCOL_INHERIT,
+        choices=(EVAL_PROTOCOL_INHERIT, EVAL_PROTOCOL_UTC, EVAL_PROTOCOL_LEGACY_UTC),
+        help='UTC episode grid 06:00-21:45 (inherit/utc/legacy_utc are equivalent).')
     return parser.parse_args()
 
 
@@ -260,25 +276,19 @@ def get_policy(variant, environment, policy_weights, checkpoint_picklable=None):
     except ValueError as e:
         input_dim = _infer_policy_input_dim(policy_weights)
         env_input_dim = int(np.prod(environment.active_observation_shape))
-        if input_dim < env_input_dim:
-            print(
-                '[evaluate_agent] Detected legacy policy input dimension %d; '
-                'wrapping evaluation environment to use first %d observation coordinates.' % (
-                    input_dim, input_dim))
-            wrapped_environment = ObservationSliceWrapper(environment, input_dim)
-            policy = get_policy_from_variant(variant, wrapped_environment, Qs=[None])
-            try:
-                policy.set_weights(policy_weights)
-                return PolicyInputSliceWrapper(policy, input_dim)
-            except ValueError as e2:
-                raise ValueError(
-                    'Policy weights shape mismatch after applying legacy observation slice wrapper. '
-                    'Evaluation env active_observation_shape=%s action_space=%s, '
-                    'policy weight shapes=%s, error=%s' % (
-                        environment.active_observation_shape,
-                        environment.action_space.shape,
-                        _policy_weights_shape_summary(policy_weights),
-                        str(e2)))
+        env_mode = getattr(
+            getattr(environment, 'unwrapped', environment),
+            'observation_mode',
+            'unknown',
+        )
+        if input_dim != env_input_dim:
+            raise ValueError(
+                'Policy observation dim (%d) does not match evaluation env dim (%d) '
+                '(env observation_mode=%r). Use observation_mode=legacy (15-D) for '
+                'old checkpoints or observation_mode=physical (11-D) for new training. '
+                'Do not slice observations: index 10 is power_norm (legacy) vs cos_aoi '
+                '(physical). Original error: %s' % (
+                    input_dim, env_input_dim, env_mode, e))
         raise ValueError(
             'Policy weights shape mismatch when loading policy on evaluation environment. '
             'Evaluation env active_observation_shape=%s action_space=%s, '
@@ -534,6 +544,7 @@ def plot_by_season(outdir, paths):
 
 
 def plot_reward_time_windows(outdir, paths):
+    env_tz = env_timezone_from_paths(paths)
     window_agg = aggregate_time_windows(paths)
     windows = list(TIME_WINDOWS.keys())
     x = np.arange(len(windows))
@@ -541,20 +552,50 @@ def plot_reward_time_windows(outdir, paths):
     mean_power = [window_agg.get(w, {}).get('mean_power_w', np.nan) for w in windows]
 
     fig, axes = plt.subplots(2, 1, sharex=True, figsize=(9, 6))
+    fig.suptitle('UTC clock-hour windows (tz=%s)' % env_tz, fontsize=11)
     axes[0].bar(x, mean_reward, color='#d62728', alpha=0.85)
     axes[0].set_ylabel('Mean step reward')
-    axes[0].set_title('Reward by time window (avg over rollouts)')
+    axes[0].set_title('Reward by UTC clock window (avg over rollouts)')
     axes[0].grid(axis='y', linestyle='--', alpha=0.4)
 
     axes[1].bar(x, mean_power, color='#1f77b4', alpha=0.85)
     axes[1].set_ylabel('Mean power (W)')
-    axes[1].set_title('Power by time window (avg over rollouts)')
+    axes[1].set_title('Power by UTC clock window (avg over rollouts)')
+    axes[1].set_xlabel('Window (UTC clock hour bands)')
     axes[1].set_xticks(x)
     axes[1].set_xticklabels(windows)
     axes[1].grid(axis='y', linestyle='--', alpha=0.4)
 
     filepath = os.path.join(outdir, 'evaluation_reward_by_time_window.png')
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(filepath, dpi=150)
+    plt.close(fig)
+    return filepath
+
+
+def plot_solar_altitude_windows(outdir, paths):
+    solar_agg = aggregate_solar_altitude_windows(paths)
+    windows = list(SOLAR_ALTITUDE_WINDOWS.keys())
+    x = np.arange(len(windows))
+    mean_reward = [solar_agg.get(w, {}).get('mean_reward', np.nan) for w in windows]
+    mean_power = [solar_agg.get(w, {}).get('mean_power_w', np.nan) for w in windows]
+
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
+    fig.suptitle('Solar-altitude windows (physics)', fontsize=11)
+    axes[0].bar(x, mean_reward, color='#d62728', alpha=0.85)
+    axes[0].set_ylabel('Mean step reward')
+    axes[0].set_title('Reward by solar altitude (avg over rollouts)')
+    axes[0].grid(axis='y', linestyle='--', alpha=0.4)
+
+    axes[1].bar(x, mean_power, color='#1f77b4', alpha=0.85)
+    axes[1].set_ylabel('Mean power (W)')
+    axes[1].set_title('Power by solar altitude (avg over rollouts)')
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(windows, rotation=12, ha='right')
+    axes[1].grid(axis='y', linestyle='--', alpha=0.4)
+
+    filepath = os.path.join(outdir, 'evaluation_reward_by_solar_altitude.png')
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(filepath, dpi=150)
     plt.close(fig)
     return filepath
@@ -596,7 +637,7 @@ def plot_rollout_combined(outdir, path, idx):
     meta = analyze_rollout_path(path)
     infos = path.get('infos', [])
     x = rollout_time_axis(path, relative=False)
-    x_label = 'Time of day (hour)' if infos and 'time' in infos[0] else 'Step'
+    x_label = rollout_xlabel(path)
 
     rewards = np.asarray(path['rewards'], dtype=np.float64)
     actions = np.asarray(path['actions'], dtype=np.float64)
@@ -618,8 +659,13 @@ def plot_rollout_combined(outdir, path, idx):
     fig, axes = plt.subplots(6, 1, sharex=True, figsize=(11, 14))
     fig.suptitle(title, fontsize=11)
 
-    t_peak_power = meta['peak_power_time_hour']
-    t_peak_reward = meta['peak_reward_time_hour']
+    night_spans = night_intervals_from_path(path)
+    for lo, hi in night_spans:
+        for ax in axes:
+            ax.axvspan(lo, hi, color='#e0e0e0', alpha=0.45, zorder=0)
+
+    t_peak_power = meta.get('peak_power_time_hour', np.nan)
+    t_peak_reward = meta.get('peak_reward_time_hour', np.nan)
 
     axes[0].plot(x, power, color='#1f77b4', linewidth=1.5, label='power')
     if np.isfinite(t_peak_power):
@@ -627,6 +673,10 @@ def plot_rollout_combined(outdir, path, idx):
                         label='peak power')
     axes[0].set_ylabel('Power (W)')
     axes[0].legend(loc='upper left', fontsize=8)
+    if night_spans:
+        axes[0].text(
+            0.01, 0.95, 'gray = night (solar alt ≤ 0°)',
+            transform=axes[0].transAxes, fontsize=7, va='top')
 
     axes[1].plot(x, cumulative_energy, color='#9467bd', linewidth=1.5)
     axes[1].set_ylabel('Cum. energy (kWh)')
@@ -693,6 +743,7 @@ def main(args):
         args.test_end_date,
         args.fixed_eval_dates,
         eval_weather_source=args.eval_weather_source,
+        eval_protocol=args.eval_protocol,
     )
     eval_warnings = validate_eval_coverage(
         args.num_rollouts, eval_env_params, min_rollouts=args.min_rollouts)
@@ -704,6 +755,15 @@ def main(args):
         policy_weights,
         checkpoint_picklable=checkpoint_picklable,
     )
+    dim_info = validate_policy_environment_observation_dims(
+        policy,
+        eval_environment,
+        policy_weights=policy_weights,
+        eval_env_params=eval_env_params,
+    )
+    print('[evaluate_agent] Verified policy_input_dim=%d env_observation_dim=%d '
+          'observation_mode=%r' % (
+              dim_info['policy_dim'], dim_info['env_dim'], dim_info['env_mode']))
 
     path_length = args.max_path_length
     if path_length == 1000:
@@ -737,6 +797,7 @@ def main(args):
                     args.test_end_date,
                     args.fixed_eval_dates,
                     eval_weather_source=args.eval_weather_source,
+                    eval_protocol=args.eval_protocol,
                 )
                 path = make_baseline_rollout(
                     baseline_env, name, path_length, seed=idx)
@@ -764,9 +825,15 @@ def main(args):
 
     reward_time_report = write_reward_time_report(
         args.outdir, paths, paths_by_name=paths_by_name if args.compare_baselines else None)
+    scenario_report = write_eval_scenario_confirmation(
+        args.outdir, eval_env_params, paths_by_name, path_length)
 
     reward_plot = plot_rewards(args.outdir, paths)
-    plot_files = [reward_plot, plot_reward_time_windows(args.outdir, paths)]
+    plot_files = [
+        reward_plot,
+        plot_solar_altitude_windows(args.outdir, paths),
+        plot_reward_time_windows(args.outdir, paths),
+    ]
     if not args.no_report_by_season and len(paths) > 1:
         plot_files.append(plot_by_season(args.outdir, paths))
     if args.compare_baselines and len(paths_by_name) > 1:
@@ -781,6 +848,7 @@ def main(args):
     print('  %s' % summary_path)
     print('  %s' % json_path)
     print('  %s' % reward_time_report)
+    print('  %s' % scenario_report)
     for p in plot_files:
         print('  %s' % p)
     print('  %s' % rollouts_dir)
