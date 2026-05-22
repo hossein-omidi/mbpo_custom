@@ -3,6 +3,13 @@
 
 import argparse
 import os
+import sys
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+from pv_trial_paths import resolve_trial_dir, format_trial_hint, is_placeholder_trial
 
 import matplotlib
 matplotlib.use('Agg')
@@ -23,7 +30,14 @@ def parse_args():
     parser.add_argument(
         'progress_csv',
         type=str,
-        help='Path to progress.csv (trial directory or file path).')
+        nargs='?',
+        default='latest',
+        help='Trial dir (seed:...), progress.csv path, or "latest" (default).')
+    parser.add_argument(
+        '--ray-root',
+        type=str,
+        default=None,
+        help='PV tracking log root (default ~/ray_mbpo/PVTracking/pv_tracking).')
     parser.add_argument(
         '--outdir',
         type=str,
@@ -37,14 +51,19 @@ def parse_args():
     return parser.parse_args()
 
 
-def resolve_progress_path(path):
+def resolve_progress_path(path, ray_root=None):
+    if path in (None, '', 'latest') or is_placeholder_trial(path):
+        trial = resolve_trial_dir('latest', root=ray_root)
+        print('[plot_training_progress] Using latest trial: %s' % trial)
+        path = trial
     path = path.rstrip('/')
     if os.path.isfile(path):
         return path
     candidate = os.path.join(path, 'progress.csv')
     if os.path.isfile(candidate):
         return candidate
-    raise FileNotFoundError('progress.csv not found at: %s' % path)
+    raise FileNotFoundError(
+        'progress.csv not found at: %s\n%s' % (path, format_trial_hint(ray_root)))
 
 
 def plot_metric(df, metric, outdir):
@@ -72,7 +91,7 @@ def plot_metric(df, metric, outdir):
 
 def main():
     args = parse_args()
-    progress_path = resolve_progress_path(args.progress_csv)
+    progress_path = resolve_progress_path(args.progress_csv, ray_root=args.ray_root)
     os.makedirs(args.outdir, exist_ok=True)
 
     df = pd.read_csv(progress_path)

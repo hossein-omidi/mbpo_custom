@@ -17,6 +17,8 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
+from pv_trial_paths import resolve_trial_dir, format_trial_hint, is_placeholder_trial
+
 import numpy as np
 import tensorflow as tf
 
@@ -121,8 +123,17 @@ def evaluate_checkpoint(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('experiment_root', type=str,
-                        help='Ray trial directory containing checkpoint_* folders')
+    parser.add_argument(
+        'experiment_root',
+        type=str,
+        nargs='?',
+        default='latest',
+        help='Ray trial dir (seed:...), or "latest" (default).')
+    parser.add_argument(
+        '--ray-root',
+        type=str,
+        default=None,
+        help='PV tracking log root (default ~/ray_mbpo/PVTracking/pv_tracking).')
     parser.add_argument('--variant-file', type=str, default='params.json')
     parser.add_argument('--num-rollouts', '-n', type=int, default=4)
     parser.add_argument('--max-path-length', type=int, default=63)
@@ -138,7 +149,16 @@ def main():
                         help='Evaluate at most N checkpoints (newest first)')
     args = parser.parse_args()
 
-    root = os.path.expanduser(args.experiment_root)
+    try:
+        root = resolve_trial_dir(args.experiment_root, root=args.ray_root)
+    except FileNotFoundError as exc:
+        print(exc)
+        print(format_trial_hint(args.ray_root))
+        sys.exit(1)
+    if args.experiment_root in ('latest', None, '') or is_placeholder_trial(
+            args.experiment_root):
+        print('[select_best_checkpoint] Using trial: %s' % root)
+
     variant_path = os.path.join(root, args.variant_file)
     with open(variant_path, 'r', encoding='utf-8') as f:
         variant = json.load(f)

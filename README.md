@@ -73,8 +73,10 @@ Use this order every time you train or evaluate. All steps assume **UTC** time (
 **Paths (adjust if yours differ):**
 
 - Repo: `/home/ecer/PVRL/mbpo`
-- Ray trials: `~/ray_mbpo/PVTracking/pv_tracking/seed:<id>/`
+- Ray trials: `~/ray_mbpo/PVTracking/pv_tracking/seed:<number>_<date>_<id>/` (contains `progress.csv`, `params.json`, `checkpoint_*`, `best_eval_checkpoint/`)
 - Eval outputs: `/home/ecer/PVRL/mbpo/evaluation/<run_name>/`
+
+Do not use the literal name `YOUR_SEED_DIR` — set `TRIAL` to a real `seed:...` folder from `ls -lt ~/ray_mbpo/PVTracking/pv_tracking/`.
 
 ---
 
@@ -157,22 +159,33 @@ If `tz` is not `UTC` or `periods` ≠ 64, fix `examples/config/pv_tracking/0.py`
 
 ### Find the trial directory
 
+Ray writes each run under `~/ray_mbpo/PVTracking/pv_tracking/seed:<number>_<timestamp><id>/` (not `YOUR_SEED_DIR` — that was only a README placeholder).
+
 ```bash
-# List recent seeds
+# List recent seeds (newest first)
 ls -lt ~/ray_mbpo/PVTracking/pv_tracking/ | head
 
-# Set this to your run (copy from ls output)
-export TRIAL=~/ray_mbpo/PVTracking/pv_tracking/seed:2072_2026-05-21_11-44-422tdwe2ed
+# Option A — latest trial automatically (recommended)
+export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
+export TRIAL="${TRIAL%/}"   # strip trailing slash
 
+# Option B — pick one run explicitly (copy name from ls)
+# export TRIAL=~/ray_mbpo/PVTracking/pv_tracking/seed:6892_2026-05-22_21-55-029kyh15y1
+
+echo "TRIAL=$TRIAL"
 ls -la "$TRIAL"
-ls "$TRIAL"/checkpoint_* "$TRIAL"/best_eval_checkpoint 2>/dev/null
+ls "$TRIAL"/checkpoint_* "$TRIAL"/best_eval_checkpoint 2>/dev/null | head
+test -f "$TRIAL/progress.csv" && test -f "$TRIAL/params.json" && echo "OK: trial files found"
 ```
 
 ### Monitor training metrics
 
+Scripts accept `latest` if you skip `export TRIAL`:
+
 ```bash
 # Training curves (return, Q-loss, etc.)
-python scripts/plot_training_progress.py "$TRIAL"
+python scripts/plot_training_progress.py latest
+# or: python scripts/plot_training_progress.py "$TRIAL"
 
 # Raw log (last lines)
 tail -30 "$TRIAL/progress.csv"
@@ -188,12 +201,11 @@ tail -30 "$TRIAL/progress.csv"
 
 **Training metric ≠ best energy on hold-out days.** After training, confirm with **total_energy_kwh** vs baselines (Step 3).
 
-Rank checkpoints on fixed December dates:
-
 ```bash
-export TRIAL=~/ray_mbpo/PVTracking/pv_tracking/seed:YOUR_SEED_DIR
+export CKPT="$TRIAL/best_eval_checkpoint"
 
-python scripts/select_best_checkpoint.py "$TRIAL" \
+python scripts/select_best_checkpoint.py latest \
+  # or: python scripts/select_best_checkpoint.py "$TRIAL" \
   --deterministic \
   --compare-baselines \
   --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28 \
@@ -202,10 +214,6 @@ python scripts/select_best_checkpoint.py "$TRIAL" \
 ```
 
 Use the path printed as “Recommended for reporting” for Step 3, or `best_eval_checkpoint` if it ranks first.
-
-```bash
-export CKPT="$TRIAL/best_eval_checkpoint"
-```
 
 ---
 
@@ -421,13 +429,15 @@ More detail: [docs/PV_TRACKING_TIME_AND_CHECKPOINTS.md](docs/PV_TRACKING_TIME_AN
 
 ## Command cheat sheet (copy-paste)
 
-Set once per session:
-
 ```bash
 conda activate mbpo
 cd /home/ecer/PVRL/mbpo
-export TRIAL=~/ray_mbpo/PVTracking/pv_tracking/seed:YOUR_SEED_DIR
+
+# Point at your newest Ray trial (required before using $TRIAL / $CKPT)
+export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
+export TRIAL="${TRIAL%/}"
 export CKPT="$TRIAL/best_eval_checkpoint"
+echo "TRIAL=$TRIAL"
 ```
 
 | Goal | Command |
@@ -436,8 +446,8 @@ export CKPT="$TRIAL/best_eval_checkpoint"
 | **UTC + horizon audit** | `python scripts/verify_utc_uniformity.py` |
 | Pre-check time/pvlib | `python scripts/solar_time_sanity.py --date 2020-12-21 --env-rollout` |
 | Train | `mbpo run_local examples.development --config=examples.config.pv_tracking.0 --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1` |
-| Plot training | `python scripts/plot_training_progress.py "$TRIAL"` |
-| Rank checkpoints | `python scripts/select_best_checkpoint.py "$TRIAL" --deterministic --compare-baselines --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28` |
+| Plot training | `python scripts/plot_training_progress.py latest` |
+| Rank checkpoints | `python scripts/select_best_checkpoint.py latest --deterministic --compare-baselines --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28 --num-rollouts 4 --max-path-length 63` |
 | Full eval + baselines | `python scripts/evaluate_agent.py "$CKPT" --outdir evaluation/pv_final_utc --eval-protocol inherit --max-path-length 63 --num-rollouts 10 --deterministic --compare-baselines --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28` |
 | Baselines only | `python scripts/compare_baselines.py "$CKPT" --outdir evaluation/pv_baselines --eval-protocol inherit --max-path-length 63 --deterministic --fixed-eval-dates 2020-12-21` |
 
@@ -465,7 +475,8 @@ Evaluation scripts batch observations correctly via `prepare_policy_observation_
 | `scripts/evaluate_agent.py` | **Post-training:** rollouts, baselines, CSV, plots, reports |
 | `scripts/compare_baselines.py` | **Post-training:** baselines only (no policy forward pass) |
 | `scripts/select_best_checkpoint.py` | **Post-training:** rank checkpoints by hold-out energy |
-| `scripts/plot_training_progress.py` | **During training:** curves from `progress.csv` |
+| `scripts/pv_trial_paths.py` | Helper: resolve `seed:...` trial dirs (used by other scripts) |
+| `scripts/plot_training_progress.py` | **During training:** curves from `progress.csv` (`latest` or trial path) |
 | `scripts/plot_rollout_trajectory.py` | Re-plot one `rollout_*.csv` |
 | `scripts/plot_ray_results.py` | Ray trial resource/status logs |
 | `scripts/evaluate_and_viskit.py` | Evaluation + optional viskit |
