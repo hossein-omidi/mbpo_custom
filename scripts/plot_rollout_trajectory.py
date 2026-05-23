@@ -11,8 +11,8 @@ produces a single combined plot containing:
 
 Example:
     python scripts/plot_rollout_trajectory.py \
-      --csv evaluation/pv_tracking/rollouts/rollout_1.csv \
-      --outdir evaluation/pv_tracking/rollout_plots
+      --csv evaluation/pv_daylight_utc/rollouts/rollout_1.csv \
+      --outdir evaluation/pv_daylight_utc/rollout_plots
 """
 from __future__ import print_function
 import argparse
@@ -60,7 +60,7 @@ def resolve_csv_path(csv_pattern):
     raise FileNotFoundError(
         'Rollout CSV not found: %s\n'
         'Use a real rollout CSV path or pattern.\n'
-        'Example: evaluation/pv_tracking/rollouts/rollout_1.csv'
+        'Example: evaluation/pv_daylight_utc/rollouts/rollout_1.csv'
         % csv_pattern)
 
 

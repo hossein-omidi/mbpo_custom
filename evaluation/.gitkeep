@@ -1,0 +1,2 @@
+# Canonical post-training outputs live in pv_daylight_utc/ (generated; see README §5.4).
+# Other evaluation/<name>/ directories are ephemeral — remove when no longer needed.
