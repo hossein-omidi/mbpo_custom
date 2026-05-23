@@ -72,7 +72,7 @@ def simulate_policy(args):
         domain = variant.get('environment_params', {}).get(
             'training', {}).get('domain')
         if domain == 'PVTracking':
-            path_length = 63
+            path_length = 39
 
     with policy.set_deterministic(args.deterministic):
         paths = rollouts(args.num_rollouts,

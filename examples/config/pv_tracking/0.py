@@ -10,9 +10,9 @@ params = {
     # Balanced defaults: reasonable wall-clock on CPU while still learning a
     # useful tracking policy. Increase n_epochs (e.g. 200-500) for higher accuracy.
     'kwargs': {
-        'n_epochs': 150,
-        # One PV day = 63 env steps (64 timestamps at 15 min UTC: 06:00 -> 21:45).
-        'epoch_length': 63,
+        'n_epochs': 15,
+        # One PV day = 39 env steps (40 timestamps at 15 min UTC: 13:30 -> 23:15).
+        'epoch_length': 39,
         'train_every_n_steps': 1,
         'n_train_repeat': 10,
         'eval_render_mode': None,
@@ -43,16 +43,16 @@ params = {
         'q_loss_warning_threshold': None,
         'q_loss_stop_threshold': None,
 
-        'n_initial_exploration_steps': 1260,
+        'n_initial_exploration_steps': 390,
     },
     'environment_kwargs': {
         'start_date': '2020-01-01',
         'end_date': '2020-12-31',
         # Project time standard: UTC everywhere (pvlib, env, train, test, plots).
-        # Episode grid 06:00-21:45 UTC, 15-min steps, 63 actions per day.
+        # Daylight UTC grid 13:30-23:15, 15-min steps, 39 actions per day (35N/106W).
         'tz': 'UTC',
-        'start_time': '06:00',
-        'periods': 64,
+        'start_time': '13:30',
+        'periods': 40,
         'freq': '15min',
         'randomize_day': True,
         'randomize_initial_orientation': True,

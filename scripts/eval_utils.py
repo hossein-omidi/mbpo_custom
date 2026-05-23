@@ -20,10 +20,10 @@ try:
     )
 except ImportError:
     _ENV_PV_TIMEZONE = 'UTC'
-    _ENV_START_TIME = '06:00'
-    _ENV_PERIODS = 64
+    _ENV_START_TIME = '13:30'
+    _ENV_PERIODS = 40
     _ENV_FREQ = '15min'
-    _ENV_EPISODE_STEPS = 63
+    _ENV_EPISODE_STEPS = 39
 
 
 # Matches mbpo/env/pv_tracking.py (legacy 15-D layout).
@@ -330,13 +330,13 @@ def decode_pv_observation(obs):
     return decoded
 
 
-# Clock-hour bins in UTC (info['clock_hour_utc'] / info['time'] when tz=UTC).
-# At 35N/106W winter, UTC "midday" (11-14h) can be night; use SOLAR_ALTITUDE_WINDOWS.
+# Clock-hour bins in UTC on the daylight episode grid (13:30–23:15 UTC).
+# Use SOLAR_ALTITUDE_WINDOWS for sun-up / peak-sun physics.
 TIME_WINDOWS = OrderedDict([
-    ('morning', (6.0, 11.0)),
-    ('midday', (11.0, 14.0)),
-    ('afternoon', (14.0, 17.0)),
-    ('evening', (17.0, 22.0)),
+    ('morning', (13.5, 16.5)),
+    ('midday', (16.5, 19.0)),
+    ('afternoon', (19.0, 21.5)),
+    ('evening', (21.5, 23.5)),
 ])
 
 # Physics-based bins (degrees solar altitude); independent of clock labels.
@@ -386,7 +386,8 @@ def apply_eval_protocol(kwargs, eval_protocol):
     if eval_protocol == EVAL_PROTOCOL_LOCAL_DAY:
         raise ValueError(
             'eval_protocol=local_day is disabled. This project uses tz=UTC only '
-            '(06:00-21:45 UTC, 63 steps).')
+            '(%s-%s UTC, %d steps).' % (
+                PV_EPISODE_START_TIME, _grid_end_clock_label(), PV_EPISODE_MAX_STEPS))
     if eval_protocol not in (
             None, '', EVAL_PROTOCOL_INHERIT, EVAL_PROTOCOL_LEGACY_UTC, EVAL_PROTOCOL_UTC):
         raise ValueError(
@@ -400,10 +401,19 @@ def apply_eval_protocol(kwargs, eval_protocol):
     return merged, label
 
 
-def _grid_end_clock_label():
-    """Last timestamp clock hour for default grid (64 x 15min from 06:00 UTC)."""
-    end_minutes = (PV_EPISODE_PERIODS - 1) * 15
-    end_hour = 6.0 + end_minutes / 60.0
+def _episode_start_hour(start_time=None):
+    """Fractional UTC hour from 'HH:MM' (no timezone conversion)."""
+    st = start_time or PV_EPISODE_START_TIME
+    hour, minute = map(int, str(st).split(':'))
+    return hour + minute / 60.0
+
+
+def _grid_end_clock_label(start_time=None, periods=None):
+    """Last timestamp wall clock for the configured UTC episode grid."""
+    start_h = _episode_start_hour(start_time)
+    n_periods = int(periods or PV_EPISODE_PERIODS)
+    end_hour = start_h + (n_periods - 1) * 0.25
+    end_hour = end_hour % 24.0
     return '%02d:%02d' % (int(end_hour), int(round((end_hour % 1) * 60)))
 
 
@@ -958,8 +968,8 @@ def write_eval_scenario_confirmation(outdir, eval_env_params, paths_by_name, max
             '\nConfigured grid vs solar day (pvlib, lat=%.1f lon=%.1f):\n' % (
                 PV_DEFAULT_LATITUDE, PV_DEFAULT_LONGITUDE))
         f.write(
-            '  Fixed clock window %s–%s UTC is NOT local sunrise–sunset. '
-            'In winter many early steps are night (power≈0, solar_alt<0).\n' % (
+            '  Daylight UTC grid %s–%s: tuned for productive sun at 35N/106W. '
+            'Expect 0–2 pre-sunrise steps (power≈0, solar_alt<0) at the grid start in winter.\n' % (
                 kwargs.get('start_time', PV_EPISODE_START_TIME),
                 _grid_end_clock_label(),
             ))
@@ -990,9 +1000,8 @@ def write_reward_time_report(outdir, paths, paths_by_name=None):
             'Episode grid %s–%s UTC, %d steps.\n' % (
                 PV_EPISODE_START_TIME, _grid_end_clock_label(), PV_EPISODE_MAX_STEPS))
         f.write(
-            'Clock windows (morning/midday/...) are UTC labels. At 35N/106W in winter, '
-            'UTC "evening" (17-22h) often aligns with solar noon; UTC "midday" can be '
-            'night — use solar-altitude windows for physics.\n\n')
+            'Clock windows (morning/midday/...) are UTC bins on the daylight episode grid. '
+            'Use solar-altitude windows for sun-up / peak-sun physics.\n\n')
         f.write(
             'Reward per step = energy_kwh - movement_cost. '
             'Peak step reward often occurs when movement is low, not when power is highest.\n\n')
@@ -1057,23 +1066,23 @@ def write_reward_time_report(outdir, paths, paths_by_name=None):
                         row['peak_reward_time_mean'],
                         row['movement_cost_mean']))
 
-        f.write('\nPeak-power classification (December holdout, UTC grid):\n')
+        f.write('\nPeak-power notes (UTC daylight grid at 35N/106W):\n')
         f.write(
-            '  A) Peak near 17-20h UTC in December at 35N/106W is often correct solar noon.\n')
+            '  A) GHI peak is often near 17-20h UTC in December (solar noon at this longitude).\n')
         f.write(
-            '  B) Zero power 06:00-~14h UTC in December is night at the site, not a plot bug.\n')
+            '  B) Gray bands on plots = solar altitude ≤ 0°; expect 0-2 pre-sunrise steps at grid start in winter.\n')
         f.write(
-            '  C) Do not read UTC clock labels as Denver local time without conversion.\n')
+            '  C) All plot/CSV clocks are UTC only (no civil-time conversion).\n')
         f.write(
             '  D) pvlib uses the same DatetimeIndex tz as the env for solar position and power.\n')
         f.write(
             '  E) Compare total_energy_kwh vs baselines on solar-altitude windows.\n')
         f.write('\nInterpretation:\n')
         f.write(
-            '  - Plot x-axis is UTC clock hour 6–22, not hours since midnight local.\n')
+            '  - Plot x-axis is UTC clock hour on the episode grid (%s–%s).\n' % (
+                PV_EPISODE_START_TIME, _grid_end_clock_label()))
         f.write(
-            '  - UTC evening_clock high / midday_clock ≈ 0 in winter reflects geography, '
-            'not misaligned irradiance.\n')
+            '  - Movement with power≈0 at the first steps is pre-sunrise grid margin, not a time bug.\n')
         f.write(
             '  - Compare total_energy_kwh and peak_power_time across methods; '
             'reward alone is not a proxy for tracking quality.\n')

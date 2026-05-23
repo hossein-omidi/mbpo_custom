@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check PVTracking time labels, solar position, and irradiance alignment.
 
-Project standard: tz='UTC', episode grid 06:00-21:45 UTC, 63 steps.
+Project standard: tz='UTC', daylight episode grid 13:30-23:15 UTC, 39 steps.
 info['clock_hour_utc'] is the post-step wall-clock hour on that index.
 Optional Denver columns in output are for human comparison only — not used in training or plots.
 """
@@ -42,7 +42,7 @@ def print_fixed_hours(lat, lon, date, tz):
             h, 90.0 - sp.zenith, sp.zenith, cs.ghi, cs.dni))
 
 
-def analyze_episode_grid(lat, lon, date, tz, start_time='06:00', periods=64, freq='15min'):
+def analyze_episode_grid(lat, lon, date, tz, start_time='13:30', periods=40, freq='15min'):
     loc = Location(lat, lon, tz=tz)
     times = pd.date_range(
         start='{} {}'.format(date, start_time),
@@ -162,7 +162,8 @@ def run_env_rollout(lat, lon, tz, date, weather_source='clearsky'):
     )
     env.reset()
     powers = []
-    for _ in range(63):
+    from mbpo.env.pv_tracking import DEFAULT_EPISODE_STEPS
+    for _ in range(DEFAULT_EPISODE_STEPS):
         _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
         powers.append((info['time'], info['solar_altitude_deg'], info['ghi_wm2'], info['power']))
     env.close()
@@ -213,15 +214,15 @@ def main():
     print('Peak-power classification guide:')
     print('  A) Physically correct in UTC if solar_alt/GHI peak near 17-20h UTC in December.')
     print('  B) Misleading label if "evening" is read as local time (Denver noon ~11-13h).')
-    print('  C) Episode 06:00-21:45 UTC is a design limit for local-day wording.')
+    print('  C) Episode grid is fixed UTC wall clock (see env DEFAULT_START_TIME / periods).')
     print('  D) Bug only if step table shows irradiance/power shifted vs solar_alt on same step.')
     print('  E) Policy quality is independent — compare eval energy vs baselines.')
     if args.tz.upper() == 'UTC' and args.lon < -90:
         print('With tz=UTC at {:.0f}N {:.0f}E, clock hour is UTC, not local solar time.'.format(
             args.lat, args.lon))
         print('Peak GHI often appears near 17-20h UTC (~10-13h US Mountain) in December.')
-        print('eval_utils "midday" window (11-14h clock) can be nighttime → power ≈ 0.')
-        print('This is a timezone/reporting interpretation issue, not wrong pvlib physics.')
+        print('Clock windows in eval_utils follow the daylight UTC grid (see TIME_WINDOWS).')
+        print('No civil-time conversion is used in train, eval, or plots.')
 
 
 if __name__ == '__main__':

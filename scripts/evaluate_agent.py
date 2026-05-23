@@ -163,7 +163,7 @@ def parse_args():
         type=str,
         default=EVAL_PROTOCOL_INHERIT,
         choices=(EVAL_PROTOCOL_INHERIT, EVAL_PROTOCOL_UTC, EVAL_PROTOCOL_LEGACY_UTC),
-        help='UTC episode grid 06:00-21:45 (inherit/utc/legacy_utc are equivalent).')
+        help='UTC daylight episode grid (inherit/utc/legacy_utc are equivalent).')
     return parser.parse_args()
 
 
@@ -365,7 +365,8 @@ def default_max_path_length(variant, cli_default):
     try:
         domain = variant['environment_params']['training']['domain']
         if domain == 'PVTracking':
-            return 63
+            from eval_utils import PV_EPISODE_MAX_STEPS
+            return PV_EPISODE_MAX_STEPS
     except (KeyError, TypeError):
         pass
     sampler_kwargs = variant.get('sampler_params', {}).get('kwargs', {})

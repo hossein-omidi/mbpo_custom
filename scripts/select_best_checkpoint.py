@@ -136,7 +136,7 @@ def main():
         help='PV tracking log root (default ~/ray_mbpo/PVTracking/pv_tracking).')
     parser.add_argument('--variant-file', type=str, default='params.json')
     parser.add_argument('--num-rollouts', '-n', type=int, default=4)
-    parser.add_argument('--max-path-length', type=int, default=63)
+    parser.add_argument('--max-path-length', type=int, default=39)
     parser.add_argument('--deterministic', action='store_true')
     parser.add_argument('--fixed-eval-dates', type=str, default=None)
     parser.add_argument('--test-start-date', type=str, default=None)

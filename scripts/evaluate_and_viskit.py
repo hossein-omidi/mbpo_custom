@@ -37,7 +37,7 @@ def main():
     parser.add_argument('--outdir', default='evaluation/pv_tracking',
                         help='Output directory for evaluation/plots')
     parser.add_argument('--num-rollouts', type=int, default=10)
-    parser.add_argument('--max-path-length', type=int, default=63)
+    parser.add_argument('--max-path-length', type=int, default=39)
     parser.add_argument('--deterministic', action='store_true')
     parser.add_argument('--port', type=int, default=6008,
                         help='Port to run viskit on')

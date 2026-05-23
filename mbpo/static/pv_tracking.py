@@ -24,9 +24,14 @@ DEFAULT_LONGITUDE = -106.0
 DEFAULT_TZ = 'UTC'
 DEFAULT_REFERENCE_DATE = '2020-06-21'
 
-# Default episode timing: 06:00 start, 64 x 15min timestamps, 63 actions.
-DEFAULT_START_HOUR = 6.0
-DEFAULT_NUM_ACTIONS = 63
+# Default episode timing (must match mbpo/env/pv_tracking.py).
+from mbpo.env.pv_tracking import (
+    DEFAULT_START_TIME,
+    DEFAULT_START_HOUR,
+    DEFAULT_EPISODE_STEPS,
+)
+
+DEFAULT_NUM_ACTIONS = DEFAULT_EPISODE_STEPS
 DEFAULT_STEP_HOURS = 0.25
 # Allow half a control step (7.5 min) below the computed episode end hour.
 HORIZON_TIME_TOLERANCE_HOURS = DEFAULT_STEP_HOURS / 2.0
@@ -106,7 +111,7 @@ class StaticFns:
         """Estimate wall-clock hour from solar zenith/azimuth (physical obs only).
 
         Used for MBPO horizon checks when clock time is not in the observation.
-        Matches the fixed daily schedule (06:00 start, 15 min steps) by searching
+        Matches the fixed daily schedule (UTC start_time, 15 min steps) by searching
         the episode hour grid on a reference date at the env's lat/lon.
         """
         obs = np.asarray(obs, dtype=np.float64)

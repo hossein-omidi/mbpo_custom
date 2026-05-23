@@ -97,7 +97,7 @@ def main():
     parser.add_argument('checkpoint', type=str, help='Path to checkpoint directory or glob pattern')
     parser.add_argument('--outdir', type=str, default='evaluation', help='Directory to save summary files')
     parser.add_argument('--num-rollouts', '-n', type=int, default=10, help='Number of rollouts per method')
-    parser.add_argument('--max-path-length', '-l', type=int, default=63, help='Rollout horizon')
+    parser.add_argument('--max-path-length', '-l', type=int, default=39, help='Rollout horizon')
     parser.add_argument('--variant-file', type=str, default='params.json', help='Variant JSON in experiment root')
     parser.add_argument('--deterministic', action='store_true', help='Run the policy deterministically')
     parser.add_argument('--test-start-date', type=str, default=None, help='Hold-out start date (YYYY-MM-DD)')
@@ -116,7 +116,7 @@ def main():
         type=str,
         default=EVAL_PROTOCOL_INHERIT,
         choices=(EVAL_PROTOCOL_INHERIT, EVAL_PROTOCOL_UTC, EVAL_PROTOCOL_LEGACY_UTC),
-        help='UTC episode grid 06:00-21:45 (inherit/utc/legacy_utc are equivalent).')
+        help='UTC daylight episode grid (inherit/utc/legacy_utc are equivalent).')
     args = parser.parse_args()
 
     checkpoint_dir = resolve_checkpoint_path(args.checkpoint)
