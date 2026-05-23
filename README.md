@@ -125,22 +125,24 @@ cd mbpo   # repository root
 
 ### 5.1 Health checks (dry runs)
 
-Run **before** a long training job. None of these modify the codebase.
+Run **before** a long training job. None of these modify the codebase. Full script reference: [§7 Scripts directory](#7-scripts-directory).
+
+**Minimum (run every time):**
 
 | Check | Command | Pass criterion |
 |-------|---------|----------------|
+| UTC + horizon audit | `python scripts/verify_utc_uniformity.py` | `ALL CHECKS PASSED`; grid **13:30**, **40** periods, **39** steps |
 | Env smoke test | `python scripts/check_pv_env.py --observation-mode physical` | Reset/step OK; obs dim **11** |
-| Rollout / obs scaling | `python scripts/validate_pv_rollouts.py` | Schedule matches config |
-| UTC + horizon audit | `python scripts/verify_utc_uniformity.py` | Prints `ALL CHECKS PASSED`; grid **13:30**, **40** periods, **39** steps |
-| pvlib vs grid | `python scripts/solar_time_sanity.py --date 2020-12-21 --env-rollout` | Peak power at post-step UTC hour with positive `solar_altitude_deg` |
-| Full stack smoke | `python scripts/audit_pv_workflow.py` | Physical obs + fake env OK |
-| Training wiring (no learning) | `mbpo run_example_dry examples.development --config=examples.config.pv_tracking.0 --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1` | Startup log shows `tz='UTC' start_time='13:30' periods=40 (39 steps)` |
+| Training wiring (no learning) | `mbpo run_example_dry examples.development --config=examples.config.pv_tracking.0 --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1` | Log shows `start_time='13:30' periods=40 (39 steps)` |
 
-Optional pvlib table for one date:
+**Recommended when changing config or debugging pvlib:**
 
-```bash
-python scripts/solar_time_sanity.py --date 2020-12-21
-```
+| Check | Command |
+|-------|---------|
+| MBPO schedule + env rollout | `python scripts/validate_pv_rollouts.py` |
+| pvlib vs UTC grid | `python scripts/solar_time_sanity.py --date 2020-12-21 --env-rollout` |
+
+**Optional (redundant with the two above):** `python scripts/audit_pv_workflow.py`
 
 ---
 
@@ -352,24 +354,260 @@ Each `evaluate_agent.py` run creates a directory (e.g. `evaluation/pv_daylight_u
 
 ---
 
-## 7. Scripts reference
+## 7. Scripts directory
 
-| Script | Phase | Purpose |
-|--------|-------|---------|
-| `check_pv_env.py` | A | Env shapes, optional `--log-obs`, `--validate-weather` |
-| `validate_pv_rollouts.py` | A | MBPO rollout schedule vs config |
-| `verify_utc_uniformity.py` | A, D | End-to-end UTC grid + plot axis audit |
-| `solar_time_sanity.py` | A, D | pvlib sunrise/GHI vs episode grid |
-| `audit_pv_workflow.py` | A | Physical obs + dynamics smoke test |
-| `evaluate_agent.py` | D | Full evaluation pipeline |
-| `compare_baselines.py` | D | Baselines only |
-| `select_best_checkpoint.py` | C | Rank checkpoints by hold-out energy |
-| `plot_training_progress.py` | B, C | Curves from `progress.csv` |
-| `plot_rollout_trajectory.py` | D | Re-plot one CSV (simple layout) |
-| `pv_trial_paths.py` | C | Resolve `latest` trial path (library) |
-| `export_policy_weights.py` | — | Legacy checkpoint weight export |
-| `plot_ray_results.py` | B | Ray resource logs |
-| `evaluate_and_viskit.py` | D | Evaluation + optional viskit |
+All paths below are from the **repository root** (`cd mbpo`). Scripts are grouped by role in the PV workflow.
+
+### 7.1 Summary table
+
+| File | Role | Verdict |
+|------|------|---------|
+| `eval_utils.py` | Shared library (env build, CSV, plots, reports) | **Keep** — imported by eval scripts; not run directly |
+| `pv_trial_paths.py` | Resolve `latest` Ray trial directory | **Keep** — library for plotting / checkpoint tools |
+| `verify_utc_uniformity.py` | Pre-flight + post-change audit | **Essential** |
+| `check_pv_env.py` | Env smoke test (obs, weather) | **Essential** |
+| `evaluate_agent.py` | Full post-training eval + plots + CSV | **Essential** |
+| `evaluate_agent_advanced.py` | Aligned learned vs baseline, mean±std bands, dashboard PDF | **Optional** — use after canonical `evaluate_agent.py` when comparing dynamics on one figure |
+| `plot_training_progress.py` | Training curves from `progress.csv` | **Essential** |
+| `select_best_checkpoint.py` | Rank checkpoints on hold-out energy | **Recommended** |
+| `validate_pv_rollouts.py` | MBPO rollout schedule + env validation | **Recommended** |
+| `solar_time_sanity.py` | pvlib / UTC grid diagnostics | **Recommended** |
+| `compare_baselines.py` | Baselines only (no policy network) | **Optional** — subset of `evaluate_agent.py` |
+| `plot_rollout_trajectory.py` | Re-plot one rollout CSV (4 panels) | **Optional** — `evaluate_agent.py` already writes richer 6-panel plots |
+| `export_policy_weights.py` | Extract `policy_weights.pkl` from old `checkpoint.pkl` | **Optional** — only if a checkpoint lacks `policy_weights.pkl` |
+| `audit_pv_workflow.py` | Combined physical-obs + FakeEnv smoke test | **Optional** — overlaps `check_pv_env` + `verify_utc_uniformity` |
+| `evaluate_and_viskit.py` | Shell wrapper: eval + training plots + viskit | **Can remove** — duplicates README commands; prefer direct calls |
+| `plot_ray_results.py` | Parse pasted Ray **status** text into PNG | **Can remove** — not part of PV train/eval; use `plot_training_progress.py` instead |
+
+**Safe to delete from the repo (no impact on train/eval):** `evaluate_and_viskit.py`, `plot_ray_results.py`.  
+**Keep but rarely run:** `export_policy_weights.py`, `audit_pv_workflow.py`, `plot_rollout_trajectory.py`.
+
+---
+
+### 7.2 Libraries (do not run directly)
+
+#### `eval_utils.py`
+
+- **Purpose:** Single implementation for evaluation env construction (`apply_pv_utc_schedule`), rollout CSV columns, aggregate plots, `eval_scenario_confirmation.txt`, `reward_time_analysis.txt`, UTC time windows.
+- **Used by:** `evaluate_agent.py`, `compare_baselines.py`, `select_best_checkpoint.py`, `verify_utc_uniformity.py`, `solar_time_sanity.py`.
+- **Do not delete.**
+
+#### `pv_trial_paths.py`
+
+- **Purpose:** Resolve `latest` or a path to a Ray folder `seed:…/` (must contain `params.json`).
+- **Used by:** `plot_training_progress.py`, `select_best_checkpoint.py`.
+- **Do not delete.**
+
+---
+
+### 7.3 Essential scripts
+
+#### `verify_utc_uniformity.py` — UTC grid and horizon audit
+
+Confirms `mbpo/env/pv_tracking.py`, config, `examples/development/base.py`, and eval scripts all agree on **13:30–23:15 UTC**, **39** steps, and plot axis = `clock_hour_utc`.
+
+```bash
+python scripts/verify_utc_uniformity.py
+python scripts/verify_utc_uniformity.py --config examples/config/pv_tracking/0.py
+```
+
+Run after any change to `start_time`, `periods`, `epoch_length`, or `MAX_PATH_LENGTH_PER_DOMAIN`.
+
+#### `check_pv_env.py` — environment smoke test
+
+One reset/step, observation size, optional weather-table check.
+
+```bash
+python scripts/check_pv_env.py --observation-mode physical
+python scripts/check_pv_env.py --observation-mode physical --validate-weather
+python scripts/check_pv_env.py --observation-mode physical --log-obs
+```
+
+#### `evaluate_agent.py` — post-training evaluation (main)
+
+Loads checkpoint, runs rollouts, writes `evaluation/<outdir>/` (summaries, CSV, PNG, optional baselines). This is the **primary** post-processing entry point.
+
+```bash
+export CKPT="$TRIAL/best_eval_checkpoint"
+
+python scripts/evaluate_agent.py "$CKPT" \
+  --outdir evaluation/pv_daylight_utc \
+  --eval-protocol inherit \
+  --max-path-length 39 \
+  --num-rollouts 10 \
+  --deterministic \
+  --compare-baselines \
+  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28
+```
+
+Important options:
+
+| Option | Purpose |
+|--------|---------|
+| `--outdir` | Output folder (use `evaluation/pv_daylight_utc` for canonical run) |
+| `--max-path-length 39` | Must match `periods - 1` |
+| `--eval-protocol inherit` | Same UTC daylight grid as training |
+| `--deterministic` | Greedy policy for reporting |
+| `--compare-baselines` | Also run `fixed_no_motion` and `sun_tracking` |
+| `--fixed-eval-dates` | Comma-separated `YYYY-MM-DD` (fair comparison) |
+| `--test-start-date` / `--test-end-date` | Random hold-out days in a range |
+| `--eval-weather-source clearsky` | Override weather for eval only |
+| `--no-report-by-season` | Skip season breakdown plots |
+
+#### `evaluate_agent_advanced.py` — aligned baselines + ensemble bands + dashboard
+
+Same real-env + policy stack as `evaluate_agent.py` (no MBPO dynamics model). Use when you need **learned vs baseline on one time series**, **mean ± std over replicates** vs UTC hour, or a **single `dashboard.pdf`** instead of many per-rollout PNGs.
+
+```bash
+python scripts/evaluate_agent_advanced.py "$CKPT" \
+  --outdir evaluation/pv_daylight_utc_advanced \
+  --eval-protocol inherit \
+  --max-path-length 39 \
+  --fixed-eval-dates 2020-12-07,2020-12-21 \
+  --replicates-per-date 8 \
+  --policy-mode deterministic \
+  --compare-weather-sources
+```
+
+| Option | Purpose |
+|--------|---------|
+| `--fixed-eval-dates` | **Required** — one aligned + ensemble figure set per date |
+| `--replicates-per-date` | Rollouts per date for mean ± std (weather varies via env seed) |
+| `--policy-mode` | `deterministic` (default) or `stochastic` (sampled SAC actions) |
+| `--eval-weather-source` | `random` (default) or `clearsky` for main + ensemble runs |
+| `--compare-weather-sources` | Overlay random vs clearsky learned policy (same seed/date) |
+| `--vary-init-orientation` | Randomize initial panel pose across replicates |
+| `--no-dashboard` | Skip multi-page PDF (keep PNGs under `aligned/`, `ensemble/`) |
+
+Outputs: `aligned/aligned_<date>.png`, `ensemble/ensemble_<date>_power.png`, optional `weather_compare/`, `dashboard.pdf`, plus CSVs and `eval_scenario_confirmation.txt` via `eval_utils.py`.
+
+#### `plot_training_progress.py` — training monitor
+
+Plots metrics from Ray `progress.csv` (not from `evaluation/`).
+
+```bash
+python scripts/plot_training_progress.py latest
+python scripts/plot_training_progress.py "$TRIAL" --outdir "$TRIAL/training_plots"
+```
+
+Accepts trial dir, `progress.csv` path, or `latest`.
+
+---
+
+### 7.4 Recommended scripts
+
+#### `select_best_checkpoint.py` — checkpoint ranking
+
+Compares `checkpoint_*` and `best_eval_checkpoint/` on hold-out **energy** (not training return alone).
+
+```bash
+python scripts/select_best_checkpoint.py latest \
+  --deterministic \
+  --compare-baselines \
+  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28 \
+  --num-rollouts 4 \
+  --max-path-length 39
+```
+
+#### `validate_pv_rollouts.py` — MBPO + env deep check
+
+Prints imagined rollout length schedule from config, episode timing, observation scaling, and short random-action rollouts.
+
+```bash
+python scripts/validate_pv_rollouts.py
+python scripts/validate_pv_rollouts.py --config examples/config/pv_tracking/0.py
+```
+
+Use when tuning `rollout_schedule`, `max_model_rollout_length`, or observation mode.
+
+#### `solar_time_sanity.py` — pvlib vs episode grid
+
+Tables of solar altitude / GHI on the UTC grid; optional one-day env rollout at zero action.
+
+```bash
+python scripts/solar_time_sanity.py --date 2020-12-21
+python scripts/solar_time_sanity.py --date 2020-12-21 --env-rollout
+```
+
+Use when interpreting peak power times on plots or verifying a new `start_time`.
+
+---
+
+### 7.5 Optional scripts
+
+#### `compare_baselines.py`
+
+Same env and metrics as `evaluate_agent.py`, but **only** baselines (faster if you do not need the learned policy).
+
+```bash
+python scripts/compare_baselines.py "$CKPT" \
+  --outdir evaluation/pv_baselines_only \
+  --eval-protocol inherit \
+  --max-path-length 39 \
+  --num-rollouts 10 \
+  --deterministic \
+  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28
+```
+
+If you already ran `evaluate_agent.py` with `--compare-baselines`, this is **redundant**.
+
+#### `plot_rollout_trajectory.py`
+
+Reads one `rollouts/rollout_N.csv` and writes a **simple** 4-panel figure (power, tilt, azimuth, reward). The main eval script already produces **6-panel** UTC plots with night shading in `rollout_plots/`.
+
+```bash
+python scripts/plot_rollout_trajectory.py \
+  --csv evaluation/pv_daylight_utc/rollouts/rollout_1.csv \
+  --outdir evaluation/pv_daylight_utc/rollout_plots_replot
+```
+
+#### `export_policy_weights.py`
+
+One-time helper: create `policy_weights.pkl` from an older `checkpoint.pkl` that does not already export weights.
+
+```bash
+python scripts/export_policy_weights.py "$TRIAL/checkpoint_51"
+```
+
+Modern training saves `policy_weights.pkl` automatically; skip unless loading a legacy checkpoint fails.
+
+#### `audit_pv_workflow.py`
+
+Quick check: config uses physical 11-D obs, legacy 15-D still registers, FakeEnv tensor shapes. Overlaps `check_pv_env.py` + `verify_utc_uniformity.py`.
+
+```bash
+python scripts/audit_pv_workflow.py
+```
+
+---
+
+### 7.6 Scripts you can remove (not required for workflow)
+
+#### `evaluate_and_viskit.py`
+
+Subprocess wrapper around `evaluate_agent.py` + `plot_training_progress.py` + optional viskit server. Everything it does is already documented in §5 with explicit commands. It also writes `training_plots/` **inside** `evaluation/<outdir>/`, which duplicates curves that belong under the Ray trial directory.
+
+**Replacement:** use §5.2–§5.4 commands directly.
+
+#### `plot_ray_results.py`
+
+Parses **pasted Ray trial status text** (not `progress.csv`) into status/metric PNGs. Unrelated to PV physics or `evaluate_agent.py`. For training curves, use `plot_training_progress.py`.
+
+```bash
+# Only if you have a Ray status dump file:
+python scripts/plot_ray_results.py --input ray_status.txt --outdir /tmp/ray_plots
+```
+
+---
+
+### 7.7 Minimal workflow (scripts only)
+
+```text
+Phase A:  verify_utc_uniformity.py  →  check_pv_env.py
+Phase B:  mbpo run_local …          →  plot_training_progress.py latest
+Phase C:  select_best_checkpoint.py (optional)
+Phase D:  evaluate_agent.py  →  open evaluation/pv_daylight_utc/
+```
 
 ---
 
