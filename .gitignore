@@ -119,7 +119,10 @@ vendor/*
 .mujoco/
 .vscode/
 
-# Ignore evaluation outputs and generated rollout plots
-evaluation/
-*/rollout_plots/
-*/rollouts/
+# --- PV tracking: generated artifacts (not source) ---
+# Ray trials if stored inside the repo (default log_dir is ~/ray_mbpo outside the repo).
+ray_mbpo/
+
+# Post-training eval (scripts/evaluate_agent.py). Canonical local run: evaluation/pv_daylight_utc/
+evaluation/*
+!evaluation/.gitkeep

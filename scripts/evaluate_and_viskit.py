@@ -6,12 +6,12 @@ Usage examples:
   # Evaluate checkpoint and produce plots, do not start server
   python scripts/evaluate_and_viskit.py \
     --ckpt-dir ~/ray_mbpo/PVTracking/pv_tracking/seed:.../checkpoint_0 \
-    --outdir evaluation/pv_tracking --no-server
+    --outdir evaluation/pv_daylight_utc --no-server
 
   # Evaluate then launch viskit on default port 6008
   python scripts/evaluate_and_viskit.py \
     --ckpt-dir ~/ray_mbpo/PVTracking/pv_tracking/seed:.../checkpoint_0 \
-    --outdir evaluation/pv_tracking
+    --outdir evaluation/pv_daylight_utc
 
 This script is intentionally small and delegates work to existing scripts
 in the repository so no large structural changes are required.
@@ -34,7 +34,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpt-dir', required=True,
                         help='Checkpoint directory (checkpoint_N)')
-    parser.add_argument('--outdir', default='evaluation/pv_tracking',
+    parser.add_argument('--outdir', default='evaluation/pv_daylight_utc',
                         help='Output directory for evaluation/plots')
     parser.add_argument('--num-rollouts', type=int, default=10)
     parser.add_argument('--max-path-length', type=int, default=39)
