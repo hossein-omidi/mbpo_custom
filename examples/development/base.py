@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from ray import tune
 import numpy as np
 import pdb
@@ -148,12 +150,32 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
         )
 
     environment_kwargs = getattr(env_params, 'environment_kwargs', None)
+    evaluation_environment_kwargs = getattr(
+        env_params, 'evaluation_environment_kwargs', None)
     training_environment_kwargs = ENVIRONMENT_PARAMS.get(domain, {}).get(task, {})
     if environment_kwargs:
         training_environment_kwargs = deep_update(
             training_environment_kwargs,
             dict(environment_kwargs),
         )
+
+    if evaluation_environment_kwargs:
+        eval_environment_kwargs = deep_update(
+            deepcopy(training_environment_kwargs),
+            dict(evaluation_environment_kwargs),
+        )
+        evaluation_env_block = {
+            'domain': domain,
+            'task': task,
+            'universe': universe,
+            'kwargs': eval_environment_kwargs,
+        }
+    else:
+        evaluation_env_block = tune.sample_from(lambda spec: (
+            spec.get('config', spec)
+            ['environment_params']
+            ['training']
+        ))
 
     variant_spec = {
         'git_sha': get_git_rev(),
@@ -165,11 +187,7 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
                 'universe': universe,
                 'kwargs': training_environment_kwargs,
             },
-            'evaluation': tune.sample_from(lambda spec: (
-                spec.get('config', spec)
-                ['environment_params']
-                ['training']
-            )),
+            'evaluation': evaluation_env_block,
         },
         'policy_params': deep_update(
             POLICY_PARAMS_BASE[policy],

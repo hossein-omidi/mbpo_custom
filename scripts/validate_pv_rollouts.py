@@ -26,7 +26,28 @@ def get_config(config_path):
     spec = importlib.util.spec_from_file_location('pv_tracking_config', config_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return getattr(module, 'params')
+    return getattr(module, 'params'), module
+
+
+def validate_config_consistency(params, module=None):
+    """Assert PV episode horizon matches config (periods - 1 == epoch_length)."""
+    env = params.get('environment_kwargs', {})
+    algo = params.get('kwargs', {})
+    errors = []
+    periods = int(env.get('periods', 40))
+    epoch_length = algo.get('epoch_length')
+    if epoch_length is not None and int(epoch_length) != periods - 1:
+        errors.append(
+            'epoch_length %r != periods-1 (%d)' % (epoch_length, periods - 1))
+    if module is not None and not getattr(module, 'CONFIG_VERSION', None):
+        errors.append('CONFIG_VERSION missing on config module')
+    if errors:
+        raise AssertionError('Config consistency: ' + '; '.join(errors))
+    print('Config consistency: periods=%d epoch_length=%d CONFIG_VERSION=%s' % (
+        periods,
+        int(epoch_length) if epoch_length is not None else periods - 1,
+        getattr(module, 'CONFIG_VERSION', '(n/a)') if module else '(n/a)',
+    ))
 
 
 def print_rollout_schedule(rollout_schedule, epochs=120):
@@ -295,7 +316,8 @@ def main():
         help='Number of random env steps to execute.')
     args = parser.parse_args()
 
-    params = get_config(args.config_path)
+    params, config_module = get_config(args.config_path)
+    validate_config_consistency(params, config_module)
     rollout_schedule = params['kwargs'].get('rollout_schedule', [0, 100, 1, 1])
     real_ratio = params['kwargs'].get('real_ratio', 0.1)
     rollout_batch_size = params['kwargs'].get('rollout_batch_size', 1000)

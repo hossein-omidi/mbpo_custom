@@ -10,6 +10,8 @@ reward         = energy_kwh - movement_cost
 
 `movement_penalty` comes from `environment_kwargs` in `examples/config/pv_tracking/0.py` and is stored in trial `params.json`. Eval builds the env from that variant, so **learned, fixed, and sun_tracking** share the same penalty.
 
+**Stage 1 training** sets `movement_penalty=0.0` so net reward equals gross energy; compare methods on `total_energy_kwh`.
+
 ## Sun tracking baseline
 
 Implemented in `scripts/eval_utils.py` → `make_baseline_rollout()`:

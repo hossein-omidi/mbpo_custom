@@ -219,23 +219,35 @@ python scripts/solar_time_sanity.py --date 2020-12-21 --env-rollout
 ### Step B — Training
 
 **Command:** `mbpo run_local`  
-**Config:** `examples/config/pv_tracking/0.py` (production tracking config, `CONFIG_VERSION = pv_tracking_v2_2026-05-23`).
+**Config:** phased protocol in [docs/TRAINING_PROTOCOL.md](docs/TRAINING_PROTOCOL.md).
+
+| Stage | Config module |
+|-------|----------------|
+| 0 — single-day proof | `examples.config.pv_tracking.stage0_single_day` |
+| 1 — summer clearsky | `examples.config.pv_tracking.0` |
 
 ```bash
+# Stage 0 (stationary, one day)
+mbpo run_local examples.development \
+  --config=examples.config.pv_tracking.stage0_single_day \
+  --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
+
+# Stage 1 (summer i.i.d. days)
 mbpo run_local examples.development \
   --config=examples.config.pv_tracking.0 \
-  --gpus=0 --trial-gpus=0 \
-  --cpus=4 --trial-cpus=2
+  --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
 ```
 
-**What happens each epoch**
+**What happens each epoch (Stage 1)**
 
-1. Sample a random calendar day in `[start_date, end_date]` with `weather_source='random'`.
-2. Panel starts at **30° tilt, 180° azimuth** (`randomize_initial_orientation=False` — matches eval).
-3. Collect **39** real transitions (`epoch_length`).
-4. Train ensemble dynamics; MBPO imagined rollouts (length ≤ 3); SAC updates.
-5. In-env eval episodes; if `evaluation/return-average` improves → update `best_eval_checkpoint/`.
+1. **Independent episode:** `reset()` picks one random summer day in `[start_date, end_date]` (`clearsky`, **not** consecutive calendar rollout).
+2. Panel starts at **30° tilt, 180° azimuth** (`randomize_initial_orientation=False`).
+3. Collect **39** real transitions (`epoch_length` = `periods - 1`).
+4. With `real_ratio=1.0`, SAC trains on real env data (no model batch).
+5. In-training eval uses **fixed summer dates** (`evaluation_environment_kwargs`) for `best_eval_checkpoint/`.
 6. Every 5 epochs → `checkpoint_<epoch>/` and `latest_checkpoint/`.
+
+**Do not** enable full-year random weather until Stage 1 gates pass ([evaluation/README.md](evaluation/README.md)).
 
 **Ray output directory:**
 
@@ -263,9 +275,11 @@ print('obs', e['observation_mode'], 'rand_init', e['randomize_initial_orientatio
 "
 ```
 
-**Expected:** `config_version pv_tracking_v4_beat_sun_2026-05-24`, `n_epochs 300`, `min_alpha 0.2`, `real_ratio 0.95`, `movement_penalty 5e-05`, `obs physical`, `rand_init False`.
+**Expected (stage 1):** `config_version pv_tracking_stage1_clearsky_explore_2026-05-24`, `movement_penalty 0.0`, `weather_source clearsky`, summer dates. See [docs/TRAINING_PROTOCOL.md](docs/TRAINING_PROTOCOL.md).
 
-**Do not** judge the agent from training-time eval alone; always run Phase D on hold-out dates.
+**Gates after eval:** `python scripts/diagnose_tracking.py --eval-dir ... --gate`
+
+**Do not** judge the agent from training-time eval alone; run hold-out eval + `--gate`.
 
 ---
 
@@ -566,7 +580,9 @@ All paths below are from the **repository root** (`cd mbpo`). Scripts are groupe
 | `verify_utc_uniformity.py` | Pre-flight + post-change audit | **Essential** |
 | `verify_training_config.py` | Merged Ray variant vs config file | **Essential** — run before every long train |
 | `check_pv_env.py` | Env smoke test (obs, weather) | **Essential** |
-| `diagnose_tracking.py` | Root-cause report from eval CSVs (action/tilt/energy) | **Essential** after eval |
+| `diagnose_tracking.py` | Root-cause report + `--gate` phase checks ([TRAINING_PROTOCOL.md](docs/TRAINING_PROTOCOL.md)) | **Essential** after eval |
+| `collect_sun_demonstrations.py` | Sun-tracker replay `.npz` for optional BC / analysis | **Optional** (Stage 0/1) |
+| `verify_training_config.py` | Config merge + `epoch_length == periods-1` | **Essential** before train |
 | `evaluate_agent.py` | Full post-training eval + plots + CSV | **Essential** |
 | `evaluate_agent_advanced.py` | Aligned learned vs baseline, mean±std bands, dashboard PDF | **Optional** — use after canonical `evaluate_agent.py` when comparing dynamics on one figure |
 | `plot_training_progress.py` | Training curves from `progress.csv` | **Essential** |
@@ -857,21 +873,22 @@ Phase E:  diagnose_tracking.py     → diagnostics/tracking_diagnosis.txt
 
 | Field | Value | Meaning |
 |-------|-------|---------|
-| `CONFIG_VERSION` | `pv_tracking_v4_beat_sun_2026-05-24` | Logged in `params.json`; verify after train start |
-| `n_epochs` | `300` | Long-run training (v4: beat sun tracker on energy) |
+| `CONFIG_VERSION` | `pv_tracking_stage1_clearsky_explore_2026-05-24` | Stage 1: clearsky summer, zero motion cost |
+| `n_epochs` | `300` | Long-run training |
 | `epoch_length` | `39` | Real env steps per epoch |
 | `n_initial_exploration_steps` | `3900` | ~100 random episode days before policy learning |
-| `min_alpha` | `0.2` | Higher SAC entropy floor (less mean-policy collapse) |
-| `target_entropy` | `-1.0` | More exploration than `auto` (~−2) for 2-D actions |
-| `real_ratio` | `0.95` | 95% real-env SAC batches vs model rollouts |
+| `min_alpha` | `0.35` | Higher SAC entropy floor (less mean-policy collapse) |
+| `target_entropy` | `0.0` | Strong exploration for 2-D actions |
+| `real_ratio` | `1.0` | Real-env SAC batches only (stage 1) |
+| `discount` | `0.99` | More step-local energy credit |
 | `max_model_rollout_length` | `5` | MBPO imagined rollout cap (within one day) |
 | `rollout_schedule` | `[30, 220, 2, 5]` | Ramp model rollout length 2→5 |
-| `movement_penalty` | `0.00005` | Same reward for learned + baselines at eval (fair) |
-| `rollout_schedule` | `[20, 150, 1, 3]` | MBPO imagined rollout length schedule |
+| `movement_penalty` | `0.0` | Reward = energy only (stage 1); same for baselines at eval |
+| `rollout_schedule` | `[30, 220, 2, 5]` | MBPO imagined rollout length schedule |
 | `randomize_initial_orientation` | `False` | Train/eval both start 30°/180° |
 | `observation_mode` | `physical` | 11-D obs (see observation doc) |
-| `weather_source` | `random` | Stochastic clouds for training |
-| `movement_penalty` | `0.0001` | Motion cost weight |
+| `weather_source` | `clearsky` | Stage 1: ideal irradiance |
+| `start_date` / `end_date` | `2020-06-01` / `2020-08-31` | Summer only |
 
 **Legacy ablation:** `examples/config/pv_tracking/1.py` — same hyperparameters, `observation_mode='legacy'` (15-D). Requires retrain; checkpoint dims differ.
 
