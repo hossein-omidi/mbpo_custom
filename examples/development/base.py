@@ -104,9 +104,9 @@ NUM_EPOCHS_PER_DOMAIN = {
     'Ant': int(3e3),
     'Humanoid': int(1e4),
     'Pendulum': 10,
-    # Production PV runs use examples/config/pv_tracking/0.py (250 epochs).
+    # Production PV runs use examples/config/pv_tracking/0.py (see config n_epochs).
     # Keep domain default aligned so partial merges are not stuck at 50 epochs.
-    'PVTracking': 250,
+    'PVTracking': 300,
 }
 
 ALGORITHM_PARAMS_PER_DOMAIN = {
@@ -116,7 +116,7 @@ ALGORITHM_PARAMS_PER_DOMAIN = {
                 'n_epochs': NUM_EPOCHS_PER_DOMAIN.get(
                     domain, DEFAULT_NUM_EPOCHS),
                 'n_initial_exploration_steps': (
-                    2500 if domain == 'PVTracking' else
+                    3900 if domain == 'PVTracking' else
                     MAX_PATH_LENGTH_PER_DOMAIN.get(
                         domain, DEFAULT_MAX_PATH_LENGTH
                     ) * 10),

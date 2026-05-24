@@ -29,6 +29,8 @@ ALGO_KEYS = (
     'target_entropy',
     'real_ratio',
     'rollout_schedule',
+    'max_model_rollout_length',
+    'n_train_repeat',
 )
 ENV_KEYS = (
     'tz',

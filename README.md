@@ -205,7 +205,7 @@ mbpo run_example_dry examples.development \
   --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
 ```
 
-**Pass:** log contains `start_time='13:30' periods=40 (39 steps)`, `observation_mode='physical'`, `n_epochs: 250`, `config_version: pv_tracking_v3_physical_2026-05-24`.
+**Pass:** log contains `start_time='13:30' periods=40 (39 steps)`, `observation_mode='physical'`, `n_epochs: 300`, `config_version: pv_tracking_v4_beat_sun_2026-05-24`.
 
 **Optional (pvlib / MBPO schedule):**
 
@@ -263,7 +263,7 @@ print('obs', e['observation_mode'], 'rand_init', e['randomize_initial_orientatio
 "
 ```
 
-**Expected:** `config_version pv_tracking_v3_physical_2026-05-24`, `n_epochs 250`, `min_alpha 0.15`, `real_ratio 0.9`, `target_entropy auto`, `obs physical`, `rand_init False`.
+**Expected:** `config_version pv_tracking_v4_beat_sun_2026-05-24`, `n_epochs 300`, `min_alpha 0.2`, `real_ratio 0.95`, `movement_penalty 5e-05`, `obs physical`, `rand_init False`.
 
 **Do not** judge the agent from training-time eval alone; always run Phase D on hold-out dates.
 
@@ -857,13 +857,16 @@ Phase E:  diagnose_tracking.py     → diagnostics/tracking_diagnosis.txt
 
 | Field | Value | Meaning |
 |-------|-------|---------|
-| `CONFIG_VERSION` | `pv_tracking_v3_physical_2026-05-24` | Logged in `params.json`; verify after train start |
-| `n_epochs` | `250` | Full long-run training budget |
+| `CONFIG_VERSION` | `pv_tracking_v4_beat_sun_2026-05-24` | Logged in `params.json`; verify after train start |
+| `n_epochs` | `300` | Long-run training (v4: beat sun tracker on energy) |
 | `epoch_length` | `39` | Real env steps per epoch |
-| `n_initial_exploration_steps` | `2500` | ~64 random episodes before policy learning |
-| `min_alpha` | `0.15` | SAC entropy floor (v3: slightly above v2’s 0.12) |
-| `target_entropy` | `'auto'` | SAC sets target from action dim (~−2 for 2-D) |
-| `real_ratio` | `0.9` | 90% real-env SAC batches vs model rollouts |
+| `n_initial_exploration_steps` | `3900` | ~100 random episode days before policy learning |
+| `min_alpha` | `0.2` | Higher SAC entropy floor (less mean-policy collapse) |
+| `target_entropy` | `-1.0` | More exploration than `auto` (~−2) for 2-D actions |
+| `real_ratio` | `0.95` | 95% real-env SAC batches vs model rollouts |
+| `max_model_rollout_length` | `5` | MBPO imagined rollout cap (within one day) |
+| `rollout_schedule` | `[30, 220, 2, 5]` | Ramp model rollout length 2→5 |
+| `movement_penalty` | `0.00005` | Same reward for learned + baselines at eval (fair) |
 | `rollout_schedule` | `[20, 150, 1, 3]` | MBPO imagined rollout length schedule |
 | `randomize_initial_orientation` | `False` | Train/eval both start 30°/180° |
 | `observation_mode` | `physical` | 11-D obs (see observation doc) |
