@@ -9,6 +9,20 @@ This repository trains a **model-based RL agent** to control a **two-axis solar 
 | [docs/PV_TRACKING_TIME_AND_CHECKPOINTS.md](docs/PV_TRACKING_TIME_AND_CHECKPOINTS.md) | UTC daylight grid, checkpoint protocol, eval commands |
 | [docs/PV_TRACKING_OBSERVATION_REVIEW.md](docs/PV_TRACKING_OBSERVATION_REVIEW.md) | Legacy 15-D vs physical 11-D observations |
 
+**Table of contents**
+
+1. [What this project does](#1-what-this-project-does)
+2. [Repository layout](#2-repository-layout)
+3. [Episode MDP](#3-episode-mdp-current-standard)
+4. [Installation](#4-installation)
+5. [Complete step-by-step procedure](#5-complete-step-by-step-procedure)
+6. [Evaluation outputs](#6-evaluation-outputs-essential-vs-optional)
+7. [Scripts directory (reference)](#7-scripts-directory)
+8. [Configuration reference](#8-configuration-reference)
+9. [Evaluation directory policy](#9-evaluation-directory-policy)
+10. [Quick command reference](#10-quick-command-reference)
+11. [Extending to other environments](#11-extending-to-other-environments)
+
 ---
 
 ## 1. What this project does
@@ -103,27 +117,287 @@ MuJoCo is **not** required for PV tracking (only for classic MBPO benchmarks).
 
 ---
 
-## 5. Workflow overview
+## 5. Complete step-by-step procedure
 
-Run phases **in order** for a new experiment.
-
-| Phase | Goal | Section |
-|-------|------|---------|
-| **A** | Confirm env, UTC grid, config wiring | [§5.1 Health checks](#51-health-checks-dry-runs) |
-| **B** | Train MBPO | [§5.2 Training](#52-training) |
-| **C** | Monitor run; pick checkpoint | [§5.3 Checkpoints](#53-checkpoints) |
-| **D** | Hold-out evaluation + reports | [§5.4 Post-training evaluation](#54-post-training-evaluation) |
-
-From the repository root:
+This section is the **main operator guide**: what to run, in what order, what each step produces, and how to know it succeeded. All commands assume:
 
 ```bash
 conda activate mbpo
-cd mbpo   # repository root
+cd mbpo   # repository root (where `mbpo/` package and `scripts/` live)
+```
+
+### Phase overview
+
+| Phase | Goal | Main tools |
+|-------|------|------------|
+| **A** | Verify env, UTC grid, and that training config merges correctly | `verify_utc_uniformity.py`, `check_pv_env.py`, `verify_training_config.py`, `run_example_dry` |
+| **B** | Train MBPO (hours) | `mbpo run_local` + `examples/config/pv_tracking/0.py` |
+| **C** | Monitor training; confirm `params.json` | `plot_training_progress.py`, `tail progress.csv` |
+| **D** | Hold-out evaluation vs baselines | `evaluate_agent.py` |
+| **E** | Root-cause / tracking diagnosis | `diagnose_tracking.py` |
+
+**Artifacts (not in git):**
+
+- Training: `~/ray_mbpo/PVTracking/pv_tracking/seed:<id>_<timestamp><hash>/`
+- Evaluation: `evaluation/pv_daylight_utc/` (canonical name for December hold-out)
+
+---
+
+### Step A1 — UTC and horizon audit
+
+**Script:** `scripts/verify_utc_uniformity.py`  
+**Purpose:** Confirms training env, eval scripts, and `examples/development/base.py` all use the same UTC daylight grid (**13:30–23:15**, **39** steps). Run after any change to `start_time`, `periods`, or `tz`.
+
+```bash
+python scripts/verify_utc_uniformity.py
+```
+
+**Pass:** last line is `ALL CHECKS PASSED`.
+
+---
+
+### Step A2 — Environment smoke test
+
+**Script:** `scripts/check_pv_env.py`  
+**Purpose:** One reset/step, checks observation size, action space, and that `action=[1,0]` moves tilt by `+max_delta_tilt` (5°).
+
+```bash
+python scripts/check_pv_env.py --observation-mode physical
+```
+
+**Pass:** `reset obs shape: (11,)`, `PVTracking environment checker completed successfully`.
+
+Optional: validate random weather table consistency:
+
+```bash
+python scripts/check_pv_env.py --observation-mode physical --validate-weather
 ```
 
 ---
 
-### 5.1 Health checks (dry runs)
+### Step A3 — Training config merge check (required before long runs)
+
+**Script:** `scripts/verify_training_config.py`  
+**Purpose:** Loads `examples/config/pv_tracking/0.py` through the **same merge path** as `mbpo run_local` and fails if critical hyperparameters or env kwargs differ from the file. Prevents training with stale domain defaults (e.g. 50 epochs instead of 250).
+
+```bash
+python scripts/verify_training_config.py --config examples.config.pv_tracking.0
+```
+
+**Pass:** `PASS — merged training variant matches examples.config.pv_tracking.0` and printed values include `n_epochs=250`, `min_alpha=0.12`, `exploration=2500`, `observation_mode='physical'`.
+
+Legacy 15-D ablation config (only if you intentionally train with `power_norm` + time features):
+
+```bash
+python scripts/verify_training_config.py --config examples.config.pv_tracking.1
+```
+
+---
+
+### Step A4 — Dry run (no learning)
+
+**Command:** `mbpo run_example_dry`  
+**Purpose:** Prints the full Ray variant spec without starting training. Confirms `config_version`, `n_epochs`, and env grid in the logged experiment config.
+
+```bash
+mbpo run_example_dry examples.development \
+  --config=examples.config.pv_tracking.0 \
+  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+```
+
+**Pass:** log contains `start_time='13:30' periods=40 (39 steps)`, `observation_mode='physical'`, `n_epochs: 250`, `config_version: pv_tracking_v3_physical_2026-05-24`.
+
+**Optional (pvlib / MBPO schedule):**
+
+```bash
+python scripts/validate_pv_rollouts.py --config examples/config/pv_tracking/0.py
+python scripts/solar_time_sanity.py --date 2020-12-21 --env-rollout
+```
+
+---
+
+### Step B — Training
+
+**Command:** `mbpo run_local`  
+**Config:** `examples/config/pv_tracking/0.py` (production tracking config, `CONFIG_VERSION = pv_tracking_v2_2026-05-23`).
+
+```bash
+mbpo run_local examples.development \
+  --config=examples.config.pv_tracking.0 \
+  --gpus=0 --trial-gpus=0 \
+  --cpus=4 --trial-cpus=2
+```
+
+**What happens each epoch**
+
+1. Sample a random calendar day in `[start_date, end_date]` with `weather_source='random'`.
+2. Panel starts at **30° tilt, 180° azimuth** (`randomize_initial_orientation=False` — matches eval).
+3. Collect **39** real transitions (`epoch_length`).
+4. Train ensemble dynamics; MBPO imagined rollouts (length ≤ 3); SAC updates.
+5. In-env eval episodes; if `evaluation/return-average` improves → update `best_eval_checkpoint/`.
+6. Every 5 epochs → `checkpoint_<epoch>/` and `latest_checkpoint/`.
+
+**Ray output directory:**
+
+```text
+~/ray_mbpo/PVTracking/pv_tracking/seed:<id>_<timestamp><hash>/
+├── params.json          # full variant (verify after start!)
+├── progress.csv         # per-epoch metrics
+├── best_eval_checkpoint/
+├── checkpoint_5/, checkpoint_10/, ...
+└── latest_checkpoint/
+```
+
+**Immediately after training starts — verify `params.json`:**
+
+```bash
+export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
+export TRIAL="${TRIAL%/}"
+python -c "
+import json; v=json.load(open('$TRIAL/params.json'))
+print('config_version', v.get('config_version'))
+k=v['algorithm_params']['kwargs']
+print('n_epochs', k['n_epochs'], 'min_alpha', k['min_alpha'], 'real_ratio', k['real_ratio'])
+e=v['environment_params']['training']['kwargs']
+print('obs', e['observation_mode'], 'rand_init', e['randomize_initial_orientation'])
+"
+```
+
+**Expected:** `config_version pv_tracking_v3_physical_2026-05-24`, `n_epochs 250`, `min_alpha 0.15`, `real_ratio 0.9`, `target_entropy auto`, `obs physical`, `rand_init False`.
+
+**Do not** judge the agent from training-time eval alone; always run Phase D on hold-out dates.
+
+---
+
+### Step C — Monitor training and pick checkpoint
+
+**Script:** `scripts/plot_training_progress.py`  
+**Purpose:** Plots `progress.csv` (training return, eval return, α, model loss).
+
+```bash
+export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
+export TRIAL="${TRIAL%/}"
+export CKPT="$TRIAL/best_eval_checkpoint"
+
+python scripts/plot_training_progress.py "$TRIAL"
+tail -5 "$TRIAL/progress.csv"   # quick numeric check
+ls "$TRIAL/best_eval_checkpoint/policy_weights.pkl"
+```
+
+| Checkpoint folder | When to use |
+|-------------------|-------------|
+| `best_eval_checkpoint/` | **Default** — best training-time `evaluation/return-average` |
+| `checkpoint_<N>/` | Compare a specific epoch |
+| `latest_checkpoint/` | Resume / debug only |
+
+**Optional — rank checkpoints on hold-out energy** (slower; runs mini-eval per checkpoint):
+
+```bash
+python scripts/select_best_checkpoint.py "$TRIAL" \
+  --deterministic \
+  --compare-baselines \
+  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28 \
+  --num-rollouts 4 \
+  --max-path-length 39
+```
+
+Use the printed “Recommended for reporting” path if it differs from `best_eval_checkpoint`.
+
+---
+
+### Step D — Post-training evaluation (hold-out)
+
+**Script:** `scripts/evaluate_agent.py`  
+**Purpose:** Load checkpoint, run deterministic rollouts, write summaries, CSV trajectories, plots, and optional baselines on the **same UTC MDP** as training.
+
+**Required flags for comparable results:**
+
+| Flag | Value | Why |
+|------|-------|-----|
+| `--max-path-length` | `39` | Must equal `periods - 1` |
+| `--eval-protocol` | `inherit` | Same UTC 13:30–23:15 grid as training |
+| `--deterministic` | on | Greedy policy for reporting |
+| `--compare-baselines` | on | `fixed_no_motion` + `sun_tracking` |
+| `--fixed-eval-dates` | December Mondays | Fair paired comparison |
+
+**Canonical command (December hold-out):**
+
+```bash
+export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
+export TRIAL="${TRIAL%/}"
+export CKPT="$TRIAL/best_eval_checkpoint"
+
+python scripts/evaluate_agent.py "$CKPT" \
+  --outdir evaluation/pv_daylight_utc \
+  --eval-protocol inherit \
+  --max-path-length 39 \
+  --num-rollouts 10 \
+  --deterministic \
+  --compare-baselines \
+  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28
+```
+
+**Primary outputs** (open these first):
+
+| File | What to read |
+|------|----------------|
+| `evaluation_summary.txt` | Mean **total_energy_kwh**, vs baselines |
+| `eval_scenario_confirmation.txt` | Same seeds, dates, UTC grid |
+| `reward_time_analysis.txt` | Peak power/reward by UTC hour |
+| `evaluation_method_comparison.png` | Bar chart: learned vs baselines |
+| `rollouts/rollout_*.csv` | Per-step tilt, actions, power, `clock_hour_utc` |
+| `rollout_plots/rollout_*_combined.png` | 6-panel UTC time series |
+
+**Other eval modes** (same `--eval-protocol inherit --max-path-length 39`): see [§5.4 Evaluation variants](#54-evaluation-variants) below.
+
+---
+
+### Step E — Tracking diagnosis (no retrain)
+
+**Script:** `scripts/diagnose_tracking.py`  
+**Purpose:** Reads eval CSVs; checks action-space implementation; compares learned vs sun tracker on tilt error, action magnitude, and energy; optionally reads `progress.csv` and `params.json`.
+
+```bash
+python scripts/diagnose_tracking.py \
+  --eval-dir evaluation/pv_daylight_utc \
+  --verify-env \
+  --progress-csv "$TRIAL/progress.csv" \
+  --trial-dir "$TRIAL"
+```
+
+**Outputs:**
+
+- `evaluation/pv_daylight_utc/diagnostics/tracking_diagnosis.txt`
+- `evaluation/pv_daylight_utc/diagnostics/plots/` (tilt vs zenith, action histograms)
+
+**How to interpret (December hold-out):**
+
+| Check | Good | Poor (needs config / obs change, then retrain) |
+|-------|------|--------------------------------------------------|
+| vs `fixed_no_motion` energy | Learned **>** ~0.70 kWh mean | Learned **<** fixed |
+| vs `sun_tracking` energy | Approaching ~0.90+ kWh | Stuck ~0.65–0.77 while sun ~0.96 |
+| Mean \|tilt − zenith\| | **< ~10°** | **~29°** (quasi-fixed at mount pose) |
+| Action L1 / sun (productive steps) | **> 0.5** | **< 0.25** (tiny deterministic actions) |
+| `alpha` at end of training | Stays **above** `min_alpha` longer | Pinned at `min_alpha` entire late training |
+
+Example from a completed `pv_tracking_v2` run: energy **0.774** vs fixed **0.697** (pass), but tilt error **~29°** and action ratio **~0.18** vs sun (still not true tracking).
+
+---
+
+### 5.5 Troubleshooting
+
+| Symptom | Likely cause | What to do |
+|---------|--------------|------------|
+| `params.json` has `n_epochs: 15` or old `min_alpha` | Training started without `--config=examples.config.pv_tracking.0` | Re-run Phase A3; always pass explicit `--config=...` |
+| `verify_training_config.py` FAIL | `base.py` / config mismatch | Fix config file; re-run verify until PASS |
+| Eval obs dim error | Checkpoint trained with `legacy` (15-D) vs `physical` (11-D) | Match `--observation_mode` in eval to checkpoint; see `evaluate_agent.py` message |
+| High training eval, low hold-out energy | Training eval ≠ December hold-out protocol | Always run Phase D with `--fixed-eval-dates` |
+| Learned beats fixed but not sun | Entropy collapse; quasi-fixed 30° pose | Read `diagnose_tracking.py` report; consider `config/1.py` legacy obs **only if** you choose to retrain |
+| Ray connection closed | Stale Ray session | Restart training; `ray stop` if needed |
+
+---
+
+### 5.6 Health checks (dry runs) — summary table
 
 Run **before** a long training job. None of these modify the codebase. Full script reference: [§7 Scripts directory](#7-scripts-directory).
 
@@ -133,6 +407,7 @@ Run **before** a long training job. None of these modify the codebase. Full scri
 |-------|---------|----------------|
 | UTC + horizon audit | `python scripts/verify_utc_uniformity.py` | `ALL CHECKS PASSED`; grid **13:30**, **40** periods, **39** steps |
 | Env smoke test | `python scripts/check_pv_env.py --observation-mode physical` | Reset/step OK; obs dim **11** |
+| Training config merge check | `python scripts/verify_training_config.py --config examples.config.pv_tracking.0` | `PASS — merged training variant matches ...` |
 | Training wiring (no learning) | `mbpo run_example_dry examples.development --config=examples.config.pv_tracking.0 --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1` | Log shows `start_time='13:30' periods=40 (39 steps)` |
 
 **Recommended when changing config or debugging pvlib:**
@@ -146,87 +421,11 @@ Run **before** a long training job. None of these modify the codebase. Full scri
 
 ---
 
-### 5.2 Training
+### 5.4 Evaluation variants
 
-```bash
-mbpo run_local examples.development \
-  --config=examples.config.pv_tracking.0 \
-  --gpus=0 --trial-gpus=0 \
-  --cpus=2 --trial-cpus=1
-```
+**Required for all variants:** `--max-path-length 39`, `--eval-protocol inherit`, `--deterministic` for reporting.
 
-**What happens each epoch**
-
-1. Sample a random day in `[start_date, end_date]` and build weather for that day.
-2. Collect **39** real transitions per episode (`epoch_length`).
-3. Train ensemble dynamics; generate short model rollouts; update SAC.
-4. Periodically evaluate in-env; update `best_eval_checkpoint/` when `evaluation/return-average` improves.
-5. Save `checkpoint_<epoch>/` and `latest_checkpoint/`.
-
-**Config file:** `examples/config/pv_tracking/0.py` (edit `n_epochs`, dates, `movement_penalty`, etc.). Production runs often use `n_epochs` ≥ 150; the file may be set lower for quick tests.
-
-**Ray output directory** (from `log_dir` + `exp_name` in config):
-
-```text
-~/ray_mbpo/PVTracking/pv_tracking/seed:<id>_<timestamp><hash>/
-├── progress.csv
-├── params.json
-├── best_eval_checkpoint/
-├── checkpoint_*/
-└── latest_checkpoint/
-```
-
----
-
-### 5.3 Checkpoints
-
-**Resolve the trial directory**
-
-```bash
-export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
-export TRIAL="${TRIAL%/}"
-export CKPT="$TRIAL/best_eval_checkpoint"
-ls "$TRIAL/progress.csv" "$TRIAL/params.json" "$CKPT"
-```
-
-**Monitor training**
-
-```bash
-python scripts/plot_training_progress.py "$TRIAL"
-# or: python scripts/plot_training_progress.py latest
-tail -30 "$TRIAL/progress.csv"
-```
-
-| Checkpoint | Use |
-|------------|-----|
-| `best_eval_checkpoint/` | Default — best training-time eval return |
-| `checkpoint_<N>/` | Compare a specific epoch |
-| `latest_checkpoint/` | Resume / debug only |
-
-**Hold-out ranking (energy, not training return)**
-
-```bash
-python scripts/select_best_checkpoint.py "$TRIAL" \
-  --deterministic \
-  --compare-baselines \
-  --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28 \
-  --num-rollouts 4 \
-  --max-path-length 39
-```
-
-Use the printed “Recommended for reporting” path, or `best_eval_checkpoint` if it wins on **total_energy_kwh**.
-
----
-
-### 5.4 Post-training evaluation
-
-**Required for comparable results**
-
-- `--max-path-length 39` (must match `periods - 1`)
-- `--eval-protocol inherit` (forces the same UTC daylight grid as training)
-- `--deterministic` for reporting
-
-**Canonical output directory name:** `evaluation/pv_daylight_utc` (daylight grid, current MDP).
+**Canonical output directory:** `evaluation/pv_daylight_utc` (December hold-out on UTC daylight grid).
 
 #### Run type 1 — Standard hold-out (recommended)
 
@@ -365,7 +564,9 @@ All paths below are from the **repository root** (`cd mbpo`). Scripts are groupe
 | `eval_utils.py` | Shared library (env build, CSV, plots, reports) | **Keep** — imported by eval scripts; not run directly |
 | `pv_trial_paths.py` | Resolve `latest` Ray trial directory | **Keep** — library for plotting / checkpoint tools |
 | `verify_utc_uniformity.py` | Pre-flight + post-change audit | **Essential** |
+| `verify_training_config.py` | Merged Ray variant vs config file | **Essential** — run before every long train |
 | `check_pv_env.py` | Env smoke test (obs, weather) | **Essential** |
+| `diagnose_tracking.py` | Root-cause report from eval CSVs (action/tilt/energy) | **Essential** after eval |
 | `evaluate_agent.py` | Full post-training eval + plots + CSV | **Essential** |
 | `evaluate_agent_advanced.py` | Aligned learned vs baseline, mean±std bands, dashboard PDF | **Optional** — use after canonical `evaluate_agent.py` when comparing dynamics on one figure |
 | `plot_training_progress.py` | Training curves from `progress.csv` | **Essential** |
@@ -413,6 +614,17 @@ python scripts/verify_utc_uniformity.py --config examples/config/pv_tracking/0.p
 
 Run after any change to `start_time`, `periods`, `epoch_length`, or `MAX_PATH_LENGTH_PER_DOMAIN`.
 
+#### `verify_training_config.py` — config merge guard
+
+Loads `examples.config.pv_tracking.0` (or `.1`) through `examples.development.get_variant_spec` and compares merged `algorithm_params.kwargs` and `environment_params.training.kwargs` to the config file. Catches training without `--config=...` or stale `base.py` defaults.
+
+```bash
+python scripts/verify_training_config.py --config examples.config.pv_tracking.0
+python scripts/verify_training_config.py --config examples.config.pv_tracking.1
+```
+
+Exit code **0** = safe to start `mbpo run_local`.
+
 #### `check_pv_env.py` — environment smoke test
 
 One reset/step, observation size, optional weather-table check.
@@ -422,6 +634,33 @@ python scripts/check_pv_env.py --observation-mode physical
 python scripts/check_pv_env.py --observation-mode physical --validate-weather
 python scripts/check_pv_env.py --observation-mode physical --log-obs
 ```
+
+Also verifies incremental action semantics: `action=[1,0]` → `+max_delta_tilt` degrees.
+
+#### `diagnose_tracking.py` — low-performance root-cause report (no retrain)
+
+Reads rollout CSVs from `evaluate_agent.py` output, verifies action-space implementation,
+and compares learned vs `sun_tracking` on tilt error, action magnitude, and energy.
+
+```bash
+python scripts/diagnose_tracking.py \
+  --eval-dir evaluation/pv_daylight_utc \
+  --verify-env \
+  --progress-csv "$TRIAL/progress.csv" \
+  --trial-dir "$TRIAL"
+```
+
+| Option | Purpose |
+|--------|---------|
+| `--eval-dir` | Folder with `rollouts/` and `baseline_rollouts/` from `evaluate_agent.py` |
+| `--verify-env` | Live check that `action=[1,0]` → +5° tilt (training path) |
+| `--progress-csv` | Training α and returns; warns if α pinned at `min_alpha` |
+| `--trial-dir` | Reads `params.json` for `config_version`, `min_alpha`, `observation_mode` |
+| `--outdir` | Default: `<eval-dir>/diagnostics` |
+
+Outputs: `evaluation/<run>/diagnostics/tracking_diagnosis.txt` and plots under `diagnostics/plots/`.
+
+Run after every hold-out eval. If energy beats fixed but tilt error stays ~29°, the policy is a **better fixed pose**, not a sun tracker — see success table in [Step E](#step-e--tracking-diagnosis-no-retrain).
 
 #### `evaluate_agent.py` — post-training evaluation (main)
 
@@ -603,35 +842,48 @@ python scripts/plot_ray_results.py --input ray_status.txt --outdir /tmp/ray_plot
 ### 7.7 Minimal workflow (scripts only)
 
 ```text
-Phase A:  verify_utc_uniformity.py  →  check_pv_env.py
-Phase B:  mbpo run_local …          →  plot_training_progress.py latest
+Phase A:  verify_utc_uniformity.py → check_pv_env.py → verify_training_config.py → run_example_dry
+Phase B:  mbpo run_local …         → verify params.json → plot_training_progress.py
 Phase C:  select_best_checkpoint.py (optional)
-Phase D:  evaluate_agent.py  →  open evaluation/pv_daylight_utc/
+Phase D:  evaluate_agent.py        → evaluation/pv_daylight_utc/
+Phase E:  diagnose_tracking.py     → diagnostics/tracking_diagnosis.txt
 ```
 
 ---
 
 ## 8. Configuration reference
 
-**Training:** `examples/config/pv_tracking/0.py`
+### 8.1 Production config (`examples/config/pv_tracking/0.py`)
 
-| Parameter | Default | Meaning |
-|-----------|---------|---------|
-| `n_epochs` | (see file) | Training epochs; increase for convergence |
+| Field | Value | Meaning |
+|-------|-------|---------|
+| `CONFIG_VERSION` | `pv_tracking_v3_physical_2026-05-24` | Logged in `params.json`; verify after train start |
+| `n_epochs` | `250` | Full long-run training budget |
 | `epoch_length` | `39` | Real env steps per epoch |
-| `n_initial_exploration_steps` | `390` | `≈ 10 × epoch_length` |
-| `observation_mode` | `physical` | 11-D obs (legacy 15-D needs old checkpoints) |
-| `start_date` / `end_date` | 2020 full year | Training day pool |
+| `n_initial_exploration_steps` | `2500` | ~64 random episodes before policy learning |
+| `min_alpha` | `0.15` | SAC entropy floor (v3: slightly above v2’s 0.12) |
+| `target_entropy` | `'auto'` | SAC sets target from action dim (~−2 for 2-D) |
+| `real_ratio` | `0.9` | 90% real-env SAC batches vs model rollouts |
+| `rollout_schedule` | `[20, 150, 1, 3]` | MBPO imagined rollout length schedule |
+| `randomize_initial_orientation` | `False` | Train/eval both start 30°/180° |
+| `observation_mode` | `physical` | 11-D obs (see observation doc) |
 | `weather_source` | `random` | Stochastic clouds for training |
 | `movement_penalty` | `0.0001` | Motion cost weight |
 
-**Reward** (`mbpo/env/pv_tracking.py`):
+**Legacy ablation:** `examples/config/pv_tracking/1.py` — same hyperparameters, `observation_mode='legacy'` (15-D). Requires retrain; checkpoint dims differ.
+
+**Domain defaults** in `examples/development/base.py` are aligned with this config (`PVTracking` → 250 epochs, 2500 exploration) so partial merges are less dangerous; **always** use `--config=examples.config.pv_tracking.0` and run `verify_training_config.py`.
+
+### 8.2 Reward and actions (`mbpo/env/pv_tracking.py`)
 
 ```text
+Actions:        Box[-1, 1]²  →  Δtilt ∈ [-5°, +5°],  Δazimuth ∈ [-10°, +10°] per 15-min step
 energy_kwh     = power_W × (15 min in hours) / 1000
-movement_cost  = movement_penalty × (|Δtilt|/max_Δtilt + |Δazimuth|/max_Δazimuth)
+movement_cost  = movement_penalty × (|a_tilt| + |a_azimuth|)   # normalized actions
 reward         = energy_kwh - movement_cost
 ```
+
+**Baselines** (in eval): `fixed_no_motion` — zero action; `sun_tracking` — each step commands panel toward `solar_zenith` / `solar_azimuth` (strong heuristic, same incremental action space).
 
 ---
 
@@ -649,7 +901,10 @@ evaluation/
     ├── evaluation_*.png
     ├── rollouts/
     ├── rollout_plots/
-    └── baseline_rollouts/
+    ├── baseline_rollouts/
+    └── diagnostics/          # from diagnose_tracking.py
+        ├── tracking_diagnosis.txt
+        └── plots/
 ```
 
 New runs use a **new** `--outdir` name (e.g. `evaluation/pv_random_2020`). Delete old folders when finished so only `pv_daylight_utc` remains for day-to-day work.
@@ -665,35 +920,58 @@ New runs use a **new** `--outdir` name (e.g. `evaluation/pv_random_2020`). Delet
 
 ---
 
-## 10. Quick command reference
+## 10. Quick command reference (copy-paste full pipeline)
 
 ```bash
 conda activate mbpo
 cd mbpo
 
-# --- Phase A ---
+# --- Phase A: pre-flight ---
 python scripts/verify_utc_uniformity.py
 python scripts/check_pv_env.py --observation-mode physical
-
-# --- Phase B ---
-mbpo run_local examples.development --config=examples.config.pv_tracking.0 \
+python scripts/verify_training_config.py --config examples.config.pv_tracking.0
+mbpo run_example_dry examples.development --config=examples.config.pv_tracking.0 \
   --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
 
-# --- Phase C ---
+# --- Phase B: train (250 epochs; hours) ---
+mbpo run_local examples.development --config=examples.config.pv_tracking.0 \
+  --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
+
+# --- Phase B2: confirm params.json on new trial ---
 export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
 export TRIAL="${TRIAL%/}"
 export CKPT="$TRIAL/best_eval_checkpoint"
+python -c "import json; v=json.load(open('$TRIAL/params.json')); print(v.get('config_version'), v['algorithm_params']['kwargs']['n_epochs'])"
+
+# --- Phase C: monitor ---
 python scripts/plot_training_progress.py "$TRIAL"
 
-# --- Phase D ---
+# --- Phase D: hold-out eval ---
 python scripts/evaluate_agent.py "$CKPT" \
   --outdir evaluation/pv_daylight_utc \
-  --eval-protocol inherit \
-  --max-path-length 39 \
-  --num-rollouts 10 \
-  --deterministic \
-  --compare-baselines \
+  --eval-protocol inherit --max-path-length 39 --num-rollouts 10 \
+  --deterministic --compare-baselines \
   --fixed-eval-dates 2020-12-07,2020-12-14,2020-12-21,2020-12-28
+
+# --- Phase E: diagnose ---
+python scripts/diagnose_tracking.py \
+  --eval-dir evaluation/pv_daylight_utc --verify-env \
+  --progress-csv "$TRIAL/progress.csv" --trial-dir "$TRIAL"
+
+# --- Optional: advanced aligned plots + dashboard PDF ---
+python scripts/evaluate_agent_advanced.py "$CKPT" \
+  --outdir evaluation/pv_daylight_utc_advanced \
+  --eval-protocol inherit --max-path-length 39 \
+  --fixed-eval-dates 2020-12-07,2020-12-21 --replicates-per-date 8 \
+  --policy-mode deterministic
+```
+
+**Evaluate an existing trial without retraining** — set `TRIAL` to the `seed:…` folder you want (not necessarily `latest`):
+
+```bash
+export TRIAL=~/ray_mbpo/PVTracking/pv_tracking/seed:1674_2026-05-24_12-46-06nk9xhrb2
+export CKPT="$TRIAL/best_eval_checkpoint"
+# then Phase D and E only
 ```
 
 ---

@@ -104,7 +104,9 @@ NUM_EPOCHS_PER_DOMAIN = {
     'Ant': int(3e3),
     'Humanoid': int(1e4),
     'Pendulum': 10,
-    'PVTracking': 50,
+    # Production PV runs use examples/config/pv_tracking/0.py (250 epochs).
+    # Keep domain default aligned so partial merges are not stuck at 50 epochs.
+    'PVTracking': 250,
 }
 
 ALGORITHM_PARAMS_PER_DOMAIN = {
@@ -114,6 +116,7 @@ ALGORITHM_PARAMS_PER_DOMAIN = {
                 'n_epochs': NUM_EPOCHS_PER_DOMAIN.get(
                     domain, DEFAULT_NUM_EPOCHS),
                 'n_initial_exploration_steps': (
+                    2500 if domain == 'PVTracking' else
                     MAX_PATH_LENGTH_PER_DOMAIN.get(
                         domain, DEFAULT_MAX_PATH_LENGTH
                     ) * 10),
@@ -228,5 +231,9 @@ def get_variant_spec(args, env_params):
     if args.checkpoint_replay_pool is not None:
         variant_spec['run_params']['checkpoint_replay_pool'] = (
             args.checkpoint_replay_pool)
+
+    config_version = getattr(env_params, 'config_version', None)
+    if config_version is not None:
+        variant_spec['config_version'] = config_version
 
     return variant_spec

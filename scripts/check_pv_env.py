@@ -70,6 +70,16 @@ def main():
     print('action space:', env.action_space)
     print('obs space:', env.observation_space)
 
+    # Incremental action semantics: action[i] in [-1,1] -> delta_tilt = action[0] * max_delta_tilt
+    tilt_before = inner.tilt
+    _, _, _, info = env.step(np.array([1.0, 0.0], dtype=np.float32))
+    delta = inner.tilt - tilt_before
+    assert abs(delta - inner.max_delta_tilt) < 0.01, (
+        'action=[1,0] expected delta_tilt={:.1f}, got {:.4f}'.format(
+            inner.max_delta_tilt, delta))
+    print('action semantics OK: [1,0] -> delta_tilt={:.2f} deg (max={:.1f})'.format(
+        delta, inner.max_delta_tilt))
+
     for step in range(3):
         action = env.action_space.sample()
         next_obs, reward, done, info = env.step(action)
