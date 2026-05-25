@@ -23,7 +23,7 @@ params = {
     'exp_name': 'pv_tracking',
 
     'kwargs': {
-        'n_epochs': 250,
+        'n_epochs': 500,
         'epoch_length': 39,
         'train_every_n_steps': 1,
         'n_train_repeat': 15,
@@ -44,7 +44,7 @@ params = {
         'num_networks': 7,
         'num_elites': 4,
 
-        'real_ratio': 1.0,
+        'real_ratio': 0.8,
         'min_alpha': 0.0,
         'max_model_rollout_length': 5,
         'target_entropy': 'auto',

@@ -17,7 +17,7 @@ params = dict(_stage1.params)
 params['config_version'] = CONFIG_VERSION
 params['kwargs'] = dict(_stage1.params['kwargs'])
 params['kwargs'].update({
-    'n_epochs': 250,
+    'n_epochs': 500,
     # One day × 39 steps × ~50 episodes of uniform exploration.
     'n_initial_exploration_steps': 1950,
 })
