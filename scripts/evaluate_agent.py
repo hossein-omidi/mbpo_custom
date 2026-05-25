@@ -99,8 +99,13 @@ def parse_args():
     parser.add_argument(
         '--deterministic',
         action='store_true',
-        default=False,
-        help='Run the policy deterministically during evaluation.')
+        default=True,
+        help='Deploy tanh(mu) at eval (default; matches training eval_deterministic=True).')
+    parser.add_argument(
+        '--stochastic',
+        dest='deterministic',
+        action='store_false',
+        help='Sample tanh(mu+sigma*eps) instead of tanh(mu); not comparable to sun baselines for RC gates.')
     parser.add_argument(
         '--render-mode',
         type=str,
@@ -224,17 +229,10 @@ def resolve_checkpoint_path(checkpoint_pattern):
     if matches:
         return max(matches, key=os.path.getmtime)
 
-    # If user provided a directory under monitoring tree, search recursively
-    root = os.path.expanduser('~/ray_mbpo/PVTracking')
-    if os.path.isdir(root):
-        search_pattern = os.path.join(root, '**', 'checkpoint_*')
-        matches = glob.glob(search_pattern, recursive=True)
-        if matches:
-            return max(matches, key=os.path.getmtime)
-
     raise FileNotFoundError(
         'Checkpoint directory not found: %s\n'
-        'Use a real checkpoint path, not literal placeholders.\n'
+        'Use an explicit checkpoint path or a scoped glob; refusing to fall back '
+        'to an unrelated newest checkpoint elsewhere.\n'
         'Example: /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51'
         % checkpoint_pattern)
 

@@ -1,6 +1,7 @@
 # Bumped when training hyperparameters change; verify_training_config.py checks this.
 # Stage 1 — summer i.i.d. days, clearsky, zero motion cost, hold-out-aligned training eval.
-CONFIG_VERSION = 'pv_tracking_stage1_clearsky_explore_2026-05-24'
+# A→Z procedure: docs/TRAINING_PROTOCOL.md  |  eval: evaluation/pv_stage1_clearsky_summer
+CONFIG_VERSION = 'pv_tracking_stage1_clearsky_physical_autoentropy_2026-05-25'
 TRAINING_STAGE = 'stage1'
 
 # Summer hold-out dates for in-training checkpoint selection (matches Phase D eval).
@@ -22,7 +23,7 @@ params = {
     'exp_name': 'pv_tracking',
 
     'kwargs': {
-        'n_epochs': 30,
+        'n_epochs': 250,
         'epoch_length': 39,
         'train_every_n_steps': 1,
         'n_train_repeat': 15,
@@ -44,9 +45,9 @@ params = {
         'num_elites': 4,
 
         'real_ratio': 1.0,
-        'min_alpha': 0.35,
+        'min_alpha': 0.0,
         'max_model_rollout_length': 5,
-        'target_entropy': 0.0,
+        'target_entropy': 'auto',
         'rollout_schedule': [30, 220, 2, 5],
         'save_every_epochs': 5,
         'early_stop_patience': None,

@@ -6,11 +6,9 @@ metrics as scripts/evaluate_agent.py (via scripts/eval_utils.py).
 """
 
 import argparse
-import glob
 import json
 import os
 import pickle
-import re
 import sys
 
 import numpy as np
@@ -22,6 +20,8 @@ if _SCRIPT_DIR not in sys.path:
 
 from softlearning.policies.utils import get_policy_from_variant
 from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
+
+from evaluate_agent import resolve_checkpoint_path
 
 from eval_utils import (
     EVAL_PROTOCOL_INHERIT,
@@ -38,27 +38,6 @@ from eval_utils import (
     write_eval_scenario_confirmation,
     write_reward_time_report,
 )
-
-
-def resolve_checkpoint_path(checkpoint_pattern):
-    checkpoint_path = os.path.expanduser(checkpoint_pattern)
-    if os.path.exists(checkpoint_path):
-        return checkpoint_path.rstrip('/')
-
-    wildcard_path = re.sub(r'<[^>]+>', '*', checkpoint_path)
-    matches = glob.glob(wildcard_path)
-    if matches:
-        return max(matches, key=os.path.getmtime)
-
-    root = os.path.expanduser('~/ray_mbpo/PVTracking')
-    if os.path.isdir(root):
-        search_pattern = os.path.join(root, '**', 'checkpoint_*')
-        matches = glob.glob(search_pattern, recursive=True)
-        if matches:
-            return max(matches, key=os.path.getmtime)
-
-    raise FileNotFoundError('Checkpoint directory not found: %s' % checkpoint_pattern)
-
 
 def load_variant(experiment_root, variant_file='params.json'):
     path = os.path.join(experiment_root, variant_file)
@@ -99,7 +78,9 @@ def main():
     parser.add_argument('--num-rollouts', '-n', type=int, default=10, help='Number of rollouts per method')
     parser.add_argument('--max-path-length', '-l', type=int, default=39, help='Rollout horizon')
     parser.add_argument('--variant-file', type=str, default='params.json', help='Variant JSON in experiment root')
-    parser.add_argument('--deterministic', action='store_true', help='Run the policy deterministically')
+    parser.add_argument(
+        '--stochastic', action='store_true',
+        help='Use sampled SAC actions instead of canonical deterministic tanh(mu).')
     parser.add_argument('--test-start-date', type=str, default=None, help='Hold-out start date (YYYY-MM-DD)')
     parser.add_argument('--test-end-date', type=str, default=None, help='Hold-out end date (YYYY-MM-DD)')
     parser.add_argument('--fixed-eval-dates', type=str, default=None,
@@ -165,7 +146,7 @@ def main():
                 env,
                 args.max_path_length,
                 seed=idx,
-                deterministic=args.deterministic,
+                deterministic=not args.stochastic,
                 policy_input_dim=dim_info['policy_dim'],
                 debug_first_step=(args.debug_first_rollout and idx == 0),
             ))
@@ -192,7 +173,7 @@ def main():
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write('PV Tracking Baseline Comparison\n')
         f.write('Checkpoint: %s\n' % checkpoint_dir)
-        f.write('Deterministic: %s\n' % args.deterministic)
+        f.write('Deterministic: %s\n' % (not args.stochastic))
         f.write('Rollouts per method: %d\n' % args.num_rollouts)
         f.write('Policy input dim: %d\n' % dim_info['policy_dim'])
         f.write('Env observation dim: %d (mode=%r)\n' % (

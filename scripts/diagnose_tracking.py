@@ -140,22 +140,34 @@ def find_rollouts(root, subpath):
 
 
 def pair_rollouts_by_date(learned_paths, baseline_paths):
-    """Pair rollouts that share the same episode date (first row date field)."""
-    def date_of(path):
+    """Pair rollouts by (date, rollout_seed) when available, else by date."""
+    def key_of(path):
         rows = load_csv(path)
-        return rows[0]['date'] if rows else None
+        if not rows:
+            return None
+        date = rows[0].get('date')
+        seed = rows[0].get('rollout_seed')
+        try:
+            if seed not in (None, '') and np.isfinite(float(seed)):
+                return (date, int(float(seed)))
+        except (TypeError, ValueError):
+            pass
+        return (date, None)
 
-    baseline_by_date = {}
+    baseline_by_key = {}
     for p in baseline_paths:
-        d = date_of(p)
-        if d:
-            baseline_by_date.setdefault(d, []).append(p)
+        key = key_of(p)
+        if key:
+            baseline_by_key.setdefault(key, []).append(p)
 
     pairs = []
     for lp in learned_paths:
-        d = date_of(lp)
-        if d and d in baseline_by_date:
-            pairs.append((lp, baseline_by_date[d][0], d))
+        key = key_of(lp)
+        if key and key in baseline_by_key:
+            pairs.append((lp, baseline_by_key[key][0], key[0]))
+            continue
+        if key and (key[0], None) in baseline_by_key:
+            pairs.append((lp, baseline_by_key[(key[0], None)][0], key[0]))
     return pairs
 
 
@@ -201,21 +213,46 @@ def summarize_trajectory(rows, label):
     }
 
 
-def load_eval_movement_penalty(eval_dir):
-    """movement_penalty from evaluation_summary.json (matches evaluate_agent eval_config)."""
+def load_evaluation_summary(eval_dir):
+    """Load evaluation_summary.json if present."""
     import json
     path = os.path.join(eval_dir, 'evaluation_summary.json')
-    if os.path.isfile(path):
-        with open(path, encoding='utf-8') as f:
-            summary = json.load(f)
-        kw = summary.get('eval_config') or {}
-        if 'movement_penalty' in kw:
-            return float(kw['movement_penalty'])
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def load_eval_movement_penalty(eval_dir):
+    """movement_penalty from evaluation_summary.json (matches evaluate_agent eval_config)."""
+    kw = load_evaluation_summary(eval_dir).get('eval_config') or {}
+    if 'movement_penalty' in kw:
+        return float(kw['movement_penalty'])
     return None
 
 
+def load_eval_deterministic(eval_dir):
+    """Whether evaluate_agent used tanh(mu) (True) vs stochastic samples (False)."""
+    summary = load_evaluation_summary(eval_dir)
+    if 'deterministic' in summary:
+        return bool(summary['deterministic'])
+    return None
+
+
+def pre_action_tilt_error_deg(row):
+    """Controller error at the state that produced this action.
+
+    CSV exports pre-step observation columns and post-step info columns.
+    For control-sign analysis we must use the pre-step state, not the post-step
+    tilt/zenith stored in `tilt_deg` / `solar_zenith_deg`.
+    """
+    if 'panel_tilt_norm' in row and 'solar_zenith_norm' in row:
+        return float(row['panel_tilt_norm']) * 90.0 - float(row['solar_zenith_norm']) * 180.0
+    return float(row['tilt_deg']) - float(row['solar_zenith_deg'])
+
+
 def tilt_control_sign_stats(learned_rows, min_altitude_deg=5.0):
-    """Greedy zenith tracker: sign(a_tilt) should be -sign(tilt - zenith) when |error|>0.5°."""
+    """Greedy zenith tracker: sign(a_tilt) should oppose pre-action tilt error."""
     agree = 0
     n = 0
     errs = []
@@ -224,7 +261,7 @@ def tilt_control_sign_stats(learned_rows, min_altitude_deg=5.0):
         alt = float(r.get('solar_altitude_deg', 0.0))
         if alt < min_altitude_deg:
             continue
-        e = float(r['tilt_deg']) - float(r['solar_zenith_deg'])
+        e = pre_action_tilt_error_deg(r)
         a = float(r['action_tilt'])
         errs.append(e)
         acts.append(a)
@@ -367,20 +404,27 @@ def verify_action_implementation():
                      % d_wrapped)
         lines.append('  Note: wrapper is identity when underlying Box is [-1,1].')
 
-  # CSV consistency on one stored rollout if available
     raw.close()
     wrapped.close()
     return ok, lines
 
 
 def verify_csv_action_consistency(rows):
-    """Check action_tilt at step i matches tilt change into row i."""
+    """Check commanded tilt delta against same-row post-step tilt.
+
+    CSV rows store the pre-step observation and the post-step info for the same
+    transition, so the correct consistency check is:
+      post_tilt == clip(pre_tilt + action_tilt * MAX_DELTA_TILT, 0, 90)
+    not the difference between consecutive post-step tilts.
+    """
     errors = []
-    for i in range(1, len(rows)):
-        expected = rows[i]['action_tilt'] * MAX_DELTA_TILT
-        actual = rows[i]['tilt_deg'] - rows[i - 1]['tilt_deg']
-        if abs(expected - actual) > 0.15:
-            errors.append((i, expected, actual))
+    for i, row in enumerate(rows):
+        pre_tilt = float(row['panel_tilt_norm']) * 90.0
+        commanded = float(row['action_tilt']) * MAX_DELTA_TILT
+        expected_post = float(np.clip(pre_tilt + commanded, 0.0, 90.0))
+        actual_post = float(row['tilt_deg'])
+        if abs(expected_post - actual_post) > 0.15:
+            errors.append((i, expected_post, actual_post))
     return errors
 
 
@@ -416,7 +460,18 @@ def analyze_progress_csv(path, training_params=None):
     out = {'path': path, 'n_epochs': len(df)}
     if training_params:
         out.update({k: v for k, v in training_params.items() if v is not None})
-    for col in ('evaluation/return-average', 'training/return-average', 'alpha', 'model/val_loss'):
+    for col in (
+            'evaluation/return-average',
+            'training/return-average',
+            'alpha',
+            'model/val_loss',
+            'policy/shifts-mean',
+            'policy/shifts-std',
+            'policy/log_scale_diags-mean',
+            'policy/log_scale_diags-std',
+            'policy/raw-actions-std',
+            'policy/actions-mean',
+            'policy/actions-std'):
         if col in df.columns:
             vals = df[col].dropna()
             if len(vals):
@@ -427,8 +482,11 @@ def analyze_progress_csv(path, training_params=None):
         alpha = df['alpha'].dropna()
         floor = (training_params or {}).get('min_alpha', 0.12)
         out['min_alpha_config'] = float(floor)
-        out['alpha_collapsed'] = bool(
+        out['alpha_at_floor'] = bool(
             len(alpha) and float(alpha.iloc[-1]) <= float(floor) + 0.001)
+    if 'policy/log_scale_diags-mean_last' in out:
+        out['policy/scale_diag_exp_mean_last'] = float(
+            np.exp(out['policy/log_scale_diags-mean_last']))
     return out
 
 
@@ -474,7 +532,7 @@ def plot_action_vs_tilt_error(learned_rows, outpath, date):
         alt = r.get('solar_altitude_deg', 0.0)
         if alt < 5.0:
             continue
-        errs.append(abs(r['tilt_deg'] - r['solar_zenith_deg']))
+        errs.append(abs(pre_action_tilt_error_deg(r)))
         acts.append(action_l1(r))
     if not errs:
         return
@@ -547,7 +605,9 @@ def _run_diagnosis(args):
         n = min(len(learned_paths), len(sun_paths))
         pairs = [(learned_paths[i], sun_paths[i], 'rollout_%d' % (i + 1)) for i in range(n)]
 
+    eval_summary = load_evaluation_summary(args.eval_dir)
     movement_penalty = load_eval_movement_penalty(args.eval_dir)
+    eval_deterministic = load_eval_deterministic(args.eval_dir)
 
     if pairs:
         l0 = load_csv(pairs[0][0])
@@ -555,6 +615,23 @@ def _run_diagnosis(args):
         fair_ok, fair_lines = verify_paired_fairness(
             l0, s0, movement_penalty=movement_penalty)
         sections.append(('Eval fairness (rollout_1 learned vs sun_tracking)', fair_lines))
+
+    protocol_lines = []
+    if eval_deterministic is False:
+        protocol_lines.append(
+            'FAIL: evaluation_summary.json has deterministic=false — RC1/RC2 metrics '
+            'assume tanh(mu). Re-run evaluate_agent.py with --deterministic (default).')
+    elif eval_deterministic is True:
+        protocol_lines.append(
+            'OK: deterministic eval (tanh(mu)); matches training eval_deterministic=True.')
+    else:
+        protocol_lines.append(
+            'NOTE: no deterministic flag in evaluation_summary.json — ensure eval used '
+            '--deterministic (evaluate_agent default) before interpreting RC1.')
+    if movement_penalty is None:
+        protocol_lines.append(
+            'NOTE: movement_penalty missing from eval_config — fairness uses penalty=0.')
+    sections.append(('Eval protocol (RC1 / fairness)', protocol_lines))
 
     learned_summaries = []
     sun_summaries = []
@@ -584,29 +661,43 @@ def _run_diagnosis(args):
         vals = [s[key] for s in summaries if np.isfinite(s.get(key, np.nan))]
         return float(np.mean(vals)) if vals else np.nan
 
-    agg_lines = [
-        'Paired rollouts: %d' % len(pairs),
-        '',
-        'Metric                          learned    sun_track   ratio (learned/sun)',
-        'mean |tilt - zenith| (deg)     %8.2f    %8.2f    %.2f' % (
-            _mean('mean_abs_tilt_error_deg', learned_summaries),
-            _mean('mean_abs_tilt_error_deg', sun_summaries),
-            _mean('mean_abs_tilt_error_deg', learned_summaries) / max(
-                _mean('mean_abs_tilt_error_deg', sun_summaries), 1e-6)),
-        'mean action L1 (productive sun) %8.3f    %8.3f    %.2f' % (
-            _mean('mean_action_l1_productive', learned_summaries),
-            _mean('mean_action_l1_productive', sun_summaries),
-            _mean('mean_action_l1_productive', learned_summaries) / max(
-                _mean('mean_action_l1_productive', sun_summaries), 1e-6)),
-        'total energy kWh (mean)         %8.4f    %8.4f    %.2f' % (
-            _mean('total_energy_kwh', learned_summaries),
-            _mean('total_energy_kwh', sun_summaries),
-            _mean('total_energy_kwh', learned_summaries) / max(
-                _mean('total_energy_kwh', sun_summaries), 1e-6)),
-        'total movement cost (mean)    %8.5f    %8.5f' % (
-            _mean('total_movement_cost', learned_summaries),
-            _mean('total_movement_cost', sun_summaries)),
-    ]
+    def _fmt(value, fmt):
+        return fmt % value if np.isfinite(value) else 'n/a'
+
+    if sun_summaries:
+        tilt_err_ratio = _mean('mean_abs_tilt_error_deg', learned_summaries) / max(
+            _mean('mean_abs_tilt_error_deg', sun_summaries), 1e-6)
+        action_ratio_table = _mean('mean_action_l1_productive', learned_summaries) / max(
+            _mean('mean_action_l1_productive', sun_summaries), 1e-6)
+        energy_ratio_table = _mean('total_energy_kwh', learned_summaries) / max(
+            _mean('total_energy_kwh', sun_summaries), 1e-6)
+        agg_lines = [
+            'Paired rollouts: %d' % len(pairs),
+            '',
+            'Metric                          learned    sun_track   ratio (learned/sun)',
+            'mean |tilt - zenith| (deg)     %8s    %8s    %s' % (
+                _fmt(_mean('mean_abs_tilt_error_deg', learned_summaries), '%.2f'),
+                _fmt(_mean('mean_abs_tilt_error_deg', sun_summaries), '%.2f'),
+                _fmt(tilt_err_ratio, '%.2f')),
+            'mean action L1 (productive sun) %8s    %8s    %s' % (
+                _fmt(_mean('mean_action_l1_productive', learned_summaries), '%.3f'),
+                _fmt(_mean('mean_action_l1_productive', sun_summaries), '%.3f'),
+                _fmt(action_ratio_table, '%.2f')),
+            'total energy kWh (mean)         %8s    %8s    %s' % (
+                _fmt(_mean('total_energy_kwh', learned_summaries), '%.4f'),
+                _fmt(_mean('total_energy_kwh', sun_summaries), '%.4f'),
+                _fmt(energy_ratio_table, '%.2f')),
+            'total movement cost (mean)    %8s    %8s' % (
+                _fmt(_mean('total_movement_cost', learned_summaries), '%.5f'),
+                _fmt(_mean('total_movement_cost', sun_summaries), '%.5f')),
+        ]
+    else:
+        agg_lines = [
+            'Paired rollouts: 0',
+            '',
+            'No sun_tracking baseline rollouts found.',
+            'Re-run evaluate_agent.py with --compare-baselines for learned-vs-sun ratios.',
+        ]
     sections.append(('Aligned learned vs sun_tracking', agg_lines))
 
     if fixed_paths:
@@ -651,12 +742,7 @@ def _run_diagnosis(args):
         ]))
 
     training_params = load_training_params(trial_dir=args.trial_dir)
-    eval_summary_path = os.path.join(args.eval_dir, 'evaluation_summary.json')
-    eval_config = {}
-    if os.path.isfile(eval_summary_path):
-        import json
-        with open(eval_summary_path, encoding='utf-8') as f:
-            eval_config = json.load(f).get('eval_config') or {}
+    eval_config = eval_summary.get('eval_config') or {}
 
     if training_params:
         tlines = [
@@ -690,29 +776,42 @@ def _run_diagnosis(args):
                     training_params.get('config_version', '')).lower():
                 tlines.append(
                     'WARNING: config_version is not Stage 0 — see docs/PV_TRACKING_ROOT_CAUSES.md')
+            if (training_params.get('randomize_day') and eval_config.get('fixed_eval_dates')
+                    and 'stage0' in os.path.basename(args.eval_dir).lower()):
+                tlines.append(
+                    'WARNING: Stage 0 eval dir but checkpoint trained with randomize_day=True '
+                    '(RC5) — retrain stage0_single_day.py before trusting gates.')
         sections.append(('Training params.json vs eval', tlines))
 
     if args.progress_csv and os.path.isfile(args.progress_csv):
         prog = analyze_progress_csv(args.progress_csv, training_params=training_params)
         plines = ['File: %s' % prog['path'], 'epochs: %d' % prog['n_epochs']]
         for key in sorted(prog.keys()):
-            if key.endswith('_first') or key.endswith('_last') or key == 'alpha_collapsed':
+            if key.endswith('_first') or key.endswith('_last') or key == 'alpha_at_floor':
                 plines.append('%s: %s' % (key, prog[key]))
         floor = prog.get('min_alpha_config', 0.12)
-        if prog.get('alpha_collapsed'):
+        if prog.get('alpha_at_floor'):
             plines.append(
                 'NOTE: alpha at min_alpha floor (%.2f). Temperature cannot decrease further; '
-                'eval uses tanh(mu) — check policy/actions-mean vs rollout action L1.'
+                'this is not proof that sigma=0 or that entropy vanished.'
                 % floor)
+            plines.append(
+                'NOTE: policy/actions-mean is a signed sampled batch mean, not deployed action '
+                'magnitude. For deploy behavior, trust deterministic rollout action L1 and '
+                'policy/shifts-* more than policy/actions-mean alone.')
         if prog.get('evaluation/return-average_last', 0) < 0.75:
             plines.append('WARNING: eval return still below fixed baseline (~0.75 kWh) — undertrained or local optimum.')
         sections.append(('Training progress.csv', plines))
 
     # Root cause ranking from evidence (see docs/PV_TRACKING_ROOT_CAUSES.md)
-    ratio_action = _mean('mean_action_l1_productive', learned_summaries) / max(
-        _mean('mean_action_l1_productive', sun_summaries), 1e-6)
-    ratio_energy = _mean('total_energy_kwh', learned_summaries) / max(
-        _mean('total_energy_kwh', sun_summaries), 1e-6)
+    ratio_action = (
+        _mean('mean_action_l1_productive', learned_summaries) / max(
+            _mean('mean_action_l1_productive', sun_summaries), 1e-6)
+        if sun_summaries else float('nan'))
+    ratio_energy = (
+        _mean('total_energy_kwh', learned_summaries) / max(
+            _mean('total_energy_kwh', sun_summaries), 1e-6)
+        if sun_summaries else float('nan'))
     tilt_err_l = _mean('mean_abs_tilt_error_deg', learned_summaries)
     tilt_err_s = _mean('mean_abs_tilt_error_deg', sun_summaries)
     e_learned = _mean('total_energy_kwh', learned_summaries)
@@ -723,9 +822,9 @@ def _run_diagnosis(args):
     s0 = load_csv(sun_paths[0]) if sun_paths else []
     step0_line = ''
     if l0 and s0:
-        e0 = float(l0[0]['tilt_deg']) - float(l0[0]['solar_zenith_deg'])
+        e0 = pre_action_tilt_error_deg(l0[0])
         step0_line = (
-            'Step-0 sign test: e=tilt-zenith=%.1f° need sign(a_tilt)>0 got learned=%.3f sun=%.3f'
+            'Step-0 sign test (pre-action error): e=tilt-zenith=%.1f° need sign(a_tilt)>0 got learned=%.3f sun=%.3f'
             % (e0, float(l0[0]['action_tilt']), float(s0[0]['action_tilt'])))
 
     verdict_lines = [
@@ -735,12 +834,14 @@ def _run_diagnosis(args):
         '',
         'RC1 [100%] Eval policy a(s)=tanh(mu(s)), not training samples (gaussian_policy.py).',
         '     Train actions-std can be >> eval: deployment is mu-only by design.',
+        '     alpha at min_alpha is a floor, not proof that sigma=0 or exploration vanished.',
         '',
-        'RC2 [100%%] Small mean action magnitude: rho_A=%.3f (need ~0.3+ to track zenith swing).'
-        % ratio_action,
-        '     rho_G=%.3f (learned/sun energy).' % ratio_energy,
+        'RC2 [100%%] Small deterministic deploy action magnitude: rho_A=%s (need ~0.3+ to track zenith swing).'
+        % _fmt(ratio_action, '%.3f'),
+        '     Necessary |a| bound ~D/(5T) with D=zenith swing, T=39: see docs/PV_TRACKING_ROOT_CAUSES.md.',
+        '     rho_G=%s (learned/sun energy).' % _fmt(ratio_energy, '%.3f'),
         '',
-        'RC3 [95%] Wrong-signed tilt control (greedy zenith rule):',
+        'RC3 [100%] Wrong-signed tilt control (greedy zenith rule; step-0 + full episode):',
         '     sign agreement=%.0f%% (n=%d)  corr(e,a_tilt)=%.2f'
         % (100.0 * sign_stats.get('sign_agreement', float('nan')),
            sign_stats.get('sign_n', 0),

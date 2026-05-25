@@ -1,24 +1,23 @@
 """Stage 0 — stationary proof (single clearsky day, no day randomization).
 
-Use:
-  mbpo run_local examples.development \\
-    --config=examples.config.pv_tracking.stage0_single_day ...
-
-Gate: evaluate + diagnose_tracking --gate on same date before Stage 1.
+Full A→Z procedure and directories: docs/TRAINING_PROTOCOL.md
+  - Train: mbpo run_local … --config=examples.config.pv_tracking.stage0_single_day
+  - Eval:  evaluation/pv_stage0_single_day  (--fixed-eval-dates 2020-06-21)
+  - Gate:  scripts/diagnose_tracking.py --eval-dir evaluation/pv_stage0_single_day --gate
 """
 
 import importlib
 
 _stage1 = importlib.import_module('examples.config.pv_tracking.0')
 
-CONFIG_VERSION = 'pv_tracking_stage0_single_day_2026-05-24'
+CONFIG_VERSION = 'pv_tracking_stage0_single_day_physical_autoentropy_2026-05-25'
 TRAINING_STAGE = 'stage0'
 
 params = dict(_stage1.params)
 params['config_version'] = CONFIG_VERSION
 params['kwargs'] = dict(_stage1.params['kwargs'])
 params['kwargs'].update({
-    'n_epochs': 150,
+    'n_epochs': 250,
     # One day × 39 steps × ~50 episodes of uniform exploration.
     'n_initial_exploration_steps': 1950,
 })

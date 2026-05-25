@@ -1,10 +1,13 @@
-# PV tracking failure — verified root causes (Stage 0 eval)
+# PV tracking failure — root-cause ranking (Stage 0 eval)
 
 **Checkpoint:** `seed:6923_2026-05-24_20-45-32_az5ovrd/best_eval_checkpoint`  
 **Eval:** `evaluation/pv_stage0_single_day/` — date `2020-06-21`, clearsky, `movement_penalty=0`, `--deterministic`
 
-This document states five root causes with **code-backed mechanisms** and **measured evidence**.  
-“Confidence” = probability this cause is **active in this run** (not mutually exclusive; several apply at once).
+This note ranks the verified causes for the current checkpoint after code review
+plus the deterministic-vs-stochastic ablation. It separates **primary failure
+mechanisms** from **secondary contributors** and from **observed outcomes**.
+“Confidence” = probability this cause is **active in this run** (not mutually
+exclusive; several apply at once).
 
 ---
 
@@ -18,13 +21,34 @@ This document states five root causes with **code-backed mechanisms** and **meas
 | \(\rho_A\) | \(\bar{A}_{\text{learned}}/\bar{A}_{\text{sun}}\) | **0.053** | 1 | — |
 | \(\bar{E}\) | mean \(\|\text{tilt}-\text{zenith}\|\) (deg) | **15.03** | **4.60** | — |
 
-All 10 learned rollouts are **identical** (deterministic policy, \(\sigma=0\) across seeds).
+All 10 learned rollouts are **identical** because eval is deterministic on the same fixed-day MDP.
+This does **not** imply \(\sigma=0\); deterministic eval bypasses the sampled noise term.
 
 ---
 
-## RC1 — Eval deploys squashed mean, not training samples
+## Root-cause ranking
 
-**Confidence: 100%** (mechanism always true at eval; explains train/eval action gap)
+1. **RC3 — Wrong-signed tilt mean control**: highest-priority mechanism. The
+   learned mean tilt action often moves **away** from the greedy zenith-tracking
+   direction.
+2. **RC2 — Deploy mean action magnitude too small**: even when the sign is
+   correct, `tanh(μ)` is much too small to cover the day’s zenith swing.
+3. **RC5 — Training contract mismatch**: the checkpoint was trained on Stage 1
+   summer random-day data, then judged against the Stage 0 single-day proof.
+4. **RC1 — Deterministic deploy uses `tanh(μ)` rather than sampled actions**:
+   real mechanism, but the new ablation shows it is **not** the main limiter for
+   this checkpoint.
+5. **RC4 — Local optimum / quasi-fixed behavior**: useful description of the
+   failure mode, but not a separate upstream bug.
+
+The short conclusion is the one you stated: the dominant problem is the
+**learned mean policy itself**, especially its **tilt sign** and **scale**.
+
+---
+
+## RC1 — Deterministic deploy is real, but not the main limiter here
+
+**Confidence: 100% for the mechanism; secondary causal importance for this checkpoint**
 
 ### Mechanism (proved from code)
 
@@ -47,19 +71,35 @@ Off-policy SAC optimizes \(\mathbb{E}_{a\sim\pi}[\cdot]\) under the **stochastic
 
 | Metric | Value |
 |--------|-------|
-| `policy/actions-mean` | **−0.033** (typical \(\|a\|\) scale in training batches) |
+| `policy/shifts-mean` | **−0.0098** (signed batch-average pre-tanh mean; near zero) |
+| `policy/log_scale_diags-mean` | **−0.148** (\(\exp(\cdot)\approx 0.86\): still substantial unsquashed std) |
+| `policy/actions-mean` | **−0.033** (signed sampled batch mean; **not** action magnitude) |
 | `policy/actions-std` | **0.593** (stochastic spread) |
 | Eval rollout \(\bar{A}\) | **0.068** |
 
-**Conclusion:** Exploration during training **does not survive** in \(\pi_{\text{eval}}\). This is by construction, not env limitation.
+### Ablation (same checkpoint)
+
+| Eval mode | Mean reward / energy (kWh) | Interpretation |
+|-----------|----------------------------|----------------|
+| Deterministic (`tanh(μ)`) | **1.4274** | Canonical deploy policy |
+| Stochastic (`tanh(μ + σ\varepsilon)`) | **1.3653 ± 0.0956** | Reintroducing sampling did **not** rescue performance |
+
+If “lost exploration at test time” were the main blocker, stochastic evaluation
+should have improved sharply. It did not. For this checkpoint the issue is **not**
+“\(\sigma\) collapsed to zero”; it is a **weak mean policy with still substantial
+stochasticity**.
+
+**Conclusion:** RC1 is mathematically real, but the ablation demotes it from
+“main cause” to **secondary contributor**. The mean policy \(\mu\) is the real
+problem to fix.
 
 **Do not say:** “mode of the Gaussian” — the eval action is **not** \(\mathbb{E}[a]\); it is **\(\tanh(\mu)\)** with no noise.
 
 ---
 
-## RC2 — Mean action magnitude far below control authority
+## RC2 — Deploy mean action magnitude is far below control authority
 
-**Confidence: 100%** (direct measurement)
+**Confidence: 100%** (primary mechanism; direct measurement)
 
 ### Mechanism
 
@@ -83,7 +123,7 @@ Observed **0.07** → **impossible** to reach sun trajectory without changing \(
 
 ### SAC temperature (supporting, not primary)
 
-`target_entropy = 0` drives \(\mathcal{H}(\pi)\to 0\); `alpha = max(exp(log α), min_alpha)` with `min_alpha=0.35` (`mbpo/algorithms/mbpo.py` line 743).
+`target_entropy = 0` pushes SAC toward lower entropy; `alpha = max(exp(log α), min_alpha)` with `min_alpha=0.35` (`mbpo/algorithms/mbpo.py` line 743).
 
 Final `alpha = 0.35` exactly → **temperature floor**, not unbounded collapse.
 
@@ -91,9 +131,9 @@ Final `alpha = 0.35` exactly → **temperature floor**, not unbounded collapse.
 
 ---
 
-## RC3 — Wrong-signed tilt control (independent of magnitude)
+## RC3 — Wrong-signed tilt mean control (highest-priority mechanism)
 
-**Confidence: 95%** (stepwise sign test + correlation)
+**Confidence: 100%** (primary mechanism)
 
 ### Greedy one-step rule (sun baseline semantics)
 
@@ -110,10 +150,15 @@ For \(|e_t|>5^\circ\), optimal direction: \(\text{sign}(a^{(\text{tilt})}_t) = -
 
 | Test | Result |
 |------|--------|
-| Sign agreement with greedy rule | **8 / 38 = 21%** |
-| \(\text{corr}(e_t, a^{(\text{tilt})}_t)\) | **+0.73** |
+| Historical sign agreement with greedy rule | **8 / 38 = 21%** |
+| Historical \(\text{corr}(e_t, a^{(\text{tilt})}_t)\) | **+0.73** |
 
 Positive correlation means: when tilt is **below** zenith (\(e<0\)), learned tends **negative** \(a\) — **worsening** misalignment. This is **not** “cautious tracking”; it is **incorrect closed-loop direction**.
+
+The diagnostic implementation now computes this from the **pre-action
+observation** (the state that actually produced the action), which is the
+causally correct definition. Re-run `diagnose_tracking.py` to refresh the exact
+numbers under the corrected diagnostic; the ranking does not change.
 
 ### Why energy-only RL does not forbid this
 
@@ -122,7 +167,7 @@ Observations include zenith, but **no loss term** enforces \(a \propto -\text{si
 
 ---
 
-## RC4 — Local optimum of the energy landscape
+## RC4 — Local optimum description, not a separate upstream bug
 
 **Confidence: 100%** (outcome characterization)
 
@@ -182,7 +227,7 @@ Pure SAC on \(r_t=\text{energy}_t\) has **no guarantee** of converging to the su
 | No env exploration | Actions in \([-1,1]\); sun uses full box |
 | Multi-day chained episode | 39 steps, single date per episode |
 | Cloud / season noise at eval | Clearsky, one date |
-| “Entropy collapsed to zero” as primary story | α floored at 0.35; training `actions-std` ≈ 0.59 |
+| “Entropy collapsed to zero” as primary story | α floored at 0.35, but training `actions-std` ≈ 0.59 and \(\exp(\text{log_scale mean})\approx 0.86\) |
 
 **Diagnostic bug (fixed):** `verify_paired_fairness` used hardcoded `movement_penalty=0.0001`; Stage 0 uses **0**. Energy metrics were always valid.
 
@@ -190,14 +235,24 @@ Pure SAC on \(r_t=\text{energy}_t\) has **no guarantee** of converging to the su
 
 ## Causal summary (one paragraph)
 
-The pipeline implements SAC correctly, but **evaluates \(\tanh(\mu)\)** while **training samples** use \(\tanh(\mu+\sigma\varepsilon)\). For this checkpoint, \(\mu\) is **small** (\(\rho_A\approx 0.05\)) and **misaligned in sign** with the greedy zenith tracker (\(\text{corr}(e,a)>0\)), producing a **local energy maximum** above fixed and far below sun. Training was **Stage 1 / 30 epochs / random summer days**, not Stage 0 stationary — so even perfect SAC on the training MDP would not automatically pass the June-21 gate without retraining or imitation.
+The pipeline implements SAC correctly, but this checkpoint learned a **bad mean
+policy**: its deploy action magnitude is far too small and its tilt direction is
+often wrong-signed relative to the greedy zenith tracker. Deterministic deploy
+using \(\tanh(\mu)\) is a real SAC property, but the new ablation shows that
+turning stochastic sampling back on does **not** fix the checkpoint. That means
+the core problem is the learned \(\mu\) itself, not just missing test-time
+noise. Training was also **Stage 1 / 30 epochs / random summer days**, not the
+Stage 0 stationary proof, so even a mathematically correct SAC run was being
+asked to pass a different gate than the one it was optimized for.
 
 ---
 
 ## Principled fixes (ordered)
 
-1. Retrain `stage0_single_day.py` (150 epochs, `randomize_day=False`); verify `params.json` before long runs.
-2. Gate on **sun** (`diagnose_tracking.py --gate`, energy ratio ≥ 0.95).
-3. **BC / demonstrations** (`collect_sun_demonstrations.py`) — strongest fix for RC3.
-4. Optional: auxiliary loss on \(\cos(\text{AOI})\) or \(|\text{tilt}-\text{zenith}|\) (changes objective).
-5. Do **not** expect `min_alpha` alone to fix wrong sign when α is already at floor.
+1. Retrain from the **Stage 0 single-day contract** first, then Stage 1; verify `params.json` before long runs.
+2. Use **`physical` observation mode** as the canonical training/deployment contract; keep `legacy` only as an explicit ablation.
+3. Use principled SAC temperature defaults (`target_entropy='auto'`, no manual `min_alpha` floor) unless an ablation justifies overriding them.
+4. Gate on **sun** (`diagnose_tracking.py --gate`, energy ratio ≥ 0.95).
+5. **BC / demonstrations** (`collect_sun_demonstrations.py`) — strongest direct fix for RC3.
+6. Optional: auxiliary loss on \(\cos(\text{AOI})\) or \(|\text{tilt}-\text{zenith}|\) (changes objective).
+7. Do **not** expect stochastic eval or `min_alpha` alone to fix a bad mean policy.

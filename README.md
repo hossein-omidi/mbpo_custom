@@ -184,7 +184,7 @@ python scripts/check_pv_env.py --observation-mode physical --validate-weather
 python scripts/verify_training_config.py --config examples.config.pv_tracking.0
 ```
 
-**Pass:** `PASS — merged training variant matches examples.config.pv_tracking.0` and printed values include `n_epochs=250`, `min_alpha=0.12`, `exploration=2500`, `observation_mode='physical'`.
+**Pass:** `PASS — merged training variant matches examples.config.pv_tracking.0` and printed values include `n_epochs=250`, `min_alpha=0.0`, `exploration=6000`, `observation_mode='physical'`.
 
 Legacy 15-D ablation config (only if you intentionally train with `power_norm` + time features):
 
@@ -203,9 +203,18 @@ python scripts/verify_training_config.py --config examples.config.pv_tracking.1
 mbpo run_example_dry examples.development \
   --config=examples.config.pv_tracking.0 \
   --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+
+
+mbpo run_local examples.development \
+  --config=examples.config.pv_tracking.stage0_single_day\
+  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+ ...
+
+
+
 ```
 
-**Pass:** log contains `start_time='13:30' periods=40 (39 steps)`, `observation_mode='physical'`, `n_epochs: 300`, `config_version: pv_tracking_v4_beat_sun_2026-05-24`.
+**Pass:** log contains `start_time='13:30' periods=40 (39 steps)`, `observation_mode='physical'`, `n_epochs: 250`, `config_version: pv_tracking_stage1_clearsky_physical_autoentropy_2026-05-25`.
 
 **Optional (pvlib / MBPO schedule):**
 
@@ -402,11 +411,11 @@ Example from a completed `pv_tracking_v2` run: energy **0.774** vs fixed **0.697
 
 | Symptom | Likely cause | What to do |
 |---------|--------------|------------|
-| `params.json` has `n_epochs: 15` or old `min_alpha` | Training started without `--config=examples.config.pv_tracking.0` | Re-run Phase A3; always pass explicit `--config=...` |
+| `params.json` has unexpectedly low `n_epochs`, nonzero `min_alpha`, or `observation_mode='legacy'` for the canonical run | Training started from a stale config / ablation contract | Re-run Phase A3; always pass explicit `--config=...` and verify merged output |
 | `verify_training_config.py` FAIL | `base.py` / config mismatch | Fix config file; re-run verify until PASS |
 | Eval obs dim error | Checkpoint trained with `legacy` (15-D) vs `physical` (11-D) | Match `--observation_mode` in eval to checkpoint; see `evaluate_agent.py` message |
 | High training eval, low hold-out energy | Training eval ≠ December hold-out protocol | Always run Phase D with `--fixed-eval-dates` |
-| Learned beats fixed but not sun | Entropy collapse; quasi-fixed 30° pose | Read `diagnose_tracking.py` report; consider `config/1.py` legacy obs **only if** you choose to retrain |
+| Learned beats fixed but not sun | Deterministic deploy uses `tanh(mu)`; mean policy stays weak or wrong-signed | Read `diagnose_tracking.py` report; consider retraining only after checking deterministic vs stochastic eval |
 | Ray connection closed | Stale Ray session | Restart training; `ray stop` if needed |
 
 ---
@@ -873,12 +882,12 @@ Phase E:  diagnose_tracking.py     → diagnostics/tracking_diagnosis.txt
 
 | Field | Value | Meaning |
 |-------|-------|---------|
-| `CONFIG_VERSION` | `pv_tracking_stage1_clearsky_explore_2026-05-24` | Stage 1: clearsky summer, zero motion cost |
-| `n_epochs` | `300` | Long-run training |
+| `CONFIG_VERSION` | `pv_tracking_stage1_clearsky_physical_autoentropy_2026-05-25` | Stage 1: clearsky summer, physical obs, auto entropy |
+| `n_epochs` | `250` | Long-run training |
 | `epoch_length` | `39` | Real env steps per epoch |
-| `n_initial_exploration_steps` | `3900` | ~100 random episode days before policy learning |
-| `min_alpha` | `0.35` | Higher SAC entropy floor (less mean-policy collapse) |
-| `target_entropy` | `0.0` | Strong exploration for 2-D actions |
+| `n_initial_exploration_steps` | `6000` | Initial real-env exploration before policy learning |
+| `min_alpha` | `0.0` | No manual entropy floor |
+| `target_entropy` | `'auto'` | Standard SAC auto-temperature target (`-action_dim`) |
 | `real_ratio` | `1.0` | Real-env SAC batches only (stage 1) |
 | `discount` | `0.99` | More step-local energy credit |
 | `max_model_rollout_length` | `5` | MBPO imagined rollout cap (within one day) |
@@ -886,11 +895,11 @@ Phase E:  diagnose_tracking.py     → diagnostics/tracking_diagnosis.txt
 | `movement_penalty` | `0.0` | Reward = energy only (stage 1); same for baselines at eval |
 | `rollout_schedule` | `[30, 220, 2, 5]` | MBPO imagined rollout length schedule |
 | `randomize_initial_orientation` | `False` | Train/eval both start 30°/180° |
-| `observation_mode` | `physical` | 11-D obs (see observation doc) |
+| `observation_mode` | `physical` | 11-D obs with deployable sensor layout |
 | `weather_source` | `clearsky` | Stage 1: ideal irradiance |
 | `start_date` / `end_date` | `2020-06-01` / `2020-08-31` | Summer only |
 
-**Legacy ablation:** `examples/config/pv_tracking/1.py` — same hyperparameters, `observation_mode='legacy'` (15-D). Requires retrain; checkpoint dims differ.
+**Legacy ablation:** `examples/config/pv_tracking/1.py` remains the alternate observation-space experiment. Requires retrain; checkpoint dims differ.
 
 **Domain defaults** in `examples/development/base.py` are aligned with this config (`PVTracking` → 250 epochs, 2500 exploration) so partial merges are less dangerous; **always** use `--config=examples.config.pv_tracking.0` and run `verify_training_config.py`.
 

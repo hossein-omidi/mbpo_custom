@@ -4,7 +4,6 @@ from itertools import count
 import gtimer as gt
 import math
 import os
-import pdb
 
 import tensorflow as tf
 import numpy as np
@@ -158,9 +157,6 @@ class RLAlgorithm(tf.contrib.checkpoint.Checkpointable):
 
         self._training_before_hook()
 
-        env_samples = pool.return_all_samples()
-        pdb.set_trace()
-
         for self._epoch in gt.timed_for(range(self._epoch, self._n_epochs)):
             self._epoch_before_hook()
             gt.stamp('epoch_before_hook')
@@ -181,7 +177,6 @@ class RLAlgorithm(tf.contrib.checkpoint.Checkpointable):
                 gt.stamp('sample')
 
                 print('epoch: {} | timestep: {} | total timesteps: {}'.format(self._epoch, self._timestep, self._epoch_length))
-                pdb.set_trace()
 
                 if self.ready_to_train:
                     self._do_training_repeats(timestep=self._total_timestep)

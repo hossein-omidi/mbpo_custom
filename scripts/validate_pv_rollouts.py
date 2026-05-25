@@ -19,6 +19,7 @@ from mbpo.static.pv_tracking import (
     cyclic_slices_for_obs,
     observation_mode_from_obs,
 )
+from mbpo.env.pv_tracking import DEFAULT_START_HOUR
 
 
 def get_config(config_path):
@@ -378,7 +379,7 @@ def validate_legacy_mode_spotcheck():
     obs = env.reset()
     assert obs.shape == (LEGACY_OBS_DIM,)
     decoded = float(StaticFns.time_of_day_from_obs(obs))
-    assert abs(decoded - 6.0) < 0.05, 'legacy reset time decode'
+    assert abs(decoded - DEFAULT_START_HOUR) < 0.05, 'legacy reset time decode'
     env.close()
     print('  legacy shape and time decode: OK')
 

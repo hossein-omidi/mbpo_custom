@@ -42,11 +42,14 @@ def _checkpoint_dirs(experiment_root):
     if os.path.isdir(best):
         dirs.append(('best_eval_checkpoint', best))
     pattern = os.path.join(experiment_root, 'checkpoint_*')
-    for path in sorted(glob.glob(pattern)):
+    numbered = []
+    for path in glob.glob(pattern):
         name = os.path.basename(path)
         m = re.search(r'checkpoint_(\d+)', name)
         if m and os.path.isdir(path):
-            dirs.append((name, path))
+            numbered.append((int(m.group(1)), name, path))
+    for _, name, path in sorted(numbered):
+        dirs.append((name, path))
     return dirs
 
 
@@ -84,11 +87,15 @@ def evaluate_checkpoint(
 
     paths = []
     paths_by_name = {}
-    with policy.set_deterministic(args.deterministic):
-        for idx in range(args.num_rollouts):
-            eval_env.seed(idx)
-            paths.append(run_learned_policy_rollout(
-                eval_env, policy, args.max_path_length, render_mode=None))
+    deterministic = not args.stochastic
+    for idx in range(args.num_rollouts):
+        paths.append(run_learned_policy_rollout(
+            policy,
+            eval_env,
+            args.max_path_length,
+            seed=idx,
+            deterministic=deterministic,
+        ))
     paths_by_name['learned_policy'] = paths
 
     if args.compare_baselines:
@@ -137,7 +144,10 @@ def main():
     parser.add_argument('--variant-file', type=str, default='params.json')
     parser.add_argument('--num-rollouts', '-n', type=int, default=4)
     parser.add_argument('--max-path-length', type=int, default=39)
-    parser.add_argument('--deterministic', action='store_true')
+    parser.add_argument(
+        '--stochastic',
+        action='store_true',
+        help='Use sampled SAC actions instead of canonical deterministic tanh(mu).')
     parser.add_argument('--fixed-eval-dates', type=str, default=None)
     parser.add_argument('--test-start-date', type=str, default=None)
     parser.add_argument('--test-end-date', type=str, default=None)
@@ -165,7 +175,9 @@ def main():
 
     candidates = _checkpoint_dirs(root)
     if args.limit:
-        candidates = candidates[-args.limit:]
+        best = [item for item in candidates if item[0] == 'best_eval_checkpoint']
+        numbered = [item for item in candidates if item[0] != 'best_eval_checkpoint']
+        candidates = best + numbered[-args.limit:]
 
     gpu_options = tf.GPUOptions(allow_growth=True)
     session = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))

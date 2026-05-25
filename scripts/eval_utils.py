@@ -936,6 +936,18 @@ def write_eval_scenario_confirmation(outdir, eval_env_params, paths_by_name, max
     """Document matched evaluation settings across learned policy and baselines."""
     path = os.path.join(outdir, 'eval_scenario_confirmation.txt')
     kwargs = eval_env_params.get('kwargs', {})
+
+    def _path_seed(path, fallback_seed):
+        infos = path.get('infos', []) or []
+        if infos:
+            seed = infos[0].get('rollout_seed')
+            if seed not in (None, ''):
+                try:
+                    return int(seed)
+                except (TypeError, ValueError):
+                    pass
+        return int(fallback_seed)
+
     with open(path, 'w', encoding='utf-8') as f:
         f.write('PV Tracking — matched evaluation scenario\n')
         f.write('=' * 40 + '\n\n')
@@ -946,7 +958,7 @@ def write_eval_scenario_confirmation(outdir, eval_env_params, paths_by_name, max
         f.write('  [x] identical env kwargs (tz, start_time, periods, freq, weather)\n')
         f.write('  [x] randomize_initial_orientation=%s\n' % kwargs.get(
             'randomize_initial_orientation', False))
-        f.write('  [x] same seed=rollout_index per method\n')
+        f.write('  [x] per-rollout seed recorded in rollout metadata / CSV\n')
         f.write('  [x] same reward = energy_kwh - movement_cost\n')
         f.write('  [x] baselines do not call the neural policy\n')
         f.write('\nPer-method rollout dates (seed order):\n')
@@ -954,8 +966,9 @@ def write_eval_scenario_confirmation(outdir, eval_env_params, paths_by_name, max
             f.write('  %s:\n' % method)
             for idx, p in enumerate(paths, 1):
                 meta = get_rollout_metadata(p)
+                seed = _path_seed(p, idx - 1)
                 f.write('    rollout_%d seed=%d date=%s weather=%s steps=%d energy=%.4f kWh\n' % (
-                    idx, idx - 1, meta.get('date'), meta.get('weather_condition'),
+                    idx, seed, meta.get('date'), meta.get('weather_condition'),
                     meta.get('episode_length'), meta.get('total_energy_kwh')))
         f.write('\nTime standard: tz=%s, grid %s–%s UTC, %d steps per episode.\n' % (
             kwargs.get('tz', PV_TIMEZONE),
@@ -1103,7 +1116,7 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
 
         env_tz = infos[0].get('timezone', '') if infos else ''
         header = [
-            'step', 'clock_hour_utc', 'timezone', 'timestamp_utc_iso',
+            'step', 'rollout_seed', 'clock_hour_utc', 'timezone', 'timestamp_utc_iso',
             'reward', 'terminal',
             'power_w', 'energy_kwh', 'movement_cost',
             'reward_energy', 'reward_movement',
@@ -1121,6 +1134,7 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
             info = infos[t] if t < len(infos) else {}
             row = [
                 t,
+                info.get('rollout_seed', ''),
                 info.get(
                     'clock_hour_utc',
                     info.get('clock_hour_env_tz', info.get('clock_hour', info.get('time', ''))),

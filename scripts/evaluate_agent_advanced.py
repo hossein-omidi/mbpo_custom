@@ -304,6 +304,8 @@ def write_advanced_report(outdir, args, dates, summary_lines):
         f.write('compare_weather_sources: %s\n' % args.compare_weather_sources)
         f.write('dates: %s\n\n' % ', '.join(dates))
         f.write('Evaluation uses real PVTrackingEnv + trained policy only (no MBPO model).\n\n')
+        f.write('Matched method comparisons use aligned same-date rollouts only; ')
+        f.write('ensemble rollouts are reported separately.\n\n')
         for line in summary_lines:
             f.write('%s\n' % line)
     return path
@@ -348,7 +350,7 @@ def main():
         dim_info['policy_dim'], dim_info['env_dim'], dim_info['env_mode']))
     ref_env.close()
 
-    all_learned = []
+    aligned_learned = []
     all_baselines = {b: [] for b in args.baseline_types}
     aligned_paths = {}
     ensemble_by_date = {d: [] for d in dates}
@@ -367,7 +369,7 @@ def main():
                 policy_stochastic=policy_stochastic and method == 'learned_policy')
             aligned[method] = path
             if method == 'learned_policy':
-                all_learned.append(path)
+                aligned_learned.append(path)
             else:
                 all_baselines[method].append(path)
 
@@ -394,7 +396,6 @@ def main():
                 variant, args, path_length, policy, 'learned_policy', date,
                 seed, args.eval_weather_source, policy_stochastic=policy_stochastic)
             ensemble_by_date[date].append(path)
-            all_learned.append(path)
 
         stats = summarize_paths(ensemble_by_date[date])
         summary_lines.append(
@@ -412,21 +413,28 @@ def main():
             epath2, ensemble_by_date[date], date, 'cumulative_energy',
             'Cum. energy (kWh)', 'cumulative energy')
 
-    paths_by_name = {'learned_policy': all_learned}
+    aligned_paths_by_name = {'learned_policy': aligned_learned}
     for b in args.baseline_types:
-        paths_by_name[b] = all_baselines[b]
+        aligned_paths_by_name[b] = all_baselines[b]
 
     if not args.no_csv:
-        save_rollout_csv(os.path.join(args.outdir, 'rollouts'), all_learned, prefix='rollout')
+        save_rollout_csv(
+            os.path.join(args.outdir, 'rollouts'), aligned_learned, prefix='rollout')
+        ensemble_paths = []
+        for date in dates:
+            ensemble_paths.extend(ensemble_by_date[date])
+        save_rollout_csv(
+            os.path.join(args.outdir, 'ensemble_rollouts'), ensemble_paths, prefix='rollout')
         base_dir = os.path.join(args.outdir, 'baseline_rollouts')
         for b, paths in all_baselines.items():
             save_rollout_csv(os.path.join(base_dir, b), paths, prefix='rollout')
 
     if not args.no_reports:
         write_eval_scenario_confirmation(
-            args.outdir, eval_env_params, paths_by_name, path_length)
-        write_reward_time_report(args.outdir, all_learned, paths_by_name=paths_by_name)
-        rows = compare_method_table(paths_by_name)
+            args.outdir, eval_env_params, aligned_paths_by_name, path_length)
+        write_reward_time_report(
+            args.outdir, aligned_learned, paths_by_name=aligned_paths_by_name)
+        rows = compare_method_table(aligned_paths_by_name)
         with open(os.path.join(args.outdir, 'method_comparison.json'), 'w') as f:
             json.dump(rows, f, indent=2)
         write_advanced_report(args.outdir, args, dates, summary_lines)
