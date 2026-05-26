@@ -7,7 +7,8 @@ It is written for the current project state:
 - pure RL only
 - `movement_penalty=0.0`
 - physical observations
-- full-year random-weather Stage 3
+- full-year historical-weather Stage 3
+- bundled one-location historical weather file for the default site
 - programmatic exclusion of validation and final-test dates from training sampling
 - checkpoint selection on validation dates only
 - final reporting on untouched final-test dates only
@@ -23,6 +24,7 @@ Use these paths consistently.
 - Smoke-test runs: `/home/ecer/PVRL/mbpo/smoke_runs/`
 - Stage 3 validation eval output: `/home/ecer/PVRL/mbpo/evaluation/pv_stage3_validation_clean_split/`
 - Stage 3 final test output: `/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/`
+- Bundled historical weather CSV: `/home/ecer/PVRL/mbpo/data/pv_weather/albuquerque_pvgis_tmy_utc_15min.csv`
 
 Inside each Ray trial directory, the most important files are:
 
@@ -83,6 +85,15 @@ Optional helper variables:
 ```bash
 export ROOT=/home/ecer/PVRL/mbpo
 export RAY_ROOT="$HOME/ray_mbpo/PVTracking/pv_tracking"
+```
+
+Historical weather note:
+
+- the default site now uses a cached pvlib-compatible weather file
+- if you ever need to regenerate it, run:
+
+```bash
+python scripts/prepare_default_historical_weather.py
 ```
 
 ## 4. Recommended scientific workflow
@@ -349,7 +360,7 @@ EXTRA_EPOCHS=100 ./resume_stage3_refinement.sh /full/path/to/checkpoint_500
 
 What it now checks before resuming:
 
-- Stage 3 full-year random-weather contract
+- Stage 3 full-year historical-weather contract
 - physical observations
 - `movement_penalty=0.0`
 - clean-split `excluded_dates`

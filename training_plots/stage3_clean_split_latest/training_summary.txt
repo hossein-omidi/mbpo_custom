@@ -1,0 +1,5 @@
+Source: /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9155_2026-05-26_20-40-49c602xr78/progress.csv
+Rows: 358
+evaluation/return-average: first=1.141726 last=0.381154
+training/return-average: first=1.166738 last=0.951059
+model/val_loss: first=0.000041 last=0.000022

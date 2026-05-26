@@ -43,20 +43,19 @@ Built in `_build_weather_profile(times)` aligned to episode `times` (15 min, sam
 | temperature | Constant `self.temperature` | °C |
 | wind_speed | Constant `self.wind_speed` | m/s (not in obs) |
 
-### `weather_source='random'` (training default)
+### `weather_source='historical'` (training default)
 
-1. **pvlib clearsky** at each timestamp → baseline DNI/GHI.
-2. **Synthetic clouds:** per-step `clear` / `partly_cloudy` / `overcast` with persistence (75% stay same).
-3. **Scale:** `dni = clearsky_dni * direct_factor`, `ghi = clearsky_ghi * global_factor`.
-4. **DHI closure:** `dhi = clip(ghi - dni * cos(zenith), 0, ghi)` so **GHI ≈ beam horizontal + diffuse** matches pvlib `get_total_irradiance` inputs.
-5. **Temperature:** seasonal sine + Gaussian noise (not used in power today).
-6. **Wind:** noise around mean (not in obs, not in power).
+1. Load a **pvlib-compatible weather catalog** for the default site.
+2. Use timestamp-aligned **historical/TMY irradiance** (`dni`, `ghi`, `dhi`) instead of synthetic attenuation.
+3. Reindex that catalog onto the env episode grid (`13:30`–`23:15` UTC, 15 min).
+4. Derive a coarse `condition` label (`clear` / `partly_cloudy` / `overcast`) from historical-vs-clearsky irradiance ratios for diagnostics only.
+5. Carry through historical `temperature` and `wind_speed` from the dataset.
 
 **Scaling in obs:** divide by `IRRADIANCE_NORM=2000` W/m², `TEMPERATURE_NORM=50` °C.
 
-**Power:** `get_total_irradiance(..., dni, ghi, dhi, solar_zenith, solar_azimuth, model='isotropic')` × area × efficiency. Temperature/wind do **not** affect POA in the current model.
+**Power:** `get_total_irradiance(..., dni, ghi, dhi, solar_zenith, solar_azimuth, model='isotropic')` × area × efficiency. Historical irradiance therefore changes power directly. Temperature/wind are now dataset-backed and logged, but they do **not** yet affect the current power model.
 
-**Physical validity:** DNI, DHI, GHI ≥ 0; timestamps share index with solar position; random-mode DHI is consistent with GHI decomposition (see `scripts/check_pv_env.py --validate-weather`).
+**Physical validity:** DNI, DHI, GHI ≥ 0; timestamps share index with solar position; historical weather is loaded through pvlib-compatible readers / cached CSV and checked with `scripts/check_pv_env.py --validate-weather`.
 
 ## Modes
 

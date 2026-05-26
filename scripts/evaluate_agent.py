@@ -161,7 +161,7 @@ def parse_args():
         '--eval-weather-source',
         type=str,
         default=None,
-        choices=('random', 'clearsky'),
+        choices=('historical', 'clearsky'),
         help='Override weather_source for evaluation (default: use variant config).')
     parser.add_argument(
         '--eval-protocol',

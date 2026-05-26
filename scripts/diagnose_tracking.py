@@ -283,7 +283,7 @@ def aggregate_tilt_control_sign_stats(learned_paths, min_altitude_deg=5.0):
     """Aggregate sign diagnostics across all learned rollout CSVs.
 
     This is more stable than reading only rollout_1 when evaluation contains
-    multiple dates / seeds under random weather.
+    multiple dates / seeds under historical weather.
     """
     all_rows = []
     for path in learned_paths:

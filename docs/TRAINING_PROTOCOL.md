@@ -5,7 +5,7 @@ Phased procedure for proving the learned policy can match or beat `sun_tracking`
 **Rules**
 
 - Do **not** start Stage 1 until **Stage 0 gates pass**.
-- Do **not** use full-year random weather until **Stage 1 gates pass**.
+- Do **not** use full-year historical weather until **Stage 1 gates pass**.
 - Do **not** chain calendar days into multi-day episodes (one day = one episode, 39 steps).
 - Use **only** the directory names in [§2](#2-directory-layout-one-name-per-purpose) for each stage — do not reuse `evaluation/pv_daylight_utc` for Stage 0/1 science runs (that path is a legacy December hold-out).
 
@@ -79,7 +79,7 @@ evaluation/pv_stage0_single_day/          # example; use the row for your stage
 |---------|------|
 | Stage 0 config | `examples/config/pv_tracking/stage0_single_day.py` |
 | Stage 1 config | `examples/config/pv_tracking/0.py` |
-| Stage 2 config | `examples/config/pv_tracking/stage2_random_weather.py` |
+| Stage 2 config | `examples/config/pv_tracking/stage2_random_weather.py` (legacy filename; now historical weather) |
 | Sun demos (optional) | `demonstration/pv_stage0_sun.npz` |
 
 ### 2.4 Config modules (by stage)
@@ -88,7 +88,7 @@ evaluation/pv_stage0_single_day/          # example; use the row for your stage
 |-------|--------|-------------------------|--------------|------------------------|
 | **0** | `stage0_single_day.py` | `pv_tracking_stage0_…` | Single day `2020-06-21`, `randomize_day=False` | `--fixed-eval-dates 2020-06-21` |
 | **1** | `0.py` | `pv_tracking_stage1_…` | Summer `2020-06-01`…`2020-08-31`, `randomize_day=True` | `2020-06-07,2020-06-21,2020-07-15,2020-08-01` |
-| **2** | `stage2_random_weather.py` | `pv_tracking_stage2_…` | Summer `2020-06-01`…`2020-08-31`, `randomize_day=True`, `weather_source='random'` | `2020-06-07,2020-06-21,2020-07-15,2020-08-01` |
+| **2** | `stage2_random_weather.py` | `pv_tracking_stage2_…` | Summer `2020-06-01`…`2020-08-31`, `randomize_day=True`, `weather_source='historical'` (legacy filename retained) | `2020-06-07,2020-06-21,2020-07-15,2020-08-01` |
 
 Epoch counts and exploration steps live in the config files (not duplicated here). Always confirm with `verify_training_config.py` and `params.json` after the trial starts.
 
@@ -292,7 +292,7 @@ python scripts/diagnose_tracking.py \
 
 ### G — Advance
 
-Only after **F** passes → Stage 2 (random weather), using
+Only after **F** passes → Stage 2 (historical weather), using
 `examples/config/pv_tracking/stage2_random_weather.py` and a new evaluation
 directory.
 
@@ -312,18 +312,18 @@ Post-train eval must use the **canonical `evaluation/pv_stage*`** directory for 
 
 ---
 
-## 6.5 Stage 2 — procedure A->Z (summer random weather)
+## 6.5 Stage 2 — procedure A->Z (summer historical weather)
 
 **Goal:** Same summer hold-out dates, same physical observation/state contract,
-but now random weather in both training and post-train evaluation. This isolates
+but now historical weather in both training and post-train evaluation. This isolates
 weather robustness before any Stage 3 full-year expansion.
 
-**Config:** `examples/config/pv_tracking/stage2_random_weather.py`
+**Config:** `examples/config/pv_tracking/stage2_random_weather.py` (legacy filename retained)
 
 **Important:** Stage 2 intentionally preserves the current working training
-procedure and hyperparameters from Stage 1. In particular, `real_ratio=1.0`
-remains unchanged, so this is still a real-env training stage rather than a
-true model-rollout MBPO stage.
+procedure and hyperparameters from Stage 1. It inherits the MBPO settings from
+Stage 1, including model-based rollouts; it is not a pure real-data SAC
+ablation.
 
 ### A — Preflight
 
@@ -365,7 +365,7 @@ k=v['algorithm_params']['kwargs']
 e=v['environment_params']['training']['kwargs']
 assert 'stage2' in (v.get('config_version') or '').lower(), 'wrong config — not Stage 2'
 assert e.get('randomize_day') is True, 'Stage 2 training uses randomize_day=True'
-assert e.get('weather_source') == 'random', 'Stage 2 training must use random weather'
+assert e.get('weather_source') == 'historical', 'Stage 2 training must use historical weather'
 assert e.get('observation_mode') == 'physical', 'Stage 2 should stay on physical observations'
 print('n_epochs', k.get('n_epochs'), 'min_alpha', k.get('min_alpha'), 'real_ratio', k.get('real_ratio'))
 print('OK: Stage 2 params.json')
@@ -380,7 +380,7 @@ python scripts/evaluate_agent.py "$CKPT" \
   --eval-protocol inherit \
   --max-path-length 39 \
   --compare-baselines \
-  --eval-weather-source random \
+  --eval-weather-source historical \
   --fixed-eval-dates 2020-06-07,2020-06-21,2020-07-15,2020-08-01 \
   --num-rollouts 10
 ```

@@ -28,7 +28,7 @@ This repository trains a **model-based RL agent** to control a **two-axis solar 
 ## 1. What this project does
 
 - **Simulates** irradiance and panel power with pvlib at **35°N, 106°W** (configurable in `mbpo/env/pv_tracking.py`).
-- **Trains** on random calendar days in 2020 with stochastic weather (`weather_source='random'`).
+- **Trains** on random calendar days in 2020 with historical/TMY weather (`weather_source='historical'`) for the default site.
 - **Acts** with 2-D continuous commands: tilt and azimuth rate limits per 15-minute step.
 - **Optimizes** per-step reward: collected energy minus a movement penalty.
 - **Evaluates** with deterministic rollouts, optional baselines (`fixed_no_motion`, `sun_tracking`), CSV logs, and summary plots.
@@ -167,7 +167,7 @@ python scripts/check_pv_env.py --observation-mode physical
 
 **Pass:** `reset obs shape: (11,)`, `PVTracking environment checker completed successfully`.
 
-Optional: validate random weather table consistency:
+Optional: validate historical weather table consistency:
 
 ```bash
 python scripts/check_pv_env.py --observation-mode physical --validate-weather
@@ -252,11 +252,11 @@ mbpo run_local examples.development \
 1. **Independent episode:** `reset()` picks one random summer day in `[start_date, end_date]` (`clearsky`, **not** consecutive calendar rollout).
 2. Panel starts at **30° tilt, 180° azimuth** (`randomize_initial_orientation=False`).
 3. Collect **39** real transitions (`epoch_length` = `periods - 1`).
-4. With `real_ratio=1.0`, SAC trains on real env data (no model batch).
+4. With `real_ratio=0.8`, MBPO mixes real env data with short model rollouts.
 5. In-training eval uses **fixed summer dates** (`evaluation_environment_kwargs`) for `best_eval_checkpoint/`.
 6. Every 5 epochs → `checkpoint_<epoch>/` and `latest_checkpoint/`.
 
-**Do not** enable full-year random weather until Stage 1 gates pass ([evaluation/README.md](evaluation/README.md)).
+**Do not** enable full-year historical weather until Stage 1 gates pass ([evaluation/README.md](evaluation/README.md)).
 
 **Ray output directory:**
 

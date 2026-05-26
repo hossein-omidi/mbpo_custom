@@ -95,7 +95,7 @@ expected_excluded = expected_validation + expected_final
 
 assert 'stage3' in config_version.lower(), 'Not a Stage 3 trial: %s' % config_version
 assert env.get('observation_mode') == 'physical', env.get('observation_mode')
-assert env.get('weather_source') == 'random', env.get('weather_source')
+assert env.get('weather_source') == 'historical', env.get('weather_source')
 assert env.get('randomize_day') is True, env.get('randomize_day')
 assert env.get('start_date') == '2020-01-01', env.get('start_date')
 assert env.get('end_date') == '2020-12-31', env.get('end_date')
@@ -103,7 +103,7 @@ assert env.get('movement_penalty') == 0.0, env.get('movement_penalty')
 assert eval_env.get('movement_penalty') == 0.0, eval_env.get('movement_penalty')
 assert eval_env.get('fixed_eval_dates') == expected_validation, eval_env.get('fixed_eval_dates')
 assert env.get('excluded_dates') == expected_excluded, env.get('excluded_dates')
-assert eval_env.get('weather_source') == 'random', eval_env.get('weather_source')
+assert eval_env.get('weather_source') == 'historical', eval_env.get('weather_source')
 assert eval_env.get('randomize_day') is False, eval_env.get('randomize_day')
 
 print('Verified Stage 3 trial contract:')
@@ -155,7 +155,7 @@ python scripts/evaluate_agent.py "$BEST_CKPT" \
   --deterministic \
   --compare-baselines \
   --fixed-eval-dates "$STAGE3_FINAL_TEST_DATES" \
-  --eval-weather-source random \
+  --eval-weather-source historical \
   --eval-protocol inherit
 
 if [[ "$RUN_ADVANCED_EVAL" == "1" ]]; then
@@ -164,7 +164,7 @@ if [[ "$RUN_ADVANCED_EVAL" == "1" ]]; then
     --fixed-eval-dates "$STAGE3_FINAL_TEST_DATES" \
     --replicates-per-date "$ADVANCED_REPLICATES_PER_DATE" \
     --policy-mode deterministic \
-    --eval-weather-source random \
+    --eval-weather-source historical \
     --max-path-length "$MAX_PATH_LENGTH" \
     --eval-protocol inherit
 fi

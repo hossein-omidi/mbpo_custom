@@ -26,6 +26,18 @@ def make_physical_env():
     )
 
 
+def make_historical_env(start_date='2020-06-21', end_date='2020-06-21'):
+    return PVTrackingEnv(
+        randomize_day=False,
+        start_date=start_date,
+        end_date=end_date,
+        randomize_initial_orientation=False,
+        weather_source='historical',
+        movement_penalty=0.0,
+        observation_mode='physical',
+    )
+
+
 def advance_to_productive_sun(env, min_altitude_deg=20.0):
     obs = env.reset()
     action = np.zeros(2, dtype=np.float32)
@@ -239,3 +251,37 @@ def test_training_date_exclusion_is_enforced_programmatically():
         assert '2020-06-02' not in seen
     finally:
         env.close()
+
+
+def test_historical_weather_changes_irradiance_and_power():
+    hist_env = make_historical_env('2020-06-21', '2020-06-21')
+    clear_env = make_physical_env()
+    try:
+        hist_env.reset()
+        clear_env.reset()
+
+        midday_index = len(hist_env.times) // 2
+        hist_env.step_index = midday_index
+        clear_env.step_index = midday_index
+        hist_env.current_time = hist_env.times[midday_index]
+        clear_env.current_time = clear_env.times[midday_index]
+
+        hist_solar = hist_env._solar_position(hist_env.current_time)
+        clear_solar = clear_env._solar_position(clear_env.current_time)
+
+        hist_ghi = float(hist_env.weather_profile['ghi'].iloc[midday_index])
+        clear_ghi = float(clear_env.weather_profile['ghi'].iloc[midday_index])
+        hist_power = hist_env._power_from_orientation(
+            float(hist_solar.zenith), float(hist_solar.azimuth),
+            hist_env.tilt, hist_env.azimuth)
+        clear_power = clear_env._power_from_orientation(
+            float(clear_solar.zenith), float(clear_solar.azimuth),
+            clear_env.tilt, clear_env.azimuth)
+
+        assert hist_env.weather_profile['condition'].iloc[midday_index] in (
+            'clear', 'partly_cloudy', 'overcast')
+        assert hist_ghi < clear_ghi
+        assert hist_power < clear_power
+    finally:
+        hist_env.close()
+        clear_env.close()

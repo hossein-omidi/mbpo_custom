@@ -1,4 +1,4 @@
-"""Stage 2 — summer random-weather robustness (same site / same physical state).
+"""Stage 2 — summer historical-weather robustness (same site / same physical state).
 
 Full A->Z procedure and directories: docs/TRAINING_PROTOCOL.md
   - Train: mbpo run_local … --config=examples.config.pv_tracking.stage2_random_weather
@@ -8,11 +8,13 @@ Full A->Z procedure and directories: docs/TRAINING_PROTOCOL.md
 This stage intentionally preserves the working Stage 1 training procedure and
 hyperparameters. It changes only the experiment definition:
   * TRAINING_STAGE / CONFIG_VERSION
-  * weather_source: clearsky -> random
+  * weather_source: clearsky -> historical
   * canonical evaluation outdir/protocol target
 
-Note: real_ratio remains 1.0 by design, so this stage still uses real-env SAC
-style batches only. True model rollouts require a separate MBPO ablation config.
+Note: this stage inherits the current Stage 1 MBPO settings, including
+`real_ratio` and model-rollout scheduling. If you want a pure real-data SAC-like
+ablation, use a separate config instead of assuming this file disables model
+batches.
 """
 
 import importlib
@@ -27,10 +29,10 @@ params['config_version'] = CONFIG_VERSION
 params['kwargs'] = dict(_stage1.params['kwargs'])
 params['environment_kwargs'] = dict(_stage1.params['environment_kwargs'])
 params['environment_kwargs'].update({
-    'weather_source': 'random',
+    'weather_source': 'historical',
 })
 params['evaluation_environment_kwargs'] = dict(
     _stage1.params['evaluation_environment_kwargs'])
 params['evaluation_environment_kwargs'].update({
-    'weather_source': 'random',
+    'weather_source': 'historical',
 })

@@ -17,5 +17,4 @@ params['config_version'] = CONFIG_VERSION
 params['kwargs'] = dict(_base['params']['kwargs'])
 params['kwargs'].update({
     'n_epochs': 200,
-    'real_ratio': 0.9,
 })

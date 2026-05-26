@@ -17,10 +17,6 @@ def validate_weather_profile(env):
     dhi_residual = profile['ghi'].values - poa_direct
     dhi_expected = np.clip(dhi_residual, 0.0, profile['ghi'].values)
     max_dhi_err = float(np.max(np.abs(profile['dhi'].values - dhi_expected)))
-    if inner.weather_source != 'clearsky':
-        assert max_dhi_err < 1e-6, (
-            'Random weather DHI should satisfy ghi ~= dni*cos(zenith) + dhi; '
-            'max error {:.4g}'.format(max_dhi_err))
     assert (profile['dni'].values >= 0).all()
     assert (profile['dhi'].values >= 0).all()
     assert (profile['ghi'].values >= 0).all()
@@ -32,6 +28,14 @@ def validate_weather_profile(env):
     print('ghi  min/max: {:.1f} / {:.1f}'.format(profile['ghi'].min(), profile['ghi'].max()))
     print('temp min/max (C): {:.1f} / {:.1f}'.format(
         profile['temperature'].min(), profile['temperature'].max()))
+    if inner.weather_source == 'historical':
+        clearsky = inner.location.get_clearsky(times)
+        ghi_ratio = profile['ghi'].values / np.maximum(clearsky['ghi'].values, 1.0)
+        print('historical weather note: no exact DHI closure check; using dataset irradiance directly')
+        print('historical/clearsky GHI ratio min/max: {:.3f} / {:.3f}'.format(
+            float(np.min(ghi_ratio)), float(np.max(ghi_ratio))))
+    else:
+        print('clearsky decomposition residual max: {:.4f}'.format(max_dhi_err))
     print('weather profile alignment: OK ({} timestamps)'.format(len(times)))
 
 
@@ -42,6 +46,12 @@ def main():
         choices=('legacy', 'physical'),
         default='legacy',
         help='Observation layout (default: legacy for checkpoint compatibility).',
+    )
+    parser.add_argument(
+        '--weather-source',
+        choices=('clearsky', 'historical'),
+        default='historical',
+        help='Weather source to load for the smoke test (default: historical).',
     )
     parser.add_argument(
         '--log-obs',
@@ -58,6 +68,7 @@ def main():
     env = gym.make(
         'PVTracking-v0',
         observation_mode=args.observation_mode,
+        weather_source=args.weather_source,
         log_observations=args.log_obs,
     )
     inner = env.unwrapped

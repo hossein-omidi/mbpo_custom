@@ -95,8 +95,8 @@ def parse_args():
     p.add_argument('--policy-mode', choices=('deterministic', 'stochastic'),
                    default='deterministic',
                    help='deterministic: SAC mean action; stochastic: sample actions')
-    p.add_argument('--eval-weather-source', choices=('random', 'clearsky'),
-                   default='random', help='Weather for main rollouts and ensemble')
+    p.add_argument('--eval-weather-source', choices=('historical', 'clearsky'),
+                   default='historical', help='Weather for main rollouts and ensemble')
     p.add_argument('--compare-weather-sources', action='store_true',
                    help='Also run clearsky learned rollouts for overlay plots')
     p.add_argument('--vary-init-orientation', action='store_true',
@@ -257,17 +257,17 @@ def plot_weather_compare(outpath, path_random, path_clear, date, seed):
     t_r = rollout_time_axis(path_random)
     t_c = rollout_time_axis(path_clear)
     axes[0].plot(t_r, series_from_path(path_random, 'power'), color='#1f77b4', lw=2,
-                 label='random weather')
+                 label='historical weather')
     axes[0].plot(t_c, series_from_path(path_clear, 'power'), color='#9467bd', lw=2,
                  linestyle='--', label='clearsky')
     axes[1].plot(t_r, series_from_path(path_random, 'cumulative_energy'), color='#1f77b4', lw=2,
-                 label='random weather')
+                 label='historical weather')
     axes[1].plot(t_c, series_from_path(path_clear, 'cumulative_energy'), color='#9467bd', lw=2,
                  linestyle='--', label='clearsky')
 
     fig.suptitle(
         'Learned policy — weather comparison — %s seed=%d\n'
-        'Solid=random  Dashed=clearsky (same seed, same date)' % (date, seed),
+        'Solid=historical  Dashed=clearsky (same seed, same date)' % (date, seed),
         fontsize=11)
     axes[0].set_ylabel('Power (W)')
     axes[1].set_ylabel('Cum. energy (kWh)')

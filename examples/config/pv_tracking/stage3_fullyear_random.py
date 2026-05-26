@@ -1,4 +1,4 @@
-"""Stage 3 — full-year random-weather robustness (same site / same physical state).
+"""Stage 3 — full-year historical-weather robustness (same site / same physical state).
 
 Full A->Z procedure is orchestrated by run_sequential_stages.sh.
 This config preserves the working Stage 2 training setup and changes only:
@@ -40,7 +40,7 @@ params['environment_kwargs'].update({
     'start_date': '2020-01-01',
     'end_date': '2020-12-31',
     'randomize_day': True,
-    'weather_source': 'random',
+    'weather_source': 'historical',
 })
 params['evaluation_environment_kwargs'] = dict(
     _stage2.params['evaluation_environment_kwargs'])
@@ -49,5 +49,5 @@ params['evaluation_environment_kwargs'].update({
     'end_date': '2020-12-31',
     'fixed_eval_dates': STAGE3_FIXED_EVAL_DATES,
     'randomize_day': False,
-    'weather_source': 'random',
+    'weather_source': 'historical',
 })

@@ -1,7 +1,7 @@
-"""Stage 3 final full-year pure-RL config with clean date splits.
+"""Stage 3 final full-year historical-weather config with clean date splits.
 
 Training:
-  - full year random-weather physical observations
+  - full year historical-weather physical observations
   - excludes validation and final-test dates from sampling
 
 Validation:
@@ -48,7 +48,7 @@ params['environment_kwargs'].update({
     'start_date': '2020-01-01',
     'end_date': '2020-12-31',
     'randomize_day': True,
-    'weather_source': 'random',
+    'weather_source': 'historical',
     'excluded_dates': TRAIN_EXCLUDED_DATES,
     'movement_penalty': 0.0,
     'observation_mode': 'physical',
@@ -61,6 +61,6 @@ params['evaluation_environment_kwargs'].update({
     'excluded_dates': None,
     'fixed_eval_dates': VALIDATION_DATES,
     'randomize_day': False,
-    'weather_source': 'random',
+    'weather_source': 'historical',
     'movement_penalty': 0.0,
 })
