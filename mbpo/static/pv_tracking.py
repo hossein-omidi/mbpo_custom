@@ -110,7 +110,13 @@ class StaticFns:
             step_hours=DEFAULT_STEP_HOURS):
         """Estimate wall-clock hour from solar zenith/azimuth (physical obs only).
 
-        Used for MBPO horizon checks when clock time is not in the observation.
+        Approximate helper only. In physical mode the policy observation does not
+        include clock time, so this reconstruction matches against a fixed
+        reference-date solar grid and can drift across seasons. Prefer exact
+        replay metadata such as `remaining_steps` for rollout-horizon filtering.
+
+        Used for diagnostics / fallback checks when clock time is not in the
+        observation.
         Matches the fixed daily schedule (UTC start_time, 15 min steps) by searching
         the episode hour grid on a reference date at the env's lat/lon.
         """
@@ -163,20 +169,29 @@ class StaticFns:
     @staticmethod
     def is_valid_rollout_start_obs(
             obs,
+            required_remaining_steps=0,
             margin_hours=HORIZON_TIME_TOLERANCE_HOURS,
             start_hour=DEFAULT_START_HOUR,
             num_actions=DEFAULT_NUM_ACTIONS,
             step_hours=DEFAULT_STEP_HOURS):
-        """True for states that are not already at/past the real episode horizon."""
+        """True when enough real env steps remain for a model rollout.
+
+        `required_remaining_steps=0` preserves the old meaning: current obs is not
+        already at/past the real episode horizon. For MBPO physical observations,
+        this method is only approximate because time is reconstructed from solar
+        geometry. Prefer exact replay metadata when available.
+        """
         if observation_mode_from_obs(obs) == 'physical':
             time_of_day = StaticFns.time_of_day_from_solar_obs(obs)
         else:
             time_of_day = StaticFns.time_of_day_from_obs(obs)
         end_hour = StaticFns.episode_end_hour(start_hour, num_actions, step_hours)
-        cutoff = end_hour - margin_hours
-        if np.ndim(time_of_day) == 0:
-            return bool(time_of_day < cutoff)
-        return time_of_day < cutoff
+        remaining = np.rint((end_hour - np.asarray(time_of_day)) / step_hours).astype(np.int64)
+        remaining = np.clip(remaining, 0, int(num_actions))
+        valid = remaining > int(required_remaining_steps)
+        if np.ndim(valid) == 0:
+            return bool(valid)
+        return valid
 
     @staticmethod
     def normalize_cyclic_pairs(obs):

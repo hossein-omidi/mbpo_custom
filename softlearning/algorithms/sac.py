@@ -36,7 +36,7 @@ class SAC(RLAlgorithm):
             lr=3e-4,
             reward_scale=1.0,
             target_entropy='auto',
-            discount=0.99,
+            discount=1,
             tau=5e-3,
             target_update_interval=1,
             action_prior='uniform',

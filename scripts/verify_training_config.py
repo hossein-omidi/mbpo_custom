@@ -45,6 +45,7 @@ ENV_KEYS = (
     'randomize_day',
     'start_date',
     'end_date',
+    'excluded_dates',
 )
 
 

@@ -64,11 +64,26 @@ class SimpleReplayPool(FlexibleReplayPool):
                     'shape': (1, ),
                     'dtype': 'bool'
                 },
+                'remaining_steps': {
+                    'shape': (1, ),
+                    'dtype': 'int32'
+                },
             }
         }
 
         super(SimpleReplayPool, self).__init__(
             *args, fields_attrs=fields, **kwargs)
+
+    def add_path(self, path):
+        path = dict(path)
+        if 'remaining_steps' not in path:
+            if not path:
+                return super(SimpleReplayPool, self).add_path(path)
+            key = next(iter(path.keys()))
+            path_length = int(path[key].shape[0])
+            path['remaining_steps'] = np.arange(
+                path_length, 0, -1, dtype=np.int32).reshape(-1, 1)
+        return super(SimpleReplayPool, self).add_path(path)
 
     def add_samples(self, samples):
         if not isinstance(self._observation_space, Dict):

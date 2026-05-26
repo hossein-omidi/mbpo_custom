@@ -223,7 +223,15 @@ class ExperimentRunner(tune.Trainable):
         ]
 
         for experience_path in experience_paths:
-            self.replay_pool.load_experience(experience_path)
+            try:
+                self.replay_pool.load_experience(experience_path)
+            except Exception as exc:
+                raise RuntimeError(
+                    'Failed to restore replay pool from {}. '
+                    'Older replay buffers may be incompatible with the current '
+                    'remaining_steps metadata required for exact PV rollout filtering. '
+                    'Retrain from scratch or disable replay-pool restore.'.format(
+                        experience_path)) from exc
 
     def _restore(self, checkpoint_dir):
         assert isinstance(checkpoint_dir, str), checkpoint_dir

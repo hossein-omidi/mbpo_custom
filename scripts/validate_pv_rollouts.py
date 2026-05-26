@@ -12,6 +12,7 @@ import os
 import numpy as np
 
 from softlearning.environments.utils import get_environment_from_params
+from softlearning.replay_pools.simple_replay_pool import SimpleReplayPool
 from mbpo.static.pv_tracking import (
     StaticFns,
     LEGACY_OBS_DIM,
@@ -202,11 +203,11 @@ def validate_static_fns_legacy(env):
     print('  StaticFns legacy validation passed.')
 
 
-def validate_static_fns_physical(env):
-    """Physical 11-D: env horizon via done; model horizon via rollout_length only."""
+def validate_static_fns_physical(env, rollout_length=1):
+    """Physical 11-D: env horizon via done; replay metadata must respect rollout length."""
     print('\nStaticFns validation (physical 11-D):')
     print('  episode_end_hour:', StaticFns.episode_end_hour())
-    print('  model-rollout horizon: rollout_length cap (StaticFns terminates on non-finite only)')
+    print('  model-rollout horizon: exact replay remaining_steps filter, no solar-stop termination')
 
     inner = env.unwrapped
     max_steps = inner.periods + 1
@@ -235,28 +236,49 @@ def validate_static_fns_physical(env):
     assert done, 'Env should end episode within {} steps'.format(max_steps)
     assert spurious_terminals == 0, 'No spurious model-rollout terminals before env done'
     _validate_static_postprocess(env, last_obs)
-    validate_model_rollout_depth_cap(env)
+    validate_replay_remaining_steps(env, rollout_length=rollout_length)
     print('  StaticFns physical validation passed.')
 
 
-def validate_model_rollout_depth_cap(env):
-    """Physical StaticFns must not early-stop; MBPO rollout_length caps depth."""
+def validate_replay_remaining_steps(env, rollout_length):
+    """Exact remaining-step metadata must exclude near-terminal starts."""
     obs = env.reset()
     act = np.zeros(env.action_space.shape, dtype=np.float32)
-    rollout_length = 3
-    for step in range(rollout_length):
-        next_obs, _, done, _ = env.step(act)
-        term = StaticFns.termination_fn(
-            obs[None].astype(np.float32),
-            act[None].astype(np.float32),
-            next_obs[None].astype(np.float32),
-        )
-        if term.any() and not done:
-            raise AssertionError(
-                'StaticFns terminated at rollout step {} before env done'.format(step))
+    path = {
+        'observations': [],
+        'actions': [],
+        'rewards': [],
+        'terminals': [],
+        'next_observations': [],
+    }
+    for _ in range(env.unwrapped.num_action_steps):
+        next_obs, reward, done, _ = env.step(act)
+        path['observations'].append(obs)
+        path['actions'].append(act.copy())
+        path['rewards'].append([reward])
+        path['terminals'].append([done])
+        path['next_observations'].append(next_obs)
         obs = next_obs
-    print('  model rollout depth: StaticFns allows {} imagined steps without solar stop'.format(
+        if done:
+            break
+    for key in path:
+        path[key] = np.asarray(path[key])
+
+    pool = SimpleReplayPool(env.observation_space, env.action_space, max_size=256)
+    pool.add_path(path)
+    remaining = pool.fields['remaining_steps'][:pool.size].squeeze(-1)
+    expected = np.arange(env.unwrapped.num_action_steps, 0, -1, dtype=np.int32)
+    if not np.array_equal(remaining, expected):
+        raise AssertionError(
+            'remaining_steps mismatch: got {} expected {}'.format(
+                remaining.tolist(), expected.tolist()))
+    valid = remaining > rollout_length
+    valid_rows = [(int(i), int(remaining[i]), bool(valid[i]))
+                  for i in range(len(remaining)) if remaining[i] <= rollout_length]
+    print('  replay remaining_steps exclude near-terminal states for rollout_length={}'.format(
         rollout_length))
+    if valid_rows:
+        print('  near-terminal states checked:', valid_rows[:5])
 
 
 def _validate_static_postprocess(env, last_obs):
@@ -271,11 +293,11 @@ def _validate_static_postprocess(env, last_obs):
     print('  postprocess_next_obs: cyclic norms OK')
 
 
-def validate_static_fns(env):
+def validate_static_fns(env, rollout_length=1):
     obs = env.reset()
     mode = observation_mode_from_obs(obs)
     if mode == 'physical':
-        validate_static_fns_physical(env)
+        validate_static_fns_physical(env, rollout_length=rollout_length)
     else:
         validate_static_fns_legacy(env)
 
@@ -362,7 +384,8 @@ def main():
     validate_episode_timing(env)
     validate_reward_consistency(env, num_steps=args.env_steps)
     validate_observation_bounds(env, num_steps=args.env_steps)
-    validate_static_fns(env)
+    validate_static_fns(
+        env, rollout_length=int(params['kwargs'].get('max_model_rollout_length', 1)))
     validate_env(env, num_steps=args.env_steps)
     validate_legacy_mode_spotcheck()
     validate_reward_power_decoupling(env)

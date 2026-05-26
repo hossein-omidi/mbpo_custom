@@ -279,6 +279,108 @@ def tilt_control_sign_stats(learned_rows, min_altitude_deg=5.0):
     }
 
 
+def aggregate_tilt_control_sign_stats(learned_paths, min_altitude_deg=5.0):
+    """Aggregate sign diagnostics across all learned rollout CSVs.
+
+    This is more stable than reading only rollout_1 when evaluation contains
+    multiple dates / seeds under random weather.
+    """
+    all_rows = []
+    for path in learned_paths:
+        all_rows.extend(load_csv(path))
+    return tilt_control_sign_stats(all_rows, min_altitude_deg=min_altitude_deg)
+
+
+def step0_sign_summary(pairs):
+    """Aggregate first-step sign behavior across aligned learned/sun pairs."""
+    if not pairs:
+        return None
+
+    n = 0
+    agree = 0
+    examples = []
+    learned_actions = []
+    sun_actions = []
+    errors = []
+
+    for lp, sp, tag in pairs:
+        lrows = load_csv(lp)
+        srows = load_csv(sp)
+        if not lrows or not srows:
+            continue
+        l0 = lrows[0]
+        s0 = srows[0]
+        e0 = pre_action_tilt_error_deg(l0)
+        need = np.nan
+        if abs(e0) >= 0.5:
+            need = 1.0 if e0 < 0 else -1.0
+            n += 1
+            if ((float(l0['action_tilt']) > 0 and need > 0)
+                    or (float(l0['action_tilt']) < 0 and need < 0)):
+                agree += 1
+        if len(examples) < 3:
+            examples.append({
+                'tag': tag,
+                'error_deg': float(e0),
+                'need_sign': float(need) if np.isfinite(need) else np.nan,
+                'learned_action_tilt': float(l0['action_tilt']),
+                'sun_action_tilt': float(s0['action_tilt']),
+            })
+        learned_actions.append(float(l0['action_tilt']))
+        sun_actions.append(float(s0['action_tilt']))
+        errors.append(float(e0))
+
+    return {
+        'n': int(n),
+        'agreement': float(agree / n) if n else float('nan'),
+        'examples': examples,
+        'mean_error_deg': float(np.mean(errors)) if errors else float('nan'),
+        'mean_learned_action_tilt': float(np.mean(learned_actions)) if learned_actions else float('nan'),
+        'mean_sun_action_tilt': float(np.mean(sun_actions)) if sun_actions else float('nan'),
+    }
+
+
+def summarize_pair_coverage(pairs):
+    """Describe per-date pair counts and whether pairing is balanced."""
+    if not pairs:
+        return []
+
+    counts = {}
+    seed_counts = {}
+    for lp, sp, tag in pairs:
+        rows = load_csv(lp)
+        date = rows[0].get('date') if rows else tag
+        counts[date] = counts.get(date, 0) + 1
+        key = None
+        if rows:
+            seed = rows[0].get('rollout_seed')
+            try:
+                if seed not in (None, '') and np.isfinite(float(seed)):
+                    key = (date, int(float(seed)))
+            except (TypeError, ValueError):
+                key = None
+        if key is not None:
+            seed_counts[key] = seed_counts.get(key, 0) + 1
+
+    unique_counts = sorted(set(counts.values()))
+    lines = [
+        'paired learned/sun rollouts: %d' % len(pairs),
+        'dates covered: %d' % len(counts),
+        'per-date pair counts: %s' % ', '.join(
+            '%s=%d' % (date, counts[date]) for date in sorted(counts.keys())),
+    ]
+    if len(unique_counts) == 1:
+        lines.append('coverage balance: OK — each date has %d paired rollout(s).' % unique_counts[0])
+    else:
+        lines.append('coverage balance: NOTE — uneven pairs per date (%s).' % unique_counts)
+    dup_seed_keys = [k for k, v in seed_counts.items() if v > 1]
+    if dup_seed_keys:
+        lines.append('seed pairing: NOTE — duplicate (date, rollout_seed) keys found: %d' % len(dup_seed_keys))
+    else:
+        lines.append('seed pairing: OK — no duplicate (date, rollout_seed) pairings detected.')
+    return lines
+
+
 def verify_paired_fairness(learned_rows, baseline_rows, movement_penalty=None):
     """Same date/weather per step, same reward formula."""
     lines = []
@@ -615,6 +717,7 @@ def _run_diagnosis(args):
         fair_ok, fair_lines = verify_paired_fairness(
             l0, s0, movement_penalty=movement_penalty)
         sections.append(('Eval fairness (rollout_1 learned vs sun_tracking)', fair_lines))
+        sections.append(('Paired coverage (all aligned rollouts)', summarize_pair_coverage(pairs)))
 
     protocol_lines = []
     if eval_deterministic is False:
@@ -817,15 +920,8 @@ def _run_diagnosis(args):
     e_learned = _mean('total_energy_kwh', learned_summaries)
     e_fixed = _mean('total_energy_kwh', fixed_summaries) if fixed_summaries else float('nan')
 
-    sign_stats = tilt_control_sign_stats(load_csv(learned_paths[0]))
-    l0 = load_csv(learned_paths[0])
-    s0 = load_csv(sun_paths[0]) if sun_paths else []
-    step0_line = ''
-    if l0 and s0:
-        e0 = pre_action_tilt_error_deg(l0[0])
-        step0_line = (
-            'Step-0 sign test (pre-action error): e=tilt-zenith=%.1f° need sign(a_tilt)>0 got learned=%.3f sun=%.3f'
-            % (e0, float(l0[0]['action_tilt']), float(s0[0]['action_tilt'])))
+    sign_stats = aggregate_tilt_control_sign_stats(learned_paths)
+    step0_stats = step0_sign_summary(pairs)
 
     verdict_lines = [
         'Formal write-up: docs/PV_TRACKING_ROOT_CAUSES.md',
@@ -847,8 +943,23 @@ def _run_diagnosis(args):
            sign_stats.get('sign_n', 0),
            sign_stats.get('corr_tilt_error_action_tilt', float('nan'))),
     ]
-    if step0_line:
-        verdict_lines.append('     %s' % step0_line)
+    if step0_stats and step0_stats.get('n', 0) > 0:
+        verdict_lines.append(
+            '     step-0 agreement across aligned rollouts=%.0f%% (n=%d); mean e=%.1f° learned=%.3f sun=%.3f'
+            % (100.0 * step0_stats.get('agreement', float('nan')),
+               step0_stats.get('n', 0),
+               step0_stats.get('mean_error_deg', float('nan')),
+               step0_stats.get('mean_learned_action_tilt', float('nan')),
+               step0_stats.get('mean_sun_action_tilt', float('nan'))))
+        for ex in step0_stats.get('examples', []):
+            need_str = ('+' if ex.get('need_sign') > 0 else '-') if np.isfinite(ex.get('need_sign', np.nan)) else '?'
+            verdict_lines.append(
+                '       example %s: e=%.1f° need sign(a_tilt)=%s got learned=%.3f sun=%.3f'
+                % (ex.get('tag'),
+                   ex.get('error_deg', float('nan')),
+                   need_str,
+                   ex.get('learned_action_tilt', float('nan')),
+                   ex.get('sun_action_tilt', float('nan'))))
     verdict_lines.extend([
         '',
         'RC4 [100%%] Local energy optimum: G_fixed < G_learned < G_sun (%.4f < %.4f < %.4f kWh).'

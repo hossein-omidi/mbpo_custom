@@ -44,7 +44,7 @@ class SQL(RLAlgorithm):
             kernel_fn=adaptive_isotropic_gaussian_kernel,
             kernel_n_particles=16,
             kernel_update_ratio=0.5,
-            discount=0.99,
+            discount=1,
             tau=5e-3,
             reward_scale=1,
             use_saved_Q=False,

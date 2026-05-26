@@ -1,0 +1,136 @@
+{
+  "Q_params": {
+    "kwargs": {
+      "hidden_layer_sizes": [
+        256,
+        256
+      ]
+    },
+    "type": "double_feedforward_Q_function"
+  },
+  "algorithm_params": {
+    "kwargs": {
+      "action_prior": "uniform",
+      "deterministic": false,
+      "discount": 1,
+      "early_stop_patience": null,
+      "epoch_length": 39,
+      "eval_deterministic": true,
+      "eval_n_episodes": 1,
+      "eval_render_mode": null,
+      "lr": 0.0003,
+      "max_model_rollout_length": 5,
+      "max_model_t": 20,
+      "min_alpha": 0.0,
+      "model_retain_epochs": 1,
+      "model_train_freq": 39,
+      "monitor_metric": "evaluation/return-average",
+      "n_epochs": 4,
+      "n_initial_exploration_steps": 78,
+      "n_train_repeat": 1,
+      "num_elites": 2,
+      "num_networks": 3,
+      "q_loss_stop_threshold": null,
+      "q_loss_warning_threshold": null,
+      "real_ratio": 0.8,
+      "reparameterize": true,
+      "reward_scale": 1.0,
+      "rollout_batch_size": 32,
+      "rollout_schedule": [
+        0,
+        3,
+        2,
+        5
+      ],
+      "save_every_epochs": 0,
+      "store_extra_policy_info": false,
+      "target_entropy": "auto",
+      "target_update_interval": 1,
+      "tau": 0.005,
+      "train_every_n_steps": 1
+    },
+    "type": "MBPO"
+  },
+  "config_version": "pv_tracking_smoke_model_rollout_2026-05-26",
+  "domain": "PVTracking",
+  "environment_params": {
+    "evaluation": {
+      "domain": "PVTracking",
+      "kwargs": {
+        "end_date": "2020-06-30",
+        "fixed_eval_dates": [
+          "2020-06-07",
+          "2020-06-14"
+        ],
+        "freq": "15min",
+        "movement_penalty": 0.0,
+        "observation_mode": "physical",
+        "periods": 40,
+        "randomize_day": false,
+        "randomize_initial_orientation": false,
+        "start_date": "2020-06-01",
+        "start_time": "13:30",
+        "temperature": 23.0,
+        "tz": "UTC",
+        "weather_source": "clearsky",
+        "wind_speed": 2.0
+      },
+      "task": "v0",
+      "universe": "gym"
+    },
+    "training": {
+      "domain": "PVTracking",
+      "kwargs": {
+        "end_date": "2020-06-30",
+        "freq": "15min",
+        "movement_penalty": 0.0,
+        "observation_mode": "physical",
+        "periods": 40,
+        "randomize_day": true,
+        "randomize_initial_orientation": false,
+        "start_date": "2020-06-01",
+        "start_time": "13:30",
+        "temperature": 23.0,
+        "tz": "UTC",
+        "weather_source": "clearsky",
+        "wind_speed": 2.0
+      },
+      "task": "v0",
+      "universe": "gym"
+    }
+  },
+  "exp_name": "pv_tracking",
+  "git_sha": null,
+  "log_dir": "/home/ecer/PVRL/mbpo/smoke_runs",
+  "policy_params": {
+    "kwargs": {
+      "hidden_layer_sizes": [
+        256,
+        256
+      ],
+      "squash": true
+    },
+    "type": "GaussianPolicy"
+  },
+  "replay_pool_params": {
+    "kwargs": {
+      "max_size": 1000000
+    },
+    "type": "SimpleReplayPool"
+  },
+  "restore": null,
+  "run_params": {
+    "checkpoint_at_end": true,
+    "checkpoint_frequency": 30,
+    "checkpoint_replay_pool": false,
+    "seed": 7929
+  },
+  "sampler_params": {
+    "kwargs": {
+      "batch_size": 256,
+      "max_path_length": 39,
+      "min_pool_size": 39
+    },
+    "type": "SimpleSampler"
+  }
+}

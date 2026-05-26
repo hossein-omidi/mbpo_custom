@@ -51,7 +51,7 @@ ALGORITHM_PARAMS_BASE = {
         'eval_n_episodes': 1,
         'eval_deterministic': True,
 
-        'discount': 0.99,
+        'discount': 1,
         'tau': 5e-3,
         'reward_scale': 1.0,
         'model_reset_freq': 1000,

@@ -52,7 +52,7 @@ class MBPO(RLAlgorithm):
             lr=3e-4,
             reward_scale=1.0,
             target_entropy='auto',
-            discount=0.99,
+            discount=1,
             tau=5e-3,
             target_update_interval=1,
             action_prior='uniform',
@@ -459,20 +459,53 @@ class MBPO(RLAlgorithm):
         terminals = self._pool.fields['terminals'][:self._pool.size].squeeze(-1)
         observations = self._pool.fields['observations'][:self._pool.size]
         nonterminal_indices = np.where(~terminals)[0]
+        filter_stats = {
+            'candidate_start_states_before_filter': int(len(nonterminal_indices)),
+            'candidate_start_states_after_filter': 0,
+            'min_accepted_remaining_steps': np.nan,
+            'max_accepted_remaining_steps': np.nan,
+            'using_exact_remaining_steps_filter': False,
+        }
 
-        is_valid_start = getattr(self._static_fns, 'is_valid_rollout_start_obs', None)
-        if is_valid_start is not None:
-            valid_mask = is_valid_start(observations)
-            candidate_indices = nonterminal_indices[valid_mask[nonterminal_indices]]
+        remaining_steps = self._pool.fields.get('remaining_steps')
+        if remaining_steps is not None:
+            remaining_steps = remaining_steps[:self._pool.size].squeeze(-1)
+            candidate_indices = nonterminal_indices[
+                remaining_steps[nonterminal_indices] > self._rollout_length]
+            filter_stats['using_exact_remaining_steps_filter'] = True
+            if len(candidate_indices) > 0:
+                accepted_remaining = remaining_steps[candidate_indices]
+                min_remaining = int(np.min(accepted_remaining))
+                assert min_remaining > int(self._rollout_length), (
+                    min_remaining, self._rollout_length)
+                filter_stats['min_accepted_remaining_steps'] = float(np.min(accepted_remaining))
+                filter_stats['max_accepted_remaining_steps'] = float(np.max(accepted_remaining))
         else:
             candidate_indices = nonterminal_indices
 
+        is_valid_start = getattr(self._static_fns, 'is_valid_rollout_start_obs', None)
+        if len(candidate_indices) > 0 and remaining_steps is None and is_valid_start is not None:
+            obs_mode = getattr(getattr(self._training_environment, 'unwrapped', self._training_environment),
+                               'observation_mode', None)
+            if obs_mode == 'physical':
+                raise RuntimeError(
+                    'Physical-mode MBPO requires exact replay remaining_steps metadata. '
+                    'This replay pool appears incompatible (for example, restored from an '
+                    'older checkpoint). Retrain from scratch or restore a compatible replay pool.')
+            try:
+                valid_mask = is_valid_start(
+                    observations, required_remaining_steps=self._rollout_length)
+            except TypeError:
+                valid_mask = is_valid_start(observations)
+            candidate_indices = nonterminal_indices[valid_mask[nonterminal_indices]]
+
+        filter_stats['candidate_start_states_after_filter'] = int(len(candidate_indices))
+        self._last_model_rollout_filter_stats = filter_stats
+
         if len(candidate_indices) == 0:
             print('[ Model Rollout ] No valid non-terminal pre-horizon start states; '
-                  'falling back to non-terminal pool samples.')
-            candidate_indices = nonterminal_indices
-        if len(candidate_indices) == 0:
-            return self.sampler.random_batch(batch_size)
+                  'skipping model rollout.')
+            return None
 
         replace = len(candidate_indices) < batch_size
         indices = np.random.choice(
@@ -480,7 +513,7 @@ class MBPO(RLAlgorithm):
         observation_keys = getattr(self.sampler.env, 'observation_keys', None)
         return self._pool.batch_by_indices(
             indices,
-            field_name_filter='observations',
+            field_name_filter=lambda name: name in ('observations', 'remaining_steps'),
             observation_keys=observation_keys,
         )
 
@@ -489,19 +522,48 @@ class MBPO(RLAlgorithm):
             self._epoch, self._rollout_length, rollout_batch_size
         ))
         batch = self._sample_model_rollout_start_states(rollout_batch_size)
+        if batch is None or len(batch['observations']) == 0:
+            rollout_stats = {
+                'mean_rollout_length': 0.0,
+                'rollout_length': self._rollout_length,
+                'model_pool_size': self._model_pool.size,
+                'mean_model_dev': np.nan,
+                'mean_model_log_prob': np.nan,
+                'model_rollout_samples': 0,
+                'model_rollout_boundary_reaches_or_crosses': 0,
+                **getattr(self, '_last_model_rollout_filter_stats', {}),
+            }
+            self._last_model_rollout_stats = rollout_stats
+            return rollout_stats
         obs = batch['observations']
+        remaining_steps = batch.get('remaining_steps')
+        current_remaining_steps = (
+            remaining_steps.squeeze(-1).astype(np.int32)
+            if remaining_steps is not None else None)
         steps_added = []
         action_low = self._training_environment.action_space.low
         action_high = self._training_environment.action_space.high
+        boundary_reaches_or_crosses = 0
 
         for i in range(self._rollout_length):
+            if current_remaining_steps is not None:
+                boundary_reaches_or_crosses += int(np.sum(current_remaining_steps <= 1))
             act = self._policy.actions_np(obs)
             act = np.clip(act, action_low, action_high)
 
             next_obs, rew, term, info = self.fake_env.step(obs, act, **kwargs)
             steps_added.append(len(obs))
 
-            samples = {'observations': obs, 'actions': act, 'next_observations': next_obs, 'rewards': rew, 'terminals': term}
+            samples = {
+                'observations': obs,
+                'actions': act,
+                'next_observations': next_obs,
+                'rewards': rew,
+                'terminals': term,
+            }
+            if current_remaining_steps is not None:
+                next_remaining_steps = np.maximum(current_remaining_steps - 1, 0).astype(np.int32)
+                samples['remaining_steps'] = next_remaining_steps[:, None]
             self._model_pool.add_samples(samples)
 
             nonterm_mask = ~term.squeeze(-1)
@@ -510,6 +572,8 @@ class MBPO(RLAlgorithm):
                 break
 
             obs = next_obs[nonterm_mask]
+            if current_remaining_steps is not None:
+                current_remaining_steps = next_remaining_steps[nonterm_mask]
 
         mean_rollout_length = sum(steps_added) / rollout_batch_size
         rollout_stats = {
@@ -519,7 +583,9 @@ class MBPO(RLAlgorithm):
             'mean_model_dev': float(np.mean(info['dev'])) if len(info['dev']) > 0 else np.nan,
             'mean_model_log_prob': float(np.mean(info['log_prob'])) if len(info['log_prob']) > 0 else np.nan,
             'model_rollout_samples': int(sum(steps_added)),
+            'model_rollout_boundary_reaches_or_crosses': int(boundary_reaches_or_crosses),
         }
+        rollout_stats.update(getattr(self, '_last_model_rollout_filter_stats', {}))
         self._last_model_rollout_stats = rollout_stats
         print('[ Model Rollout ] Added: {:.1e} | Model pool: {:.1e} (max {:.1e}) | Length: {} | Mean dev: {:.4f} | Train rep: {}'.format(
             sum(steps_added), self._model_pool.size, self._model_pool._max_size, mean_rollout_length, rollout_stats['mean_model_dev'], self._n_train_repeat
@@ -878,6 +944,12 @@ class MBPO(RLAlgorithm):
             'mean_model_log_prob': float(self._last_model_rollout_stats.get('mean_model_log_prob', np.nan)),
             'model_rollout_length': int(self._last_model_rollout_stats.get('rollout_length', getattr(self, '_rollout_length', 0))),
             'model_rollout_samples': int(self._last_model_rollout_stats.get('model_rollout_samples', 0)),
+            'candidate_start_states_before_filter': int(self._last_model_rollout_stats.get('candidate_start_states_before_filter', 0)),
+            'candidate_start_states_after_filter': int(self._last_model_rollout_stats.get('candidate_start_states_after_filter', 0)),
+            'min_accepted_remaining_steps': float(self._last_model_rollout_stats.get('min_accepted_remaining_steps', np.nan)),
+            'max_accepted_remaining_steps': float(self._last_model_rollout_stats.get('max_accepted_remaining_steps', np.nan)),
+            'using_exact_remaining_steps_filter': int(bool(self._last_model_rollout_stats.get('using_exact_remaining_steps_filter', False))),
+            'model_rollout_boundary_reaches_or_crosses': int(self._last_model_rollout_stats.get('model_rollout_boundary_reaches_or_crosses', 0)),
         })
 
         policy_diagnostics = self._policy.get_diagnostics(

@@ -14,6 +14,8 @@ TRIAL_GPUS="${TRIAL_GPUS:-0}"
 
 # Extend the restored Stage 3 run by this many additional epochs.
 EXTRA_EPOCHS="${EXTRA_EPOCHS:-100}"
+VALIDATION_DATES="2020-02-15,2020-05-15,2020-08-15,2020-11-15"
+FINAL_TEST_DATES="2020-01-15,2020-03-20,2020-06-21,2020-09-22,2020-10-15,2020-12-21"
 
 # Optional input:
 #   - omitted: prefer sequential_stage_artifacts/stage3_trial_dir.txt, else latest trial
@@ -45,7 +47,7 @@ if [[ -z "$SOURCE_INPUT" ]]; then
 fi
 
 INSPECT_JSON="$(
-python - "$ROOT" "$RAY_ROOT" "$SOURCE_INPUT" <<'PY'
+python - "$ROOT" "$RAY_ROOT" "$SOURCE_INPUT" "$VALIDATION_DATES" "$FINAL_TEST_DATES" <<'PY'
 import csv
 import json
 import os
@@ -53,7 +55,7 @@ import pickle
 import re
 import sys
 
-repo_root, ray_root, source_input = sys.argv[1:]
+repo_root, ray_root, source_input, validation_dates, final_test_dates = sys.argv[1:]
 sys.path.insert(0, repo_root)
 
 from scripts.pv_trial_paths import resolve_trial_dir
@@ -139,7 +141,10 @@ with open(params_path, 'r', encoding='utf-8') as f:
 
 config_version = str(variant.get('config_version', ''))
 env = variant['environment_params']['training']['kwargs']
+eval_env = variant['environment_params']['evaluation']['kwargs']
 algo = variant['algorithm_params']['kwargs']
+expected_excluded = [d for d in (validation_dates.split(',') + final_test_dates.split(',')) if d]
+expected_validation = [d for d in validation_dates.split(',') if d]
 
 if 'stage3' not in config_version.lower():
     raise SystemExit('Refinement requires a Stage 3 trial, got config_version=%r' % config_version)
@@ -152,6 +157,14 @@ if env.get('randomize_day') is not True:
     raise SystemExit('Refinement requires randomize_day=True, got %r' % env.get('randomize_day'))
 if env.get('observation_mode') != 'physical':
     raise SystemExit('Refinement requires observation_mode=physical, got %r' % env.get('observation_mode'))
+if env.get('movement_penalty') != 0.0:
+    raise SystemExit('Refinement requires movement_penalty=0.0, got %r' % env.get('movement_penalty'))
+if list(env.get('excluded_dates') or []) != expected_excluded:
+    raise SystemExit('Refinement requires clean-split excluded_dates=%r, got %r'
+                     % (expected_excluded, env.get('excluded_dates')))
+if list(eval_env.get('fixed_eval_dates') or []) != expected_validation:
+    raise SystemExit('Refinement requires validation fixed_eval_dates=%r, got %r'
+                     % (expected_validation, eval_env.get('fixed_eval_dates')))
 
 restore_epoch = _load_restore_epoch(restore_ckpt)
 progress_epoch = _last_progress_epoch(trial_dir)
@@ -191,7 +204,7 @@ total epoch budget so a restored checkpoint can continue optimizing.
 
 import importlib
 
-_base = importlib.import_module('examples.config.pv_tracking.stage3_fullyear_random')
+_base = importlib.import_module('examples.config.pv_tracking.stage3_fullyear_random_clean_split')
 
 CONFIG_VERSION = 'pv_tracking_stage3_refine_to_${TARGET_TOTAL_EPOCHS}_${STAMP}'
 TRAINING_STAGE = 'stage3'
