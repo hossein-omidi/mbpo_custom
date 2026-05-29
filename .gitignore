@@ -109,7 +109,14 @@ venv.bak/
 *.swp
 .idea
 *.mp4
-data/
+
+# Keep data ignored, except the fixed PVGIS weather dataset required for HPC runs
+data/*
+!data/pv_weather/
+data/pv_weather/*
+!data/pv_weather/albuquerque_pvgis_tmy_utc_15min.csv
+!data/pv_weather/albuquerque_pvgis_tmy_utc_15min.metadata.json
+
 vis/
 tmp/
 vendor/*
