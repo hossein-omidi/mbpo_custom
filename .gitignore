@@ -126,3 +126,7 @@ ray_mbpo/
 # Post-training eval (scripts/evaluate_agent.py). Canonical local run: evaluation/pv_daylight_utc/
 evaluation/*
 !evaluation/.gitkeep
+
+# Keep the source package mbpo/env tracked
+!mbpo/env/
+!mbpo/env/**
