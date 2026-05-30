@@ -12,16 +12,31 @@ Use this exact flow for the clean full-year run.
 
 ## 1. Shell setup
 
+If the `mbpo` conda env does not exist yet (see `environment/pv-env.yml`):
+
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
+conda env create -f environment/pv-env.yml
+conda activate mbpo
+pip install 'pvlib==0.10.4' 'tables==3.7.0' --no-deps
+pip install 'opencv-python-headless==4.2.0.34'
+pip install -e viskit
+pip install -e .
+```
+
+Then for every session:
+
+```bash
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 ```
 
 ## 2. Clean old generated outputs
 
 ```bash
-cd /home/ecer/PVRL/mbpo
+cd /home/user01/mbpo_custom
 rm -rf training_plots/stage3_clean_split_latest
 rm -rf evaluation/pv_stage3_final_clean_test
 rm -rf evaluation/pv_stage3_validation_clean_split
@@ -30,8 +45,8 @@ rm -rf evaluation/pv_stage3_validation_clean_split
 ## 3. Prepare historical weather file
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 python scripts/prepare_default_historical_weather.py
@@ -40,21 +55,24 @@ python scripts/prepare_default_historical_weather.py
 ## 4. Preflight
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 python scripts/check_pv_env.py --observation-mode physical --weather-source historical --validate-weather
 python scripts/verify_training_config.py --config examples.config.pv_tracking.stage3_fullyear_random_clean_split
 python scripts/validate_pv_rollouts.py --config-path examples/config/pv_tracking/stage3_fullyear_random_clean_split.py
 pytest tests/test_pv_tracking_audit.py -q
+mbpo run_example_dry examples.development \
+  --config=examples.config.pv_tracking.stage3_fullyear_random_clean_split \
+  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
 ```
 
 ## 5. Train
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 mbpo run_local examples.development \
@@ -79,8 +97,8 @@ echo "$TRIAL"
 Create updated plots:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 python scripts/plot_training_progress.py "$TRIAL" \
@@ -90,7 +108,7 @@ python scripts/plot_training_progress.py "$TRIAL" \
 Refresh plots every 60 seconds:
 
 ```bash
-watch -n 60 "bash -lc 'cd /home/ecer/PVRL/mbpo && source /home/ecer/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
+watch -n 60 "bash -lc 'cd /home/user01/mbpo_custom && source /home/user01/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
 ```
 
 Print latest training status:
@@ -120,8 +138,8 @@ PY
 ## 8. Final evaluation
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 ./run_stage3_posttrain.sh "$TRIAL"
@@ -132,9 +150,9 @@ conda activate mbpo
 ```bash
 python - <<'PY'
 files = [
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/evaluation_summary.txt',
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/eval_scenario_confirmation.txt',
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/diagnostics/tracking_diagnosis.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/evaluation_summary.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/eval_scenario_confirmation.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/diagnostics/tracking_diagnosis.txt',
 ]
 for f in files:
     print('\n===== %s =====' % f)
@@ -145,8 +163,8 @@ PY
 ## 10. One-command summary
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 python scripts/prepare_default_historical_weather.py
 python scripts/check_pv_env.py --observation-mode physical --weather-source historical --validate-weather

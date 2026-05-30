@@ -104,6 +104,22 @@ All training, evaluation, baselines, and plots share **one** time definition. Th
 
 ## 4. Installation
 
+For **PV tracking** on Ubuntu (no MuJoCo), use the conda-forge-only env file.
+The default Anaconda `defaults` channel returns HTTP 403 on some VMs.
+
+```bash
+cd /home/user01/mbpo_custom
+source ~/miniconda3/etc/profile.d/conda.sh
+conda env create -f environment/pv-env.yml
+conda activate mbpo
+pip install 'pvlib==0.10.4' 'tables==3.7.0' --no-deps
+pip install 'opencv-python-headless==4.2.0.34'
+pip install -e viskit
+pip install -e .
+```
+
+Legacy full MBPO benchmark install (MuJoCo + GPU TensorFlow):
+
 ```bash
 git clone --recursive https://github.com/jannerm/mbpo.git
 cd mbpo

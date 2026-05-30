@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/home/ecer/PVRL/mbpo"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RAY_ROOT="${RAY_ROOT:-$HOME/ray_mbpo/PVTracking/pv_tracking}"
-CONDA_SH="${CONDA_SH:-/home/ecer/miniconda3/etc/profile.d/conda.sh}"
+CONDA_SH="${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 STAGE3_VALIDATION_DATES="2020-02-15,2020-05-15,2020-08-15,2020-11-15"

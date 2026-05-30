@@ -233,7 +233,7 @@ def resolve_checkpoint_path(checkpoint_pattern):
         'Checkpoint directory not found: %s\n'
         'Use an explicit checkpoint path or a scoped glob; refusing to fall back '
         'to an unrelated newest checkpoint elsewhere.\n'
-        'Example: /home/ecer/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51'
+        'Example: ~/ray_mbpo/PVTracking/pv_tracking/seed:9314_2026-05-20_10-17-430gnvtopf/checkpoint_51'
         % checkpoint_pattern)
 
 

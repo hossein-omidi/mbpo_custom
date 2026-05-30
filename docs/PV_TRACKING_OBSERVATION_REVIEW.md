@@ -76,7 +76,7 @@ Built in `_build_weather_profile(times)` aligned to episode `times` (15 min, sam
 ## Verification commands
 
 ```bash
-/home/ecer/miniconda3/envs/mbpo/bin/python scripts/check_pv_env.py --observation-mode legacy
-/home/ecer/miniconda3/envs/mbpo/bin/python scripts/check_pv_env.py --observation-mode physical --log-obs --validate-weather
-/home/ecer/miniconda3/envs/mbpo/bin/python scripts/validate_pv_rollouts.py
+/home/user01/miniconda3/envs/mbpo/bin/python scripts/check_pv_env.py --observation-mode legacy
+/home/user01/miniconda3/envs/mbpo/bin/python scripts/check_pv_env.py --observation-mode physical --log-obs --validate-weather
+/home/user01/miniconda3/envs/mbpo/bin/python scripts/validate_pv_rollouts.py
 ```

@@ -17,14 +17,14 @@ It is written for the current project state:
 
 Use these paths consistently.
 
-- Repo root: `/home/ecer/PVRL/mbpo`
+- Repo root: `/home/user01/mbpo_custom`
 - Ray training trials: `~/ray_mbpo/PVTracking/pv_tracking/seed:<id>_<timestamp>.../`
-- Sequential-script artifacts: `/home/ecer/PVRL/mbpo/sequential_stage_artifacts/`
-- Training plots: `/home/ecer/PVRL/mbpo/training_plots/`
-- Smoke-test runs: `/home/ecer/PVRL/mbpo/smoke_runs/`
-- Stage 3 validation eval output: `/home/ecer/PVRL/mbpo/evaluation/pv_stage3_validation_clean_split/`
-- Stage 3 final test output: `/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/`
-- Bundled historical weather CSV: `/home/ecer/PVRL/mbpo/data/pv_weather/albuquerque_pvgis_tmy_utc_15min.csv`
+- Sequential-script artifacts: `/home/user01/mbpo_custom/sequential_stage_artifacts/`
+- Training plots: `/home/user01/mbpo_custom/training_plots/`
+- Smoke-test runs: `/home/user01/mbpo_custom/smoke_runs/`
+- Stage 3 validation eval output: `/home/user01/mbpo_custom/evaluation/pv_stage3_validation_clean_split/`
+- Stage 3 final test output: `/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/`
+- Bundled historical weather CSV: `/home/user01/mbpo_custom/data/pv_weather/albuquerque_pvgis_tmy_utc_15min.csv`
 
 Inside each Ray trial directory, the most important files are:
 
@@ -75,15 +75,15 @@ Untouched final-test dates used only for final reported comparison:
 Run this first in every new shell:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 ```
 
 Optional helper variables:
 
 ```bash
-export ROOT=/home/ecer/PVRL/mbpo
+export ROOT=/home/user01/mbpo_custom
 export RAY_ROOT="$HOME/ray_mbpo/PVTracking/pv_tracking"
 ```
 
@@ -114,8 +114,8 @@ Do not restore an old replay pool for the final clean experiment.
 Run these before the long training job:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 python scripts/verify_training_config.py \
@@ -132,8 +132,8 @@ pytest tests/test_pv_tracking_audit.py -q
 This short run is useful when you want to confirm MBPO synthetic rollouts and the new rollout-boundary filtering are active before full retraining.
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 mbpo run_local examples.development \
@@ -144,15 +144,15 @@ mbpo run_local examples.development \
   --trial-cpus=2
 ```
 
-Smoke-test artifacts are written under `/home/ecer/PVRL/mbpo/smoke_runs/`.
+Smoke-test artifacts are written under `/home/user01/mbpo_custom/smoke_runs/`.
 
 ## 7. Stage 3 full training from scratch
 
 This is the main clean experiment.
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 mbpo run_local examples.development \
@@ -221,7 +221,7 @@ This writes:
 ### 9.2 Refresh plots every 60 seconds
 
 ```bash
-watch -n 60 "bash -lc 'cd /home/ecer/PVRL/mbpo && source /home/ecer/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
+watch -n 60 "bash -lc 'cd /home/user01/mbpo_custom && source /home/user01/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
 ```
 
 ### 9.3 Print the latest progress rows in the terminal
@@ -263,8 +263,8 @@ PY
 This is the canonical post-train command now:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 ./run_stage3_posttrain.sh "$TRIAL"
@@ -283,19 +283,19 @@ What the script now does:
 
 Final outputs are written to:
 
-- `/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/`
-- `/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/advanced/`
-- `/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/diagnostics/`
+- `/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/`
+- `/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/advanced/`
+- `/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/diagnostics/`
 
 Important generated files:
 
 ```bash
 python - <<'PY'
 paths = [
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/recommended_checkpoint.txt',
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/evaluation_summary.txt',
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/eval_scenario_confirmation.txt',
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/diagnostics/tracking_diagnosis.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/recommended_checkpoint.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/evaluation_summary.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/eval_scenario_confirmation.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/diagnostics/tracking_diagnosis.txt',
 ]
 for p in paths:
     print(p)
@@ -313,8 +313,8 @@ Yes, you can still use the three shell scripts as one workflow, but their roles 
 ### 11.1 Start the sequential curriculum
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 ./run_sequential_stages.sh
@@ -345,8 +345,8 @@ The refinement script still works, but now it is intentionally restricted to cle
 Resume from the latest saved Stage 3 trial:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 EXTRA_EPOCHS=100 ./resume_stage3_refinement.sh "$( < sequential_stage_artifacts/stage3_trial_dir.txt )"
@@ -369,8 +369,8 @@ What it now checks before resuming:
 ### 11.3 Run the final untouched test after sequential training or refinement
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 ./run_stage3_posttrain.sh "$( < sequential_stage_artifacts/stage3_trial_dir.txt )"
@@ -387,8 +387,8 @@ If you resumed Stage 3 and want the newest trial automatically:
 If you do not want the staged curriculum and only want the final clean experiment:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 python scripts/verify_training_config.py \
@@ -436,16 +436,16 @@ The shell scripts were updated to match the current project state.
 
 For the final report, the directory that matters most is:
 
-- `/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/`
+- `/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/`
 
 The three files to read first are:
 
 ```bash
 python - <<'PY'
 files = [
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/evaluation_summary.txt',
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/eval_scenario_confirmation.txt',
-    '/home/ecer/PVRL/mbpo/evaluation/pv_stage3_final_clean_test/diagnostics/tracking_diagnosis.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/evaluation_summary.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/eval_scenario_confirmation.txt',
+    '/home/user01/mbpo_custom/evaluation/pv_stage3_final_clean_test/diagnostics/tracking_diagnosis.txt',
 ]
 for f in files:
     print('\n===== %s =====' % f)

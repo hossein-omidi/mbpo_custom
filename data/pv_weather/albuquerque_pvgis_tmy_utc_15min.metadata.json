@@ -5,15 +5,15 @@
   "canonical_year": 2021,
   "rows": 35040,
   "columns": [
-    "temperature",
-    "relative_humidity",
     "ghi",
     "dni",
     "dhi",
     "IR(h)",
-    "wind_speed",
+    "relative_humidity",
+    "pressure",
+    "temperature",
     "wind_direction",
-    "pressure"
+    "wind_speed"
   ],
   "months_selected": [
     {

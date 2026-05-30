@@ -7,15 +7,17 @@ Purpose:
 """
 
 import importlib
+from pathlib import Path
 
 _base = importlib.import_module('examples.config.pv_tracking.0')
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 CONFIG_VERSION = 'pv_tracking_smoke_model_rollout_2026-05-26'
 TRAINING_STAGE = 'smoke'
 
 params = dict(_base.params)
 params['config_version'] = CONFIG_VERSION
-params['log_dir'] = '/home/ecer/PVRL/mbpo/smoke_runs'
+params['log_dir'] = str(_REPO_ROOT / 'smoke_runs')
 params['kwargs'] = dict(_base.params['kwargs'])
 params['kwargs'].update({
     'n_epochs': 4,

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/home/ecer/PVRL/mbpo"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARTIFACT_DIR="$ROOT/sequential_stage_artifacts"
 RAY_ROOT="${RAY_ROOT:-$HOME/ray_mbpo/PVTracking/pv_tracking}"
-CONDA_SH="${CONDA_SH:-/home/ecer/miniconda3/etc/profile.d/conda.sh}"
+CONDA_SH="${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 CPUS="${CPUS:-4}"

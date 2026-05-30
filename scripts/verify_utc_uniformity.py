@@ -4,7 +4,7 @@
 Run after code changes or before a paper eval:
 
   conda activate mbpo
-  cd /home/ecer/PVRL/mbpo
+  cd /path/to/mbpo_custom   # repository root
   python scripts/verify_utc_uniformity.py
   python scripts/verify_utc_uniformity.py --config examples/config/pv_tracking/0.py
 """

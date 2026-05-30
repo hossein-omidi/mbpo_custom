@@ -53,7 +53,7 @@ Seasonal UTC offsets (different `start_time` per month) would require extra sche
 ## Evaluation commands
 
 ```bash
-cd /home/ecer/PVRL/mbpo
+cd /home/user01/mbpo_custom
 conda activate mbpo
 
 python scripts/evaluate_agent.py CHECKPOINT \

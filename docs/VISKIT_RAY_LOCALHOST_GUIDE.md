@@ -56,7 +56,7 @@ It reads `progress.csv` and writes:
 
 Repo root:
 
-- `/home/ecer/PVRL/mbpo`
+- `/home/user01/mbpo_custom`
 
 Default Ray trial root:
 
@@ -69,11 +69,11 @@ Typical Ray trial path:
 Useful shell variables:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
-export ROOT=/home/ecer/PVRL/mbpo
+export ROOT=/home/user01/mbpo_custom
 export RAY_ROOT="$HOME/ray_mbpo/PVTracking/pv_tracking"
 export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
 export TRIAL="${TRIAL%/}"
@@ -84,8 +84,8 @@ export TRIAL="${TRIAL%/}"
 For the current clean Stage 3 workflow:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 mbpo run_local examples.development \
@@ -117,8 +117,8 @@ Important:
 This is the most common Viskit command:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 viskit ~/ray_mbpo/PVTracking/pv_tracking --port 6008
@@ -169,8 +169,8 @@ Then open:
 If you prefer simple image files instead of a live web app:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 python scripts/plot_training_progress.py "$TRIAL" \
@@ -187,7 +187,7 @@ This writes:
 ### Auto-refresh the saved plots every 60 seconds
 
 ```bash
-watch -n 60 "bash -lc 'cd /home/ecer/PVRL/mbpo && source /home/ecer/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
+watch -n 60 "bash -lc 'cd /home/user01/mbpo_custom && source /home/user01/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
 ```
 
 Then open the generated PNGs from your file browser or IDE preview.
@@ -199,8 +199,8 @@ The most useful practical setup is:
 ### Terminal 1: training
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 mbpo run_local examples.development \
@@ -224,8 +224,8 @@ echo "$TRIAL"
 ### Terminal 3: Viskit
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 viskit "$TRIAL" --port 6008
@@ -238,7 +238,7 @@ Open:
 ### Terminal 4: static plot refresher
 
 ```bash
-watch -n 60 "bash -lc 'cd /home/ecer/PVRL/mbpo && source /home/ecer/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
+watch -n 60 "bash -lc 'cd /home/user01/mbpo_custom && source /home/user01/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
 ```
 
 This combination gives you:
@@ -262,8 +262,8 @@ It can:
 Example:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 python scripts/evaluate_and_viskit.py \
@@ -294,8 +294,8 @@ If a port is busy, change it with `--port`.
 Run:
 
 ```bash
-cd /home/ecer/PVRL/mbpo
-source /home/ecer/miniconda3/etc/profile.d/conda.sh
+cd /home/user01/mbpo_custom
+source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
 python viskit/viskit/frontend.py ~/ray_mbpo/PVTracking/pv_tracking --port 6008
@@ -382,7 +382,7 @@ python scripts/plot_training_progress.py "$TRIAL" \
 ### Refresh static plots continuously
 
 ```bash
-watch -n 60 "bash -lc 'cd /home/ecer/PVRL/mbpo && source /home/ecer/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
+watch -n 60 "bash -lc 'cd /home/user01/mbpo_custom && source /home/user01/miniconda3/etc/profile.d/conda.sh && conda activate mbpo && python scripts/plot_training_progress.py \"\$TRIAL\" --outdir training_plots/stage3_clean_split_latest >/dev/null 2>&1'"
 ```
 
 That is the recommended localhost plotting setup for this project.
