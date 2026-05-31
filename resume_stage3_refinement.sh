@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Same-stage Stage 3 only: extend a clean-split Stage 3 trial with --restore.
+# Do NOT restore Stage 0/1/2 checkpoints here. See docs/TRAINING_PROTOCOL.md §0.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -121,6 +121,12 @@ cd /home/user01/mbpo_custom
 source /home/user01/miniconda3/etc/profile.d/conda.sh
 conda activate mbpo
 
+./scripts/start_viskit.sh
+```
+
+Or directly:
+
+```bash
 viskit ~/ray_mbpo/PVTracking/pv_tracking --port 6008
 ```
 
@@ -288,6 +294,28 @@ On your current setup, these services are local web servers. Open them from the 
 If a port is busy, change it with `--port`.
 
 ## 9. Troubleshooting
+
+### `ERR_CONNECTION_REFUSED` on localhost
+
+This means **no web server is running** on that port yet.
+
+1. Start Viskit in a separate terminal and leave it running:
+
+```bash
+conda activate mbpo
+cd /home/user01/mbpo_custom
+./scripts/start_viskit.sh
+```
+
+2. Open exactly the URL printed by the script:
+
+- [http://localhost:6008](http://localhost:6008)
+
+Notes:
+
+- Viskit default port in this repo is **6008** (not Flask's built-in 5000).
+- Ray Tune server (optional) uses **4321** only when training was started with `--with-server=True`.
+- Opening the browser before starting `./scripts/start_viskit.sh` always gives connection refused.
 
 ### `viskit: command not found`
 

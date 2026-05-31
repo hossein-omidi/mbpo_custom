@@ -1,6 +1,7 @@
 """Stage 0 — stationary proof (single clearsky day, no day randomization).
 
 Full A→Z procedure and directories: docs/TRAINING_PROTOCOL.md
+  - Clean start: §0 (fresh trial, no --restore)
   - Train: mbpo run_local … --config=examples.config.pv_tracking.stage0_single_day
   - Eval:  evaluation/pv_stage0_single_day  (--fixed-eval-dates 2020-06-21)
   - Gate:  scripts/diagnose_tracking.py --eval-dir evaluation/pv_stage0_single_day --gate

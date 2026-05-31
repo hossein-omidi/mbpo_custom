@@ -8,6 +8,127 @@ Phased procedure for proving the learned policy can match or beat `sun_tracking`
 - Do **not** use full-year historical weather until **Stage 1 gates pass**.
 - Do **not** chain calendar days into multi-day episodes (one day = one episode, 39 steps).
 - Use **only** the directory names in [§2](#2-directory-layout-one-name-per-purpose) for each stage — do not reuse `evaluation/pv_daylight_utc` for Stage 0/1 science runs (that path is a legacy December hold-out).
+- **Each stage trains independently** — fresh trial, no `--restore`, no cross-stage weights or replay pools ([§0](#0-clean-stage-isolation-every-run)).
+
+---
+
+## 0. Clean stage isolation (every run)
+
+### Is poor Stage 0 performance caused by leftover data from a previous run?
+
+**No — not when you follow the clean protocol below.**
+
+A normal `mbpo run_local` (without `--restore`) always starts:
+
+| Artifact | Fresh on new trial? |
+|----------|---------------------|
+| Replay pool (real env) | **Yes** — empty, filled only from this run |
+| Model pool (MBPO rollouts) | **Yes** — created during this run |
+| BNN ensemble | **Yes** — randomly initialized |
+| SAC policy / Q networks | **Yes** — randomly initialized |
+| `params.json` / `progress.csv` | **Yes** — new Ray trial directory |
+
+Defaults in `examples/development/base.py`: `checkpoint_replay_pool=False`, so replay buffers are **not** saved to disk or reloaded unless you opt in.
+
+Your Stage 0 reference trial (`seed:8317…`) confirms this: `restore: null`, `checkpoint_replay_pool: false`, correct `config_version`. Gate failure was a **learning outcome** (wrong tilt sign, RC3), not stale replay or a restored checkpoint.
+
+**Contamination can happen only if you:**
+
+1. Pass **`--restore=…`** from another stage or an old MDP (wrong env in checkpoint).
+2. Evaluate the **wrong checkpoint** (e.g. `ls -td …/seed:*` picks a Stage 3 trial while running Stage 0 eval).
+3. Enable **`checkpoint_replay_pool=True`** and restore an old pool missing `remaining_steps`.
+4. Use **`ALLOW_UNSAFE_POLICY_INJECTION=1`** in `run_sequential_stages.sh` (deprecated; script no longer injects weights).
+
+Old trials under `~/ray_mbpo/…` sit on disk but are **ignored** until you explicitly point `--restore` or eval at them.
+
+### Clean warmup protocol (Stages 0–2)
+
+Use this **before every stage train + eval**. One stage = one independent experiment.
+
+**Step 0 — Environment**
+
+```bash
+cd /path/to/mbpo_custom
+source "$HOME/miniconda3/etc/profile.d/conda.sh"
+conda activate mbpo
+```
+
+**Step 1 — Preflight (config + env contract)**
+
+```bash
+# Replace CONFIG_MODULE and CONFIG_PATH for your stage (see Quick reference).
+python scripts/verify_training_config.py --config CONFIG_MODULE
+python scripts/validate_pv_rollouts.py --config-path CONFIG_PATH
+```
+
+**Step 2 — Optional dry run (no learning)**
+
+```bash
+mbpo run_example_dry examples.development \
+  --config=CONFIG_MODULE \
+  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+```
+
+**Step 3 — Train fresh (no restore)**
+
+```bash
+# Do NOT pass --restore. Ray creates a new seed:… trial directory.
+mbpo run_local examples.development \
+  --config=CONFIG_MODULE \
+  --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
+```
+
+**Step 4 — Bind eval to THIS trial only**
+
+```bash
+# Prefer the trial path you just started (or note the seed:… folder name before training).
+export TRIAL=/full/path/to/seed:YOUR_TRIAL_DIR
+export CKPT="$TRIAL/best_eval_checkpoint"
+
+python -c "
+import json, sys
+v = json.load(open(sys.argv[1] + '/params.json'))
+assert v.get('restore') in (None, ''), 'refusing eval: trial was restored from another checkpoint'
+assert v.get('run_params', {}).get('checkpoint_replay_pool') is not True
+print('OK clean trial:', v.get('config_version'), 'restore=', v.get('restore'))
+" "$TRIAL"
+```
+
+**Step 5 — Evaluate into the canonical stage outdir**
+
+Clear or rename the previous eval folder if you want a clean report (optional):
+
+```bash
+# Example for Stage 0:
+mv evaluation/pv_stage0_single_day evaluation/pv_stage0_single_day_backup_$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+```
+
+Then run `evaluate_agent.py` with stage-matching flags (see [§4–§6.5](#4-stage-0--procedure-az-single-day)).
+
+**Step 6 — Gate**
+
+```bash
+python scripts/diagnose_tracking.py \
+  --eval-dir evaluation/pv_stageSTAGE/ \
+  --trial-dir "$TRIAL" \
+  --progress-csv "$TRIAL/progress.csv" \
+  --verify-env --gate
+```
+
+**Pass criteria:** exit code **0** on gates **and** `tracking_diagnosis.txt` shows matching `config_version` / train dates vs eval.
+
+### Stage 3 exception (same-stage resume only)
+
+`resume_stage3_refinement.sh` may use `--restore` to **continue the same Stage 3 MDP** (same config, more epochs). That is not cross-stage transfer. Do not restore a Stage 0/1/2 checkpoint into Stage 3.
+
+### `run_sequential_stages.sh` vs manual stage runs
+
+| Mode | Use when |
+|------|----------|
+| **Manual** (`stage0_single_day.py`, `0.py`, …) | Gate-ready runs; full epoch budgets from each config |
+| **`run_sequential_stages.sh`** | Optional curriculum (reduced epochs: 100/200/300/500); each stage still starts a **fresh** trial with **no** `--restore` |
+
+Do not treat archived files in `sequential_stage_artifacts/` as checkpoints for the next stage.
 
 ---
 
@@ -38,15 +159,15 @@ All paths are relative to the **repo root** unless noted.
 | **Best checkpoint (in-train eval)** | `…/best_eval_checkpoint/` | `monitor_metric` = `evaluation/return-average` |
 | **Latest weights** | `…/latest_checkpoint/` | End of each epoch |
 
-After each run, set:
+After each run, set **`TRIAL`** to the **specific** trial you trained (not necessarily the newest folder if you ran multiple experiments):
 
 ```bash
-export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
+export TRIAL=/full/path/to/seed:YOUR_TRIAL_DIR
 export TRIAL="${TRIAL%/}"
 export CKPT="$TRIAL/best_eval_checkpoint"
 ```
 
-Use **`$CKPT`** for all post-train eval and diagnosis. Do not evaluate a Stage 1 checkpoint with Stage 0 eval flags (or vice versa) without understanding [RC5](PV_TRACKING_ROOT_CAUSES.md).
+Verify `params.json` has `restore: null` before eval ([§0](#0-clean-stage-isolation-every-run)).
 
 ### 2.2 Evaluation outputs (repo — gitignored except `.gitkeep`)
 
@@ -117,13 +238,10 @@ Failure analysis for a reference Stage 1 checkpoint: [PV_TRACKING_ROOT_CAUSES.md
 
 ### A — Preflight (repo)
 
-```bash
-cd /path/to/mbpo
-python scripts/verify_training_config.py \
-  --config examples.config.pv_tracking.stage0_single_day
-python scripts/validate_pv_rollouts.py \
-  --config-path examples/config/pv_tracking/stage0_single_day.py
-```
+Follow [§0 clean warmup](#0-clean-stage-isolation-every-run) Steps 0–2 with:
+
+- `CONFIG_MODULE=examples.config.pv_tracking.stage0_single_day`
+- `CONFIG_PATH=examples/config/pv_tracking/stage0_single_day.py`
 
 **Pass:** `verify_training_config` prints `PASS`; rollout validator exits 0.
 
@@ -139,32 +257,40 @@ mbpo run_example_dry examples.development \
 
 ### C — Train
 
+§0 Step 3 — **no `--restore`**:
+
 ```bash
 mbpo run_local examples.development \
   --config=examples.config.pv_tracking.stage0_single_day \
   --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
 ```
 
+Note the new `seed:…` trial directory Ray creates (or capture it before training ends).
+
 ### D — Verify trial contract (`params.json`)
 
+§0 Step 4 — set `TRIAL` to **that** trial, not an arbitrary newest folder:
+
 ```bash
-export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
+export TRIAL=/full/path/to/seed:YOUR_TRIAL_DIR
 export TRIAL="${TRIAL%/}"
 export CKPT="$TRIAL/best_eval_checkpoint"
 
 python scripts/verify_training_config.py \
   --config examples.config.pv_tracking.stage0_single_day
 python -c "
-import json
-v=json.load(open('$TRIAL/params.json'))
+import json, sys
+v=json.load(open(sys.argv[1]+'/params.json'))
 print('config_version:', v.get('config_version'))
+print('restore:', v.get('restore'))
+assert v.get('restore') in (None, ''), 'Stage 0 must be a fresh run (no --restore)'
 k=v['algorithm_params']['kwargs']
 e=v['environment_params']['training']['kwargs']
 assert 'stage0' in (v.get('config_version') or '').lower(), 'wrong config — not Stage 0'
 assert e.get('randomize_day') is False, 'Stage 0 requires randomize_day=False'
 assert e.get('start_date')==e.get('end_date')=='2020-06-21', 'wrong training day'
 print('OK: Stage 0 params.json')
-"
+" "$TRIAL"
 ```
 
 **Pass:** `config_version` contains `stage0`; `randomize_day=False`; dates `2020-06-21`.

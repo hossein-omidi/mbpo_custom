@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Optional curriculum runner: Stages 0→3 with reduced epoch budgets.
+# Each stage calls mbpo run_local WITHOUT --restore (independent trials).
+# For gate-ready Stage 0/1 runs, use docs/TRAINING_PROTOCOL.md §0 + full configs.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,14 +21,6 @@ EVAL_ROLLOUTS="${EVAL_ROLLOUTS:-8}"
 MAX_PATH_LENGTH="${MAX_PATH_LENGTH:-39}"
 STOP_ON_GATE_FAIL="${STOP_ON_GATE_FAIL:-0}"
 STAGE3_VALIDATION_DATES="2020-02-15,2020-05-15,2020-08-15,2020-11-15"
-
-# Safe by default. The current Python restore path reloads the previous stage's
-# training/eval environments from checkpoint, so cross-stage --restore is not
-# safe. We therefore archive the previous stage policy weights beside the new
-# trial. If you explicitly set ALLOW_UNSAFE_POLICY_INJECTION=1, the script also
-# copies them into checkpoint folders on a best-effort basis, but the live
-# trainer may still ignore them because no Python-side hot-load exists.
-ALLOW_UNSAFE_POLICY_INJECTION="${ALLOW_UNSAFE_POLICY_INJECTION:-0}"
 
 mkdir -p "$ARTIFACT_DIR"
 mkdir -p "$EVAL_ROOT"
@@ -203,47 +198,6 @@ best_checkpoint_for_trial() {
   return 1
 }
 
-archive_policy_weights() {
-  local stage_name="$1"
-  local checkpoint_dir="$2"
-  local target="$ARTIFACT_DIR/${stage_name}_policy_weights.pkl"
-
-  if [[ ! -f "$checkpoint_dir/policy_weights.pkl" ]]; then
-    echo "Missing policy_weights.pkl in $checkpoint_dir" >&2
-    return 1
-  fi
-
-  cp "$checkpoint_dir/policy_weights.pkl" "$target"
-  echo "$target"
-}
-
-attach_previous_policy_weights() {
-  local previous_weights="$1"
-  local new_trial="$2"
-
-  [[ -n "$previous_weights" ]] || return 0
-  [[ -f "$previous_weights" ]] || return 0
-
-  cp "$previous_weights" "$new_trial/previous_stage_policy_weights.pkl"
-
-  if [[ "$ALLOW_UNSAFE_POLICY_INJECTION" != "1" ]]; then
-    return 0
-  fi
-
-  (
-    for _ in $(seq 1 600); do
-      for ckpt_dir in "$new_trial/best_eval_checkpoint" "$new_trial/latest_checkpoint"; do
-        [[ -d "$ckpt_dir" ]] || continue
-        cp "$previous_weights" "$ckpt_dir/previous_stage_policy_weights.pkl" || true
-        if [[ ! -f "$ckpt_dir/policy_weights.pkl" ]]; then
-          cp "$previous_weights" "$ckpt_dir/policy_weights.pkl" || true
-        fi
-      done
-      sleep 2
-    done
-  ) &
-}
-
 verify_trial_contract() {
   local trial_dir="$1"
   local expected_stage="$2"
@@ -260,6 +214,10 @@ trial_dir, expected_stage, expected_weather, expected_start, expected_end, expec
 variant = json.load(open(f"{trial_dir}/params.json"))
 config_version = variant.get('config_version', '')
 env = variant['environment_params']['training']['kwargs']
+
+assert variant.get('restore') in (None, ''), (
+    f"trial must be fresh (no --restore): {variant.get('restore')!r}")
+assert variant.get('run_params', {}).get('checkpoint_replay_pool') is not True
 
 assert expected_stage in config_version.lower(), (
     f"wrong config_version for {trial_dir}: {config_version!r}")
@@ -295,6 +253,7 @@ run_stage() {
   echo "========== ${stage_name} =========="
   echo "Config module: $config_module"
   echo "Config path:   $config_path"
+  echo "Training:      fresh trial (no --restore, no cross-stage weights)"
 
   validate_balanced_eval_rollouts "$fixed_eval_dates"
   python scripts/verify_training_config.py --config "$config_module"
@@ -317,7 +276,6 @@ run_stage() {
   local new_trial
   new_trial="$(wait_for_new_trial "${before_trials[@]:-}")"
   echo "$new_trial" > "$ARTIFACT_DIR/${stage_name}_trial_dir.txt"
-  attach_previous_policy_weights "${PREVIOUS_STAGE_WEIGHTS:-}" "$new_trial"
 
   wait "$train_pid"
 
@@ -364,14 +322,9 @@ run_stage() {
   else
     echo "0" > "$ARTIFACT_DIR/${stage_name}_gate_status.txt"
   fi
-
-  PREVIOUS_STAGE_WEIGHTS="$(archive_policy_weights "$stage_name" "$ckpt")"
-  echo "Archived policy weights: $PREVIOUS_STAGE_WEIGHTS"
 }
 
 write_generated_configs
-
-PREVIOUS_STAGE_WEIGHTS=""
 
 run_stage \
   "stage0" \
@@ -423,4 +376,5 @@ run_stage \
 
 echo
 echo "All stages completed."
-echo "Archived weights: $ARTIFACT_DIR"
+echo "Trial paths: $ARTIFACT_DIR/*_trial_dir.txt"
+echo "See docs/TRAINING_PROTOCOL.md §0 for clean per-stage eval."
