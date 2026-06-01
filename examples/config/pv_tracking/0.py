@@ -1,7 +1,7 @@
 # Bumped when training hyperparameters change; verify_training_config.py checks this.
 # Stage 1 — summer i.i.d. days, clearsky, zero motion cost, hold-out-aligned training eval.
 # A→Z procedure: docs/TRAINING_PROTOCOL.md  |  eval: evaluation/pv_stage1_clearsky_summer
-CONFIG_VERSION = 'pv_tracking_stage1_clearsky_physical_autoentropy_2026-05-25'
+CONFIG_VERSION = 'pv_tracking_stage1_clearsky_physical_autoentropy_2026-06-01'
 TRAINING_STAGE = 'stage1'
 
 # Summer hold-out dates for in-training checkpoint selection (matches Phase D eval).
@@ -24,14 +24,14 @@ params = {
 
     'kwargs': {
         'n_epochs': 500,
-        'epoch_length': 39,
+        'epoch_length': 78,
         'train_every_n_steps': 1,
         'n_train_repeat': 15,
         'eval_render_mode': None,
         'eval_n_episodes': 8,
         'eval_deterministic': True,
 
-        'discount': 0.99,
+        'discount': 1,
         'tau': 5e-3,
         'reward_scale': 1.0,
 
@@ -62,14 +62,14 @@ params = {
         'end_date': '2020-08-31',
         'tz': 'UTC',
         'start_time': '13:30',
-        'periods': 40,
-        'freq': '15min',
+        'periods': 79,
+        'freq': '7min30s',
         'randomize_day': True,
         'randomize_initial_orientation': False,
         'weather_source': 'clearsky',
         'temperature': 23.0,
         'wind_speed': 2.0,
-        'movement_penalty': 0.0,
+        'movement_penalty': 0.001,
         'observation_mode': 'physical',
     },
     # Training-time eval: fixed summer dates (not random December / full year).
@@ -77,6 +77,6 @@ params = {
         'fixed_eval_dates': STAGE1_FIXED_EVAL_DATES,
         'randomize_day': False,
         'weather_source': 'clearsky',
-        'movement_penalty': 0.0,
+        'movement_penalty': 0.001,
     },
 }

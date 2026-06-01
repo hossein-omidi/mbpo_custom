@@ -33,6 +33,7 @@ from mbpo.env.pv_tracking import (
     DEFAULT_EPISODE_STEPS,
     DEFAULT_START_HOUR,
     DEFAULT_END_HOUR,
+    DEFAULT_STEP_HOURS,
     episode_clock_hour,
 )
 from mbpo.static.pv_tracking import (
@@ -54,7 +55,9 @@ from eval_utils import (
     rollout_time_axis,
     rollout_xlabel,
     get_eval_environment,
+    make_baseline_rollout,
     _grid_end_clock_label,
+    _grid_step_hours,
 )
 
 
@@ -89,17 +92,20 @@ def check_constant_alignment():
         _fail('periods mismatch')
     if DEFAULT_EPISODE_STEPS != PV_EPISODE_MAX_STEPS:
         _fail('episode steps mismatch')
-    end_env = episode_clock_hour(DEFAULT_START_TIME) + (DEFAULT_PERIODS - 1) * 0.25
-    end_static = StaticFns.episode_end_hour()
+    step_h = _grid_step_hours(DEFAULT_FREQ)
+    end_env = episode_clock_hour(DEFAULT_START_TIME) + (DEFAULT_PERIODS - 1) * step_h
+    end_static = StaticFns.episode_end_hour(step_hours=DEFAULT_STEP_HOURS)
     if abs(end_env - end_static) > 0.01:
         _fail('grid end hour env %.2f vs static %.2f' % (end_env, end_static))
     if abs(STATIC_START_HOUR - DEFAULT_START_HOUR) > 0.01:
         _fail('static start hour %.2f vs env %.2f' % (STATIC_START_HOUR, DEFAULT_START_HOUR))
-    if DEFAULT_NUM_ACTIONS != DEFAULT_EPISODE_STEPS or DEFAULT_STEP_HOURS != 0.25:
-        _fail('static timing constants unexpected')
-    _ok('UTC tz; start %s; periods=%d; steps=%d; end %s' % (
-        DEFAULT_START_TIME, DEFAULT_PERIODS, DEFAULT_EPISODE_STEPS,
-        _grid_end_clock_label()))
+    if DEFAULT_NUM_ACTIONS != DEFAULT_EPISODE_STEPS:
+        _fail('static num_actions mismatch')
+    if abs(DEFAULT_STEP_HOURS - step_h) > 1e-9:
+        _fail('step hours env %.6f vs grid %.6f' % (DEFAULT_STEP_HOURS, step_h))
+    _ok('UTC tz; start %s; periods=%d; freq=%s; steps=%d; step=%.3fh; end %s' % (
+        DEFAULT_START_TIME, DEFAULT_PERIODS, DEFAULT_FREQ, DEFAULT_EPISODE_STEPS,
+        DEFAULT_STEP_HOURS, _grid_end_clock_label()))
 
 
 def check_training_env(config):
@@ -156,7 +162,8 @@ def check_eval_forces_utc(config):
     if kwargs.get('tz') != 'UTC':
         _fail('eval tz=%r after inherit' % kwargs.get('tz'))
     if (kwargs.get('start_time') != DEFAULT_START_TIME
-            or kwargs.get('periods') != DEFAULT_PERIODS):
+            or kwargs.get('periods') != DEFAULT_PERIODS
+            or kwargs.get('freq') != DEFAULT_FREQ):
         _fail('eval grid not forced to UTC daylight standard')
     inner = env.unwrapped
     if str(inner.location.tz) != 'UTC':
@@ -237,6 +244,42 @@ def check_pvlib_index_alignment():
         DEFAULT_PERIODS, DEFAULT_START_TIME, _grid_end_clock_label()))
 
 
+def check_baseline_horizon(config):
+    print('\n=== Sun / fixed baselines (same grid & horizon) ===')
+    variant = {
+        'environment_params': {
+            'training': {
+                'universe': config['universe'],
+                'domain': config['domain'],
+                'task': config['task'],
+                'kwargs': dict(config['environment_kwargs']),
+            },
+        },
+    }
+    env, _ = get_eval_environment(
+        variant, fixed_eval_dates='2020-06-21', eval_weather_source='clearsky')
+    inner = env.unwrapped
+    n = inner.num_action_steps
+    step_h = inner.interval_hours
+    for name in ('sun_tracking', 'fixed_no_motion'):
+        path = make_baseline_rollout(env, name, path_length=n, seed=0)
+        steps = len(path['rewards'])
+        if steps != n:
+            _fail('%s rollout length %d != num_action_steps %d' % (name, steps, n))
+        infos = path['infos']
+        if abs(float(infos[-1]['time']) - (episode_clock_hour(inner.start_time) + n * step_h)) > 0.02:
+            _fail('%s final clock hour mismatch' % name)
+        if infos[0].get('interval_hours') != step_h:
+            _fail('%s interval_hours in info != env interval' % name)
+        total_r = float(np.sum(path['rewards']))
+        total_e = sum(float(i['energy_kwh']) for i in infos)
+        total_m = sum(float(i.get('movement_cost', 0.0)) for i in infos)
+        if abs(total_r - (total_e - total_m)) > 1e-4:
+            _fail('%s reward != energy - movement' % name)
+        _ok('%s: %d steps @ %.3fh; net reward=%.4f' % (name, steps, step_h, total_r))
+    env.close()
+
+
 def check_sampler_max_path_length(config):
     print('\n=== Training sampler horizon ===')
     from examples.development.base import MAX_PATH_LENGTH_PER_DOMAIN
@@ -261,6 +304,7 @@ def main():
     check_sampler_max_path_length(config)
     check_training_env(config)
     check_eval_forces_utc(config)
+    check_baseline_horizon(config)
 
     print('\n=== ALL CHECKS PASSED ===')
     print('Train, eval, baselines, plots, and static model horizon use the same UTC daylight MDP.')

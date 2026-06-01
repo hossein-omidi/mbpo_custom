@@ -33,6 +33,7 @@ from eval_utils import (
     make_baseline_rollout,
     run_learned_policy_rollout,
     validate_policy_environment_observation_dims,
+    PV_EPISODE_MAX_STEPS,
 )
 
 
@@ -143,7 +144,7 @@ def main():
         help='PV tracking log root (default ~/ray_mbpo/PVTracking/pv_tracking).')
     parser.add_argument('--variant-file', type=str, default='params.json')
     parser.add_argument('--num-rollouts', '-n', type=int, default=4)
-    parser.add_argument('--max-path-length', type=int, default=39)
+    parser.add_argument('--max-path-length', type=int, default=PV_EPISODE_MAX_STEPS)
     parser.add_argument(
         '--stochastic',
         action='store_true',

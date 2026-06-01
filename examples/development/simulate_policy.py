@@ -72,7 +72,8 @@ def simulate_policy(args):
         domain = variant.get('environment_params', {}).get(
             'training', {}).get('domain')
         if domain == 'PVTracking':
-            path_length = 39
+            from eval_utils import PV_EPISODE_MAX_STEPS
+            path_length = PV_EPISODE_MAX_STEPS
 
     with policy.set_deterministic(args.deterministic):
         paths = rollouts(args.num_rollouts,

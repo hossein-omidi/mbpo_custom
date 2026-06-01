@@ -62,12 +62,12 @@ PV_TIMEZONE = 'UTC'
 
 # Episode grid: periods timestamps at freq; env.step() count == periods - 1.
 # Wall-clock labels use Location.tz (UTC) only — no civil-time conversion.
-# Daylight-focused window at 35N/106W: ~13:30–23:15 UTC (~0–2 pre-sunrise steps
-# in December; full productive sun in summer). Retrain after changing these.
+# Daylight-focused window at 35N/106W: ~13:30–23:15 UTC (same wall-clock span as
+# the legacy 40×15min grid; finer control via 79×7min30s = 78 steps).
 DEFAULT_START_TIME = '13:30'
-DEFAULT_PERIODS = 40
-DEFAULT_FREQ = '15min'
-DEFAULT_EPISODE_STEPS = DEFAULT_PERIODS - 1  # 39 transitions per day
+DEFAULT_PERIODS = 79
+DEFAULT_FREQ = '7min30s'
+DEFAULT_EPISODE_STEPS = DEFAULT_PERIODS - 1  # 78 transitions per day
 
 
 def episode_clock_hour(time_str):
@@ -77,7 +77,9 @@ def episode_clock_hour(time_str):
 
 
 DEFAULT_START_HOUR = episode_clock_hour(DEFAULT_START_TIME)
-DEFAULT_END_HOUR = DEFAULT_START_HOUR + (DEFAULT_PERIODS - 1) * 0.25
+_DEFAULT_STEP_HOURS = pd.Timedelta(DEFAULT_FREQ).total_seconds() / 3600.0
+DEFAULT_STEP_HOURS = _DEFAULT_STEP_HOURS
+DEFAULT_END_HOUR = DEFAULT_START_HOUR + (DEFAULT_PERIODS - 1) * DEFAULT_STEP_HOURS
 
 
 class PVTrackingEnv(gym.Env):
@@ -532,6 +534,9 @@ class PVTrackingEnv(gym.Env):
             'temperature_c': float(weather['temperature']),
             'delta_tilt_deg': float(delta_tilt),
             'delta_azimuth_deg': float(delta_azimuth),
+            'interval_hours': float(self.interval_hours),
+            'freq': str(self.freq),
+            'num_action_steps': int(self.num_action_steps),
             'rollout_seed': (
                 int(self._rollout_seed)
                 if self._rollout_seed is not None else None),

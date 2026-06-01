@@ -58,7 +58,7 @@ case "$CMD" in
     [[ -d "$CKPT" ]] || CKPT="$TRIAL/latest_checkpoint"
     mkdir -p "$EVAL_DIR"
     python scripts/evaluate_agent.py "$CKPT" --outdir "$EVAL_DIR" \
-      --eval-protocol inherit --max-path-length 39 --compare-baselines \
+      --eval-protocol inherit --max-path-length 78 --compare-baselines \
       --eval-weather-source clearsky --fixed-eval-dates 2020-06-21 --num-rollouts 10
     ;;
   gate)

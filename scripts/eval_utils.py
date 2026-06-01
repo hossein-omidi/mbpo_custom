@@ -408,11 +408,16 @@ def _episode_start_hour(start_time=None):
     return hour + minute / 60.0
 
 
-def _grid_end_clock_label(start_time=None, periods=None):
+def _grid_step_hours(freq=None):
+    import pandas as pd
+    return pd.Timedelta(freq or PV_EPISODE_FREQ).total_seconds() / 3600.0
+
+
+def _grid_end_clock_label(start_time=None, periods=None, freq=None):
     """Last timestamp wall clock for the configured UTC episode grid."""
     start_h = _episode_start_hour(start_time)
     n_periods = int(periods or PV_EPISODE_PERIODS)
-    end_hour = start_h + (n_periods - 1) * 0.25
+    end_hour = start_h + (n_periods - 1) * _grid_step_hours(freq)
     end_hour = end_hour % 24.0
     return '%02d:%02d' % (int(end_hour), int(round((end_hour % 1) * 60)))
 
@@ -597,6 +602,7 @@ def describe_eval_config(eval_env_params):
         'randomize_initial_orientation: %s' % kwargs.get(
             'randomize_initial_orientation', False),
         'weather_source: %s' % kwargs.get('weather_source', '(from env default)'),
+        'movement_penalty: %s' % kwargs.get('movement_penalty', '(from env default)'),
         'observation_mode: %s' % kwargs.get('observation_mode', 'legacy (default)'),
         'fixed_eval_dates: %s' % kwargs.get('fixed_eval_dates', None),
     ]
@@ -715,7 +721,15 @@ def compute_total_energy_kwh(path):
     power = np.array([info.get('power', np.nan) for info in infos], dtype=np.float64)
     if len(power) == 0:
         return np.nan
-    return float(np.sum(power) * 0.25 / 1000.0)
+    step_h = infos[0].get('interval_hours')
+    if step_h is None and len(infos) >= 2:
+        t0 = infos[0].get('time')
+        t1 = infos[1].get('time')
+        if t0 is not None and t1 is not None:
+            step_h = float(t1) - float(t0)
+    if step_h is None:
+        step_h = _grid_step_hours()
+    return float(np.sum(power) * float(step_h) / 1000.0)
 
 
 def _index_at_max(arr):

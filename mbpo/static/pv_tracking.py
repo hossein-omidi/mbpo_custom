@@ -29,11 +29,11 @@ from mbpo.env.pv_tracking import (
     DEFAULT_START_TIME,
     DEFAULT_START_HOUR,
     DEFAULT_EPISODE_STEPS,
+    DEFAULT_FREQ,
+    DEFAULT_STEP_HOURS,
 )
 
 DEFAULT_NUM_ACTIONS = DEFAULT_EPISODE_STEPS
-DEFAULT_STEP_HOURS = 0.25
-# Allow half a control step (7.5 min) below the computed episode end hour.
 HORIZON_TIME_TOLERANCE_HOURS = DEFAULT_STEP_HOURS / 2.0
 
 
@@ -117,7 +117,7 @@ class StaticFns:
 
         Used for diagnostics / fallback checks when clock time is not in the
         observation.
-        Matches the fixed daily schedule (UTC start_time, 15 min steps) by searching
+        Matches the fixed daily schedule (UTC start_time, env freq) by searching
         the episode hour grid on a reference date at the env's lat/lon.
         """
         obs = np.asarray(obs, dtype=np.float64)

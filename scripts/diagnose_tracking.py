@@ -71,7 +71,8 @@ def parse_args():
 
 
 def evaluate_phase_gates(learned_summaries, sun_summaries, fixed_summaries,
-                         min_energy_ratio, min_action_ratio, max_tilt_error_deg):
+                         min_energy_ratio, min_action_ratio, max_tilt_error_deg,
+                         movement_penalty=None):
     """Return (passed: bool, lines: list) per docs/TRAINING_PROTOCOL.md."""
 
     def _mean(key, summaries):
@@ -81,13 +82,27 @@ def evaluate_phase_gates(learned_summaries, sun_summaries, fixed_summaries,
     lines = ['GATE STATUS: ']
     passed = True
 
-    e_learned = _mean('total_energy_kwh', learned_summaries)
-    e_sun = _mean('total_energy_kwh', sun_summaries)
+    use_net = movement_penalty is not None and float(movement_penalty) > 0.0
+    if use_net:
+        metric_key = 'total_net_reward_kwh'
+        metric_label = 'net return (sum of step rewards)'
+    else:
+        metric_key = 'total_energy_kwh'
+        metric_label = 'gross energy kWh'
+
+    e_learned = _mean(metric_key, learned_summaries)
+    e_sun = _mean(metric_key, sun_summaries)
     energy_ratio = e_learned / max(e_sun, 1e-9)
     ok_energy = np.isfinite(energy_ratio) and energy_ratio >= min_energy_ratio
-    lines.append('  energy ratio (learned/sun) %.3f >= %.2f  [%s]' % (
-        energy_ratio, min_energy_ratio, 'PASS' if ok_energy else 'FAIL'))
+    lines.append('  %s ratio (learned/sun) %.3f >= %.2f  [%s]' % (
+        metric_label, energy_ratio, min_energy_ratio, 'PASS' if ok_energy else 'FAIL'))
     passed = passed and ok_energy
+
+    if use_net:
+        g_learned = _mean('total_energy_kwh', learned_summaries)
+        g_sun = _mean('total_energy_kwh', sun_summaries)
+        lines.append('  (info) gross energy ratio learned/sun %.3f' % (
+            g_learned / max(g_sun, 1e-9)))
 
     a_learned = _mean('mean_action_l1_productive', learned_summaries)
     a_sun = _mean('mean_action_l1_productive', sun_summaries)
@@ -104,10 +119,16 @@ def evaluate_phase_gates(learned_summaries, sun_summaries, fixed_summaries,
     passed = passed and ok_tilt
 
     if fixed_summaries:
-        e_fixed = _mean('total_energy_kwh', fixed_summaries)
-        ok_fixed = np.isfinite(e_learned) and np.isfinite(e_fixed) and e_learned > e_fixed
-        lines.append('  learned energy %.4f > fixed %.4f  [%s]' % (
-            e_learned, e_fixed, 'PASS' if ok_fixed else 'FAIL'))
+        if use_net:
+            f_learned = _mean('total_net_reward_kwh', learned_summaries)
+            f_fixed = _mean('total_net_reward_kwh', fixed_summaries)
+        else:
+            f_learned = _mean('total_energy_kwh', learned_summaries)
+            f_fixed = _mean('total_energy_kwh', fixed_summaries)
+        ok_fixed = np.isfinite(f_learned) and np.isfinite(f_fixed) and f_learned > f_fixed
+        lines.append('  learned %s %.4f > fixed %.4f  [%s]' % (
+            'net return' if use_net else 'energy',
+            f_learned, f_fixed, 'PASS' if ok_fixed else 'FAIL'))
         passed = passed and ok_fixed
     else:
         lines.append('  vs fixed_no_motion: skipped (no baseline CSVs)')
@@ -195,12 +216,17 @@ def summarize_trajectory(rows, label):
     prod_actions = np.array([action_l1(r) for r in prod], dtype=np.float64)
     energies = np.array([r.get('energy_kwh', 0.0) for r in rows], dtype=np.float64)
     powers = np.array([r.get('power_w', 0.0) for r in rows], dtype=np.float64)
+    step_rewards = np.array([float(r.get('reward', np.nan)) for r in rows], dtype=np.float64)
+    if not np.all(np.isfinite(step_rewards)):
+        step_rewards = energies - np.array(
+            [r.get('movement_cost', 0.0) for r in rows], dtype=np.float64)
 
     return {
         'label': label,
         'date': rows[0].get('date', ''),
         'weather': rows[0].get('weather_condition', ''),
         'total_energy_kwh': float(np.nansum(energies)),
+        'total_net_reward_kwh': float(np.nansum(step_rewards)),
         'mean_power_w': float(np.nanmean(powers)),
         'mean_abs_tilt_error_deg': float(np.nanmean(np.abs(tilt_err[alt_mask]))) if alt_mask.any() else float(np.nanmean(np.abs(tilt_err))),
         'max_abs_tilt_error_deg': float(np.nanmax(np.abs(tilt_err[alt_mask]))) if alt_mask.any() else float(np.nanmax(np.abs(tilt_err))),
@@ -1008,6 +1034,7 @@ def _run_diagnosis(args):
             args.min_energy_ratio,
             args.min_action_ratio,
             args.max_tilt_error_deg,
+            movement_penalty=load_eval_movement_penalty(args.eval_dir),
         )
         sections.append(('Phase gates (TRAINING_PROTOCOL.md)', gate_lines))
 

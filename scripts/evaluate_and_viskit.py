@@ -24,6 +24,11 @@ import re
 import subprocess
 import sys
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+from eval_utils import PV_EPISODE_MAX_STEPS
+
 
 def run_command(cmd, env=None):
     print('Running:', ' '.join(cmd))
@@ -37,7 +42,7 @@ def main():
     parser.add_argument('--outdir', default='evaluation/pv_daylight_utc',
                         help='Output directory for evaluation/plots')
     parser.add_argument('--num-rollouts', type=int, default=10)
-    parser.add_argument('--max-path-length', type=int, default=39)
+    parser.add_argument('--max-path-length', type=int, default=PV_EPISODE_MAX_STEPS)
     parser.add_argument('--deterministic', action='store_true')
     parser.add_argument('--port', type=int, default=6008,
                         help='Port to run viskit on')

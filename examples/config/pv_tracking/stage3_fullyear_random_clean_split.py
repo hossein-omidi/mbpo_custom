@@ -41,7 +41,7 @@ params['config_version'] = CONFIG_VERSION
 params['kwargs'] = dict(_stage2.params['kwargs'])
 params['kwargs'].update({
     'n_epochs': 500,
-    'real_ratio': 0.9,
+    'real_ratio': 0.5,
 })
 params['environment_kwargs'] = dict(_stage2.params['environment_kwargs'])
 params['environment_kwargs'].update({

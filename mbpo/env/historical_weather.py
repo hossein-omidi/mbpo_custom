@@ -27,14 +27,22 @@ def using_default_site(latitude, longitude, atol=1e-6):
 def _canonicalize_index(index):
     canonical = []
     for timestamp in pd.DatetimeIndex(index).tz_convert('UTC'):
-        canonical.append(pd.Timestamp(
-            year=CANONICAL_YEAR,
-            month=timestamp.month,
-            day=timestamp.day,
-            hour=timestamp.hour,
-            minute=timestamp.minute,
-            tz='UTC',
-        ))
+        try:
+            canonical.append(pd.Timestamp(
+                year=CANONICAL_YEAR,
+                month=timestamp.month,
+                day=timestamp.day,
+                hour=timestamp.hour,
+                minute=timestamp.minute,
+                second=timestamp.second,
+                tz='UTC',
+            ))
+        except ValueError as exc:
+            raise ValueError(
+                'Historical weather catalog does not include leap-day timestamps '
+                'for {}. Choose non-leap fixed_eval_dates or provide an explicit '
+                'weather_file with leap-day coverage.'.format(timestamp.date())
+            ) from exc
     return pd.DatetimeIndex(canonical)
 
 
@@ -157,26 +165,15 @@ def classify_weather_conditions(location, times, weather_frame):
 
 
 def build_weather_profile_from_catalog(location, times, weather_catalog):
-    canonical = []
-    for timestamp in pd.DatetimeIndex(times).tz_convert('UTC'):
-        try:
-            canonical.append(pd.Timestamp(
-                year=CANONICAL_YEAR,
-                month=timestamp.month,
-                day=timestamp.day,
-                hour=timestamp.hour,
-                minute=timestamp.minute,
-                tz='UTC',
-            ))
-        except ValueError as exc:
-            raise ValueError(
-                'Historical weather catalog does not include leap-day timestamps '
-                'for {}. Choose non-leap fixed_eval_dates or provide an explicit '
-                'weather_file with leap-day coverage.'.format(timestamp.date())
-            ) from exc
-    canonical_times = pd.DatetimeIndex(canonical)
+    times = pd.DatetimeIndex(times).tz_convert('UTC')
+    canonical_times = _canonicalize_index(times)
 
     weather = weather_catalog.reindex(canonical_times)
+    if weather.isnull().any().any():
+        # Finer-than-source grids (e.g. 7min30s) may need nearest catalog row.
+        weather = weather_catalog.reindex(
+            canonical_times, method='nearest',
+            tolerance=pd.Timedelta('8min'))
     if weather.isnull().any().any():
         missing = weather[weather.isnull().any(axis=1)].index[:5]
         raise ValueError(

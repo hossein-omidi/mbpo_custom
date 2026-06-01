@@ -27,6 +27,7 @@ from eval_utils import (
     EVAL_PROTOCOL_INHERIT,
     EVAL_PROTOCOL_LEGACY_UTC,
     EVAL_PROTOCOL_UTC,
+    PV_EPISODE_MAX_STEPS,
     compare_method_table,
     describe_eval_config,
     get_eval_environment,
@@ -76,7 +77,7 @@ def main():
     parser.add_argument('checkpoint', type=str, help='Path to checkpoint directory or glob pattern')
     parser.add_argument('--outdir', type=str, default='evaluation', help='Directory to save summary files')
     parser.add_argument('--num-rollouts', '-n', type=int, default=10, help='Number of rollouts per method')
-    parser.add_argument('--max-path-length', '-l', type=int, default=39, help='Rollout horizon')
+    parser.add_argument('--max-path-length', '-l', type=int, default=PV_EPISODE_MAX_STEPS, help='Rollout horizon')
     parser.add_argument('--variant-file', type=str, default='params.json', help='Variant JSON in experiment root')
     parser.add_argument(
         '--stochastic', action='store_true',
