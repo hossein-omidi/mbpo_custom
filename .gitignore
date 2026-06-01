@@ -129,6 +129,7 @@ vendor/*
 # --- PV tracking: generated artifacts (not source) ---
 # Ray trials if stored inside the repo (default log_dir is ~/ray_mbpo outside the repo).
 ray_mbpo/
+.ray_tmp/
 
 # Post-training eval (scripts/evaluate_agent.py). Canonical local run: evaluation/pv_daylight_utc/
 evaluation/*

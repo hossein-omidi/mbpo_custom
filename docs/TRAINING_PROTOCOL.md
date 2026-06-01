@@ -66,7 +66,7 @@ python scripts/validate_pv_rollouts.py --config-path CONFIG_PATH
 ```bash
 mbpo run_example_dry examples.development \
   --config=CONFIG_MODULE \
-  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
 ```
 
 **Step 3 — Train fresh (no restore)**
@@ -75,7 +75,7 @@ mbpo run_example_dry examples.development \
 # Do NOT pass --restore. Ray creates a new seed:… trial directory.
 mbpo run_local examples.development \
   --config=CONFIG_MODULE \
-  --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
 ```
 
 **Step 4 — Bind eval to THIS trial only**
@@ -129,6 +129,74 @@ python scripts/diagnose_tracking.py \
 | **`run_sequential_stages.sh`** | Optional curriculum (reduced epochs: 100/200/300/500); each stage still starts a **fresh** trial with **no** `--restore` |
 
 Do not treat archived files in `sequential_stage_artifacts/` as checkpoints for the next stage.
+
+### CPU limits and two parallel Stage 0 runs (16-thread VM)
+
+**Ray heartbeat error** (`node … marked dead … missed too many heartbeats`) usually means the machine is **oversubscribed**. If you omit `--trial-cpus`, mbpo defaults to **`nproc` (16)** per process — two runs then fight for 32 logical workers.
+
+Use `scripts/pv_cpu_env.sh`:
+
+| `PV_CPU_PROFILE` | Use when | `--cpus` | `--trial-cpus` | BLAS/TF threads |
+|----------------|----------|----------|----------------|-----------------|
+| `single` | One job | 10 | 4 | 4 |
+| `dual` | Baseline + paper at once | 6 | 2 | 2 |
+
+Each training process also needs its own **`--temp-dir`** (helpers set this automatically).
+
+| | Baseline | MBPO paper |
+|--|----------|------------|
+| Config | `stage0_single_day` | `stage0_single_day_mbpo_paper` |
+| Script | `run_stage0_baseline_trial.sh` | `run_stage0_paper_trial.sh` |
+| Trial file | `sequential_stage_artifacts/stage0_baseline_trial_dir.txt` | `…/stage0_mbpo_paper_trial_dir.txt` |
+| Ray temp | `.ray_tmp/stage0_baseline/` | `.ray_tmp/stage0_mbpo_paper/` |
+| Plots | `training_plots/stage0_baseline/` | `training_plots/stage0_mbpo_paper/` |
+| Eval | `evaluation/pv_stage0_baseline/` | `evaluation/pv_stage0_mbpo_paper/` |
+
+**Terminal 1:**
+
+```bash
+cd /home/user01/mbpo_custom
+source "$HOME/miniconda3/etc/profile.d/conda.sh" && conda activate mbpo
+PV_CPU_PROFILE=dual ./scripts/run_stage0_baseline_trial.sh train
+```
+
+**Terminal 2:**
+
+```bash
+cd /home/user01/mbpo_custom
+source "$HOME/miniconda3/etc/profile.d/conda.sh" && conda activate mbpo
+PV_CPU_PROFILE=dual ./scripts/run_stage0_paper_trial.sh train
+```
+
+**Plot / eval (never use `latest` while both run):**
+
+```bash
+./scripts/run_stage0_baseline_trial.sh plot
+./scripts/run_stage0_baseline_trial.sh eval && ./scripts/run_stage0_baseline_trial.sh gate
+
+./scripts/run_stage0_paper_trial.sh plot
+./scripts/run_stage0_paper_trial.sh eval && ./scripts/run_stage0_paper_trial.sh gate
+```
+
+If a run already died from Ray errors, stop stale Ray processes before restarting:
+
+```bash
+ray stop --force 2>/dev/null || true
+pkill -f "mbpo run_local" 2>/dev/null || true
+```
+
+Then start the two helpers above (do not reuse the old terminal command with `--cpus=4 --trial-cpus=2` unless only **one** run is active).
+
+**Step 3 (generic)** — with CPU env loaded:
+
+```bash
+source scripts/pv_cpu_env.sh   # or PV_CPU_PROFILE=dual source scripts/pv_cpu_env.sh
+mbpo run_local examples.development \
+  --config=CONFIG_MODULE \
+  --gpus=0 --trial-gpus=0 \
+  --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS" \
+  --temp-dir="$PWD/.ray_tmp/YOUR_RUN_LABEL"
+```
 
 ---
 
@@ -250,7 +318,7 @@ Follow [§0 clean warmup](#0-clean-stage-isolation-every-run) Steps 0–2 with:
 ```bash
 mbpo run_example_dry examples.development \
   --config=examples.config.pv_tracking.stage0_single_day \
-  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
 ```
 
 **Pass:** log shows `config_version` with `stage0`, `periods=40`, `observation_mode='physical'`.
@@ -262,7 +330,7 @@ mbpo run_example_dry examples.development \
 ```bash
 mbpo run_local examples.development \
   --config=examples.config.pv_tracking.stage0_single_day \
-  --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
 ```
 
 Note the new `seed:…` trial directory Ray creates (or capture it before training ends).
@@ -356,7 +424,7 @@ python scripts/validate_pv_rollouts.py \
 ```bash
 mbpo run_example_dry examples.development \
   --config=examples.config.pv_tracking.0 \
-  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
 ```
 
 ### C — Train
@@ -364,7 +432,7 @@ mbpo run_example_dry examples.development \
 ```bash
 mbpo run_local examples.development \
   --config=examples.config.pv_tracking.0 \
-  --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
 ```
 
 ### D — Verify trial contract
@@ -465,7 +533,7 @@ python scripts/validate_pv_rollouts.py \
 ```bash
 mbpo run_example_dry examples.development \
   --config=examples.config.pv_tracking.stage2_random_weather \
-  --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
 ```
 
 ### C — Train
@@ -473,7 +541,7 @@ mbpo run_example_dry examples.development \
 ```bash
 mbpo run_local examples.development \
   --config=examples.config.pv_tracking.stage2_random_weather \
-  --gpus=0 --trial-gpus=0 --cpus=4 --trial-cpus=2
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
 ```
 
 ### D — Verify trial contract
