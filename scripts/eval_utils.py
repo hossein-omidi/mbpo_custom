@@ -535,9 +535,15 @@ def get_eval_environment(
         fixed_eval_dates=None,
         eval_randomize_day=None,
         eval_weather_source=None,
-        eval_randomize_initial_orientation=False,
+        eval_randomize_initial_orientation=None,
         eval_protocol=EVAL_PROTOCOL_INHERIT):
-    """Build evaluation env; defaults favor diverse held-out-style testing."""
+    """Build frozen-policy evaluation env on the real PVTrackingEnv.
+
+    RL protocol: Monte Carlo sampling of days from the annual weather distribution
+    and independent eval seeds — not calendar-day hold-out. pvlib is deterministic
+    given each day's exogenous trajectory. Optional irradiance_perturbation_std is
+    bounded augmentation only (paper default 0). Fixed dates only for stress tests.
+    """
     environment_params = variant['environment_params']
     eval_env_params = (
         environment_params.get('evaluation')
@@ -565,13 +571,20 @@ def get_eval_environment(
     elif eval_randomize_day is not None:
         kwargs['randomize_day'] = bool(eval_randomize_day)
     else:
-        # Default: random days across configured range (diverse generalization test).
         kwargs['randomize_day'] = True
+
+    # Eval always sees full annual support (never inherit training exclusions).
+    kwargs.pop('excluded_dates', None)
+    if fixed_eval_dates is None:
+        kwargs.pop('fixed_eval_dates', None)
 
     if eval_weather_source is not None:
         kwargs['weather_source'] = eval_weather_source
 
-    kwargs['randomize_initial_orientation'] = bool(eval_randomize_initial_orientation)
+    if eval_randomize_initial_orientation is not None:
+        kwargs['randomize_initial_orientation'] = bool(eval_randomize_initial_orientation)
+    elif kwargs.get('randomize_day', True):
+        kwargs.setdefault('randomize_initial_orientation', True)
 
     kwargs, protocol_label = apply_eval_protocol(kwargs, eval_protocol)
     eval_env_params['kwargs'] = kwargs
@@ -638,7 +651,12 @@ def _extract_underlying_env(env):
 
 
 def make_baseline_rollout(env, baseline_type, path_length, seed=None):
-    """Run a baseline policy with correct PV observation decoding."""
+    """Run a baseline policy with correct PV observation decoding.
+
+    Baselines only set target tilt/azimuth each step; power and energy_kwh in
+    info come from env.step → PVTrackingEnv._power_from_orientation (pvlib
+    get_total_irradiance), identical to the learned policy path.
+    """
     underlying = _extract_underlying_env(env)
     if seed is not None and hasattr(env, 'seed'):
         env.seed(seed)
@@ -974,6 +992,7 @@ def write_eval_scenario_confirmation(outdir, eval_env_params, paths_by_name, max
             'randomize_initial_orientation', False))
         f.write('  [x] per-rollout seed recorded in rollout metadata / CSV\n')
         f.write('  [x] same reward = energy_kwh - movement_cost\n')
+        f.write('  [x] power/energy from pvlib via env.step (all methods)\n')
         f.write('  [x] baselines do not call the neural policy\n')
         f.write('\nPer-method rollout dates (seed order):\n')
         for method, paths in sorted(paths_by_name.items()):

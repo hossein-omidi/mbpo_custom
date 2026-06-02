@@ -73,6 +73,8 @@ from eval_utils import (
     write_reward_time_report,
 )
 
+from plot_paper_eval import generate_paper_figures
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -169,6 +171,22 @@ def parse_args():
         default=EVAL_PROTOCOL_INHERIT,
         choices=(EVAL_PROTOCOL_INHERIT, EVAL_PROTOCOL_UTC, EVAL_PROTOCOL_LEGACY_UTC),
         help='UTC daylight episode grid (inherit/utc/legacy_utc are equivalent).')
+    parser.add_argument(
+        '--eval-seed-base',
+        type=int,
+        default=100000,
+        help='Base seed for evaluation rollouts (independent of training seeds).')
+    parser.add_argument(
+        '--vary-init-orientation',
+        action='store_true',
+        default=None,
+        help='Randomize initial panel pose each rollout (RL episode ξ).')
+    parser.add_argument(
+        '--no-vary-init-orientation',
+        dest='vary_init_orientation',
+        action='store_false',
+        help='Disable initial-orientation randomization at eval.')
+    parser.set_defaults(vary_init_orientation=None)
     return parser.parse_args()
 
 
@@ -644,8 +662,10 @@ def plot_rollout_combined(outdir, path, idx):
     tilt = np.asarray([info.get('tilt', np.nan) for info in infos], dtype=np.float64)
     azimuth = np.asarray([info.get('azimuth', np.nan) for info in infos], dtype=np.float64)
     movement = np.asarray([info.get('movement_cost', 0.0) for info in infos], dtype=np.float64)
-    cumulative_energy = np.cumsum(
+    gross_energy = np.asarray(
         [info.get('energy_kwh', 0.0) for info in infos], dtype=np.float64)
+    cumulative_gross = np.cumsum(gross_energy)
+    cumulative_net = np.cumsum(rewards)
 
     rollout_dir = os.path.join(outdir, 'rollout_plots')
     os.makedirs(rollout_dir, exist_ok=True)
@@ -677,8 +697,11 @@ def plot_rollout_combined(outdir, path, idx):
             0.01, 0.95, 'gray = night (solar alt ≤ 0°)',
             transform=axes[0].transAxes, fontsize=7, va='top')
 
-    axes[1].plot(x, cumulative_energy, color='#9467bd', linewidth=1.5)
-    axes[1].set_ylabel('Cum. energy (kWh)')
+    axes[1].plot(x, cumulative_gross, color='#9467bd', linewidth=1.5, ls='--',
+                 alpha=0.75, label='gross energy')
+    axes[1].plot(x, cumulative_net, color='#d62728', linewidth=1.8, label='net (reward)')
+    axes[1].set_ylabel('Cumulative kWh')
+    axes[1].legend(loc='upper left', fontsize=8)
 
     axes[2].plot(x, tilt, color='#ff7f0e', linewidth=1.5)
     axes[2].set_ylabel('Tilt (deg)')
@@ -742,6 +765,7 @@ def main(args):
         args.test_end_date,
         args.fixed_eval_dates,
         eval_weather_source=args.eval_weather_source,
+        eval_randomize_initial_orientation=args.vary_init_orientation,
         eval_protocol=args.eval_protocol,
     )
     eval_warnings = validate_eval_coverage(
@@ -772,7 +796,8 @@ def main(args):
     baseline_metrics = {}
     with policy.set_deterministic(args.deterministic):
         for idx in range(args.num_rollouts):
-            eval_environment.seed(idx)
+            eval_seed = int(args.eval_seed_base) + idx
+            eval_environment.seed(eval_seed)
             path = rollout(
                 eval_environment,
                 policy,
@@ -796,10 +821,12 @@ def main(args):
                     args.test_end_date,
                     args.fixed_eval_dates,
                     eval_weather_source=args.eval_weather_source,
+                    eval_randomize_initial_orientation=args.vary_init_orientation,
                     eval_protocol=args.eval_protocol,
                 )
+                eval_seed = int(args.eval_seed_base) + idx
                 path = make_baseline_rollout(
-                    baseline_env, name, path_length, seed=idx)
+                    baseline_env, name, path_length, seed=eval_seed)
                 baseline_paths_by_name[name].append(path)
             save_rollout_csv(
                 os.path.join(baseline_dir, name),
@@ -837,6 +864,14 @@ def main(args):
         plot_files.append(plot_by_season(args.outdir, paths))
     if args.compare_baselines and len(paths_by_name) > 1:
         plot_files.append(plot_method_comparison(args.outdir, paths_by_name))
+        generate_paper_figures(
+            args.outdir,
+            paths_by_name,
+            eval_env_params,
+            trial_dir=experiment_root,
+            error='std',
+            is_stress=bool(args.fixed_eval_dates),
+        )
 
     rollout_plot_files = []
     for idx, path in enumerate(paths, start=1):

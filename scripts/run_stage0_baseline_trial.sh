@@ -59,7 +59,7 @@ case "$CMD" in
     mkdir -p "$EVAL_DIR"
     python scripts/evaluate_agent.py "$CKPT" --outdir "$EVAL_DIR" \
       --eval-protocol inherit --max-path-length 78 --compare-baselines \
-      --eval-weather-source clearsky --fixed-eval-dates 2020-06-21 --num-rollouts 10
+      --num-rollouts 10
     ;;
   gate)
     TRIAL="$(resolve_trial)"

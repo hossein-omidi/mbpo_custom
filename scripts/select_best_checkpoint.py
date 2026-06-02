@@ -90,11 +90,12 @@ def evaluate_checkpoint(
     paths_by_name = {}
     deterministic = not args.stochastic
     for idx in range(args.num_rollouts):
+        seed = int(args.eval_seed_base) + idx
         paths.append(run_learned_policy_rollout(
             policy,
             eval_env,
             args.max_path_length,
-            seed=idx,
+            seed=seed,
             deterministic=deterministic,
         ))
     paths_by_name['learned_policy'] = paths
@@ -103,6 +104,7 @@ def evaluate_checkpoint(
         for name in args.baseline_types:
             bpaths = []
             for idx in range(args.num_rollouts):
+                seed = int(args.eval_seed_base) + idx
                 env, _ = get_eval_environment(
                     variant,
                     test_start_date=args.test_start_date,
@@ -111,7 +113,7 @@ def evaluate_checkpoint(
                     eval_protocol=args.eval_protocol,
                 )
                 bpaths.append(make_baseline_rollout(
-                    env, name, args.max_path_length, seed=idx))
+                    env, name, args.max_path_length, seed=seed))
             paths_by_name[name] = bpaths
 
     energy = _mean_energy(paths)
@@ -144,6 +146,11 @@ def main():
         help='PV tracking log root (default ~/ray_mbpo/PVTracking/pv_tracking).')
     parser.add_argument('--variant-file', type=str, default='params.json')
     parser.add_argument('--num-rollouts', '-n', type=int, default=4)
+    parser.add_argument(
+        '--eval-seed-base',
+        type=int,
+        default=0,
+        help='Base seed for rollout i (env seed = base + i). Independent of training.')
     parser.add_argument('--max-path-length', type=int, default=PV_EPISODE_MAX_STEPS)
     parser.add_argument(
         '--stochastic',

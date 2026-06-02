@@ -1,49 +1,50 @@
 # PV tracking — training protocol (A→Z)
 
-Phased procedure for proving the learned policy can match or beat `sun_tracking` on clearsky before adding weather or full-year complexity.
+Phased procedure for PV tracking with MBPO/SAC. Each stage is a **standalone experiment**: its own config, fresh trial, own evaluation directory, and own weather/day-sampling contract. Stages do **not** share checkpoints or replay pools unless you explicitly pass `--restore` (only supported for continuing the **same** Stage 3 config).
+
+**Recommended science order:** Stage 0 (single day) → Stage 1 (summer clearsky) → Stage 2 (summer historical) → Stage 3 (full year). You may run any stage alone without completing earlier stages.
 
 **Rules**
 
-- Do **not** start Stage 1 until **Stage 0 gates pass**.
-- Do **not** use full-year historical weather until **Stage 1 gates pass**.
-- Do **not** chain calendar days into multi-day episodes (one day = one episode, 39 steps).
-- Use **only** the directory names in [§2](#2-directory-layout-one-name-per-purpose) for each stage — do not reuse `evaluation/pv_daylight_utc` for Stage 0/1 science runs (that path is a legacy December hold-out).
-- **Each stage trains independently** — fresh trial, no `--restore`, no cross-stage weights or replay pools ([§0](#0-clean-stage-isolation-every-run)).
+- **One stage = one fresh train** — no `--restore` across stages ([§0](#0-clean-stage-isolation-every-run)).
+- **One calendar day = one episode** — no multi-day episodes (**78** control steps; `periods=79`, `freq=7min30s`).
+- Use the **canonical `evaluation/pv_stage*`** (or stage helper script) for that config — do not mix eval outputs between stages.
+- **Power / energy:** pvlib via `PVTrackingEnv.step` for learned policy and baselines ([§1.1](#11-physics-and-baselines-pvlib)).
+- **Post-train eval:** prefer `--eval-protocol inherit` so date, `weather_source`, and `movement_penalty` match the checkpoint config ([§6](#6-training-vs-evaluation-environments)).
+
+Copy-paste shortcuts: [PV_SIMPLE_WORKFLOW.md](PV_SIMPLE_WORKFLOW.md).
+
+---
+
+## Stage independence (at a glance)
+
+| Stage | Config | Train: days / weather | i.i.d. episodes? | In-train eval dates | Post-train eval dir |
+|-------|--------|------------------------|------------------|----------------------|---------------------|
+| **0 clearsky** | `stage0_single_day` | `2020-06-15` / clearsky | No (single day) | same day | `evaluation/pv_stage0_baseline/` |
+| **0 cloudy+movement** | `stage0_single_day_mbpo_paper` | `2020-06-21` / historical | No | same day | `evaluation/pv_stage0_mbpo_paper_movement/` |
+| **1** | `0.py` | summer `2020-06-01`…`08-31` / clearsky | Yes | 4 summer hold-outs | `evaluation/pv_stage1_clearsky_summer/` |
+| **2** | `stage2_random_weather` | summer range / **historical** | Yes | 4 summer hold-outs | `evaluation/pv_stage2_random_weather_summer/` |
+| **3** | `stage3_fullyear_random_clean_split` | full year / historical annual scenarios | Yes (all days) | random day + seeds (annual) | `evaluation/pv_stage3_fullyear/` |
+
+Canonical dates live in `examples/config/pv_tracking/verified_dates.py` (PVGIS TMY, Albuquerque site).
 
 ---
 
 ## 0. Clean stage isolation (every run)
 
-### Is poor Stage 0 performance caused by leftover data from a previous run?
+### Is poor performance caused by a previous stage’s data?
 
-**No — not when you follow the clean protocol below.**
+**No — when you follow the clean protocol.**
 
-A normal `mbpo run_local` (without `--restore`) always starts:
+A normal `mbpo run_local` (without `--restore`) starts an empty replay pool, fresh networks, and a new `seed:…` trial. Old trials on disk are ignored unless you point `--restore` or eval at them.
 
-| Artifact | Fresh on new trial? |
-|----------|---------------------|
-| Replay pool (real env) | **Yes** — empty, filled only from this run |
-| Model pool (MBPO rollouts) | **Yes** — created during this run |
-| BNN ensemble | **Yes** — randomly initialized |
-| SAC policy / Q networks | **Yes** — randomly initialized |
-| `params.json` / `progress.csv` | **Yes** — new Ray trial directory |
+**Contamination happens only if you:**
 
-Defaults in `examples/development/base.py`: `checkpoint_replay_pool=False`, so replay buffers are **not** saved to disk or reloaded unless you opt in.
+1. Pass **`--restore=…`** from another stage or MDP.
+2. Evaluate the **wrong checkpoint** (newest `seed:*` while another stage is training).
+3. Override eval with mismatched **`--eval-weather-source`** or dates (use **`inherit`** instead).
 
-Your Stage 0 reference trial (`seed:8317…`) confirms this: `restore: null`, `checkpoint_replay_pool: false`, correct `config_version`. Gate failure was a **learning outcome** (wrong tilt sign, RC3), not stale replay or a restored checkpoint.
-
-**Contamination can happen only if you:**
-
-1. Pass **`--restore=…`** from another stage or an old MDP (wrong env in checkpoint).
-2. Evaluate the **wrong checkpoint** (e.g. `ls -td …/seed:*` picks a Stage 3 trial while running Stage 0 eval).
-3. Enable **`checkpoint_replay_pool=True`** and restore an old pool missing `remaining_steps`.
-4. Use **`ALLOW_UNSAFE_POLICY_INJECTION=1`** in `run_sequential_stages.sh` (deprecated; script no longer injects weights).
-
-Old trials under `~/ray_mbpo/…` sit on disk but are **ignored** until you explicitly point `--restore` or eval at them.
-
-### Clean warmup protocol (Stages 0–2)
-
-Use this **before every stage train + eval**. One stage = one independent experiment.
+### Clean warmup (every stage)
 
 **Step 0 — Environment**
 
@@ -53,57 +54,53 @@ source "$HOME/miniconda3/etc/profile.d/conda.sh"
 conda activate mbpo
 ```
 
-**Step 1 — Preflight (config + env contract)**
+**Step 1 — Preflight**
 
 ```bash
-# Replace CONFIG_MODULE and CONFIG_PATH for your stage (see Quick reference).
 python scripts/verify_training_config.py --config CONFIG_MODULE
 python scripts/validate_pv_rollouts.py --config-path CONFIG_PATH
 ```
 
-**Step 2 — Optional dry run (no learning)**
+For movement-penalty configs also:
 
 ```bash
-mbpo run_example_dry examples.development \
-  --config=CONFIG_MODULE \
-  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
+python scripts/verify_movement_cost_fairness.py --config-path CONFIG_PATH
 ```
 
-**Step 3 — Train fresh (no restore)**
+**Step 2 — Train (no restore)**
 
 ```bash
-# Do NOT pass --restore. Ray creates a new seed:… trial directory.
 mbpo run_local examples.development \
   --config=CONFIG_MODULE \
-  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
+  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS" \
+  --temp-dir="$PWD/.ray_tmp/YOUR_LABEL"
 ```
 
-**Step 4 — Bind eval to THIS trial only**
+Or use `./scripts/run_stage0_baseline_trial.sh` / `run_stage0_paper_trial.sh` for Stage 0 tracks.
+
+**Step 3 — Bind eval to this trial**
 
 ```bash
-# Prefer the trial path you just started (or note the seed:… folder name before training).
 export TRIAL=/full/path/to/seed:YOUR_TRIAL_DIR
 export CKPT="$TRIAL/best_eval_checkpoint"
 
 python -c "
 import json, sys
 v = json.load(open(sys.argv[1] + '/params.json'))
-assert v.get('restore') in (None, ''), 'refusing eval: trial was restored from another checkpoint'
-assert v.get('run_params', {}).get('checkpoint_replay_pool') is not True
-print('OK clean trial:', v.get('config_version'), 'restore=', v.get('restore'))
+assert v.get('restore') in (None, ''), 'refusing eval: trial was restored'
+print('OK:', v.get('config_version'))
 " "$TRIAL"
 ```
 
-**Step 5 — Evaluate into the canonical stage outdir**
+**Step 4 — Evaluate** into the canonical stage outdir with `--eval-protocol inherit` ([§4–§7](#4-stage-0--clearsky-single-day)).
 
-Clear or rename the previous eval folder if you want a clean report (optional):
+**Step 5 — Plot training metrics**
 
 ```bash
-# Example for Stage 0:
-mv evaluation/pv_stage0_single_day evaluation/pv_stage0_single_day_backup_$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+python scripts/plot_training_progress.py "$TRIAL" --outdir training_plots/STAGE_LABEL \
+  --metrics evaluation/return-average training/return-average model/val_loss \
+  policy/shifts-mean policy/actions-std alpha
 ```
-
-Then run `evaluate_agent.py` with stage-matching flags (see [§4–§6.5](#4-stage-0--procedure-az-single-day)).
 
 **Step 6 — Gate**
 
@@ -115,88 +112,20 @@ python scripts/diagnose_tracking.py \
   --verify-env --gate
 ```
 
-**Pass criteria:** exit code **0** on gates **and** `tracking_diagnosis.txt` shows matching `config_version` / train dates vs eval.
+### Stage 3 exception
 
-### Stage 3 exception (same-stage resume only)
+`resume_stage3_refinement.sh` may `--restore` to continue the **same** Stage 3 MDP only — not cross-stage transfer.
 
-`resume_stage3_refinement.sh` may use `--restore` to **continue the same Stage 3 MDP** (same config, more epochs). That is not cross-stage transfer. Do not restore a Stage 0/1/2 checkpoint into Stage 3.
+### CPU / parallel Stage 0 runs
 
-### `run_sequential_stages.sh` vs manual stage runs
+On a 16-thread VM, avoid two jobs each using `nproc` workers. Use `scripts/pv_cpu_env.sh`:
 
-| Mode | Use when |
-|------|----------|
-| **Manual** (`stage0_single_day.py`, `0.py`, …) | Gate-ready runs; full epoch budgets from each config |
-| **`run_sequential_stages.sh`** | Optional curriculum (reduced epochs: 100/200/300/500); each stage still starts a **fresh** trial with **no** `--restore` |
+| `PV_CPU_PROFILE` | `--cpus` | `--trial-cpus` | When |
+|------------------|----------|----------------|------|
+| `single` | 10 | 4 | One training job |
+| `dual` | 6 | 2 | Baseline + paper in parallel |
 
-Do not treat archived files in `sequential_stage_artifacts/` as checkpoints for the next stage.
-
-### CPU limits and two parallel Stage 0 runs (16-thread VM)
-
-**Ray heartbeat error** (`node … marked dead … missed too many heartbeats`) usually means the machine is **oversubscribed**. If you omit `--trial-cpus`, mbpo defaults to **`nproc` (16)** per process — two runs then fight for 32 logical workers.
-
-Use `scripts/pv_cpu_env.sh`:
-
-| `PV_CPU_PROFILE` | Use when | `--cpus` | `--trial-cpus` | BLAS/TF threads |
-|----------------|----------|----------|----------------|-----------------|
-| `single` | One job | 10 | 4 | 4 |
-| `dual` | Baseline + paper at once | 6 | 2 | 2 |
-
-Each training process also needs its own **`--temp-dir`** (helpers set this automatically).
-
-| | Baseline | MBPO paper |
-|--|----------|------------|
-| Config | `stage0_single_day` | `stage0_single_day_mbpo_paper` |
-| Script | `run_stage0_baseline_trial.sh` | `run_stage0_paper_trial.sh` |
-| Trial file | `sequential_stage_artifacts/stage0_baseline_trial_dir.txt` | `…/stage0_mbpo_paper_trial_dir.txt` |
-| Ray temp | `.ray_tmp/stage0_baseline/` | `.ray_tmp/stage0_mbpo_paper/` |
-| Plots | `training_plots/stage0_baseline/` | `training_plots/stage0_mbpo_paper/` |
-| Eval | `evaluation/pv_stage0_baseline/` | `evaluation/pv_stage0_mbpo_paper/` |
-
-**Terminal 1:**
-
-```bash
-cd /home/user01/mbpo_custom
-source "$HOME/miniconda3/etc/profile.d/conda.sh" && conda activate mbpo
-PV_CPU_PROFILE=dual ./scripts/run_stage0_baseline_trial.sh train
-```
-
-**Terminal 2:**
-
-```bash
-cd /home/user01/mbpo_custom
-source "$HOME/miniconda3/etc/profile.d/conda.sh" && conda activate mbpo
-PV_CPU_PROFILE=dual ./scripts/run_stage0_paper_trial.sh train
-```
-
-**Plot / eval (never use `latest` while both run):**
-
-```bash
-./scripts/run_stage0_baseline_trial.sh plot
-./scripts/run_stage0_baseline_trial.sh eval && ./scripts/run_stage0_baseline_trial.sh gate
-
-./scripts/run_stage0_paper_trial.sh plot
-./scripts/run_stage0_paper_trial.sh eval && ./scripts/run_stage0_paper_trial.sh gate
-```
-
-If a run already died from Ray errors, stop stale Ray processes before restarting:
-
-```bash
-ray stop --force 2>/dev/null || true
-pkill -f "mbpo run_local" 2>/dev/null || true
-```
-
-Then start the two helpers above (do not reuse the old terminal command with `--cpus=4 --trial-cpus=2` unless only **one** run is active).
-
-**Step 3 (generic)** — with CPU env loaded:
-
-```bash
-source scripts/pv_cpu_env.sh   # or PV_CPU_PROFILE=dual source scripts/pv_cpu_env.sh
-mbpo run_local examples.development \
-  --config=CONFIG_MODULE \
-  --gpus=0 --trial-gpus=0 \
-  --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS" \
-  --temp-dir="$PWD/.ray_tmp/YOUR_RUN_LABEL"
-```
+Each job needs its own `--temp-dir`. Helpers: `run_stage0_baseline_trial.sh`, `run_stage0_paper_trial.sh` (set `PV_CPU_PROFILE=dual` for parallel runs).
 
 ---
 
@@ -204,407 +133,297 @@ mbpo run_local examples.development \
 
 | Symbol | Meaning |
 |--------|---------|
-| **Episode** | One calendar day, UTC grid `13:30`–`23:15`, **39** control steps (`periods=40` timestamps) |
-| **State** `s` | `physical` obs (11-D): solar angles, normalized irradiance, panel pose, `cos_aoi` |
-| **Action** `a` | `a ∈ [-1,1]²` → Δtilt ∈ [-5°,5°], Δazimuth ∈ [-10°,10°] per 15 min |
+| **Episode** | One calendar day, UTC `13:30`–`23:15`, **78** steps (`periods=79`, `freq=7min30s`) |
+| **State** | `physical` 11-D: solar angles, normalized irradiance, panel pose, `cos_aoi` |
+| **Action** | `a ∈ [-1,1]²` → Δtilt ∈ [-5°,5°], Δazimuth ∈ [-10°,10°] per step |
 | **Reward** | `r = energy_kwh - movement_penalty × (‖a_tilt‖₁ + ‖a_azimuth‖₁)` |
-| **Termination** | After 39 steps; **no** carry-over to the next calendar day |
-| **Day sampling** | Each `reset()`: one day from `[start_date, end_date]` if `randomize_day=True` |
+| **Termination** | After 78 steps; no next-day carry-over |
+| **Day sampling** | `reset()`: one day from `[start_date, end_date]` if `randomize_day=True` (i.i.d. over catalog) |
+
+### 1.1 Physics and baselines (pvlib)
+
+- `energy_kwh` and `info['power']` come from **`get_total_irradiance`** (pvlib) in `mbpo/env/pv_tracking.py::_power_from_orientation`.
+- **`sun_tracking`** and **`fixed_no_motion`** call `env.step` with orientation targets decoded from obs; they use the **same** pvlib path as the learned policy (`scripts/eval_utils.py::make_baseline_rollout`).
+- Verify: `python scripts/verify_pv_state_space.py` → `verification/pv_state_space/`.
 
 ---
 
-## 2. Directory layout (one name per purpose)
+## 2. Directory layout
 
-All paths are relative to the **repo root** unless noted.
+### 2.1 Training artifacts (Ray)
 
-### 2.1 Training artifacts (Ray — outside git)
+| Purpose | Path |
+|---------|------|
+| Trials | `~/ray_mbpo/PVTracking/pv_tracking/seed:<id>_<timestamp>/` |
+| Metrics | `…/progress.csv` |
+| Best checkpoint | `…/best_eval_checkpoint/` (`monitor_metric=evaluation/return-average`) |
 
-| Purpose | Path pattern | Created by |
-|---------|----------------|------------|
-| **All PV trials** | `~/ray_mbpo/PVTracking/pv_tracking/seed:<id>_<timestamp><hash>/` | `mbpo run_local` |
-| **Merged variant** | `…/params.json` | Ray at trial start |
-| **Metrics** | `…/progress.csv` | Training loop |
-| **Best checkpoint (in-train eval)** | `…/best_eval_checkpoint/` | `monitor_metric` = `evaluation/return-average` |
-| **Latest weights** | `…/latest_checkpoint/` | End of each epoch |
+### 2.2 Evaluation outputs (repo)
 
-After each run, set **`TRIAL`** to the **specific** trial you trained (not necessarily the newest folder if you ran multiple experiments):
+| Stage track | Canonical `--outdir` |
+|-------------|----------------------|
+| Stage 0 clearsky | `evaluation/pv_stage0_baseline/` |
+| Stage 0 paper | `evaluation/pv_stage0_mbpo_paper_movement/` |
+| Stage 1 | `evaluation/pv_stage1_clearsky_summer/` |
+| Stage 2 | `evaluation/pv_stage2_random_weather_summer/` |
+| Stage 3 final test | e.g. `evaluation/pv_stage3_final_test/` (define per study) |
 
-```bash
-export TRIAL=/full/path/to/seed:YOUR_TRIAL_DIR
-export TRIAL="${TRIAL%/}"
-export CKPT="$TRIAL/best_eval_checkpoint"
-```
-
-Verify `params.json` has `restore: null` before eval ([§0](#0-clean-stage-isolation-every-run)).
-
-### 2.2 Evaluation outputs (repo — gitignored except `.gitkeep`)
-
-| Stage | **Canonical `--outdir`** | Must match config |
-|-------|--------------------------|-------------------|
-| **Stage 0** | `evaluation/pv_stage0_single_day/` | `stage0_single_day.py`, date `2020-06-21` |
-| **Stage 1** | `evaluation/pv_stage1_clearsky_summer/` | `0.py`, four summer hold-out dates |
-| Legacy / ad hoc | `evaluation/pv_daylight_utc/` | December hold-out — **not** Stage 0/1 gates |
-
-Each eval run creates:
+Each eval run typically includes:
 
 ```text
-evaluation/pv_stage0_single_day/          # example; use the row for your stage
-├── evaluation_summary.json             # eval_config, deterministic flag, metrics
-├── evaluation_summary.txt
+evaluation/pv_stage0_baseline/           # example
+├── evaluation_summary.json
 ├── eval_scenario_confirmation.txt
 ├── reward_time_analysis.txt
-├── rollouts/rollout_*.csv              # learned policy
-├── baseline_rollouts/
-│   ├── sun_tracking/rollout_*.csv
-│   └── fixed_no_motion/rollout_*.csv
-└── diagnostics/                      # from diagnose_tracking.py
+├── rollouts/rollout_*.csv
+├── baseline_rollouts/sun_tracking/
+├── baseline_rollouts/fixed_no_motion/
+└── diagnostics/                         # diagnose_tracking.py
     ├── tracking_diagnosis.txt
     └── plots/
 ```
 
-### 2.3 Config and optional demonstrations
+### 2.3 Config modules
 
-| Purpose | Path |
-|---------|------|
-| Stage 0 config | `examples/config/pv_tracking/stage0_single_day.py` |
-| Stage 1 config | `examples/config/pv_tracking/0.py` |
-| Stage 2 config | `examples/config/pv_tracking/stage2_random_weather.py` (legacy filename; now historical weather) |
-| Sun demos (optional) | `demonstration/pv_stage0_sun.npz` |
+| Stage | Module | Training MDP | Eval (inherit) |
+|-------|--------|--------------|----------------|
+| **0 clearsky** | `stage0_single_day.py` | `2020-06-15`, `clearsky`, `randomize_day=False` | same |
+| **0 paper** | `stage0_single_day_mbpo_paper.py` | `2020-06-21`, `historical`, movement penalty | same |
+| **1** | `0.py` | summer, `clearsky`, `randomize_day=True` | 4 dates in `verified_dates.STAGE1_FIXED_EVAL_DATES` |
+| **2** | `stage2_random_weather.py` | summer, `historical`, i.i.d. | `STAGE2_FIXED_EVAL_DATES` |
+| **3** | `stage3_fullyear_random_clean_split.py` | full year (all days) | seed-based eval; optional `STAGE3_STRESS_TEST_DATES` for diagnostics |
 
-### 2.4 Config modules (by stage)
-
-| Stage | Module | `CONFIG_VERSION` prefix | Training MDP | Post-train eval dates |
-|-------|--------|-------------------------|--------------|------------------------|
-| **0** | `stage0_single_day.py` | `pv_tracking_stage0_…` | Single day `2020-06-21`, `randomize_day=False` | `--fixed-eval-dates 2020-06-21` |
-| **1** | `0.py` | `pv_tracking_stage1_…` | Summer `2020-06-01`…`2020-08-31`, `randomize_day=True` | `2020-06-07,2020-06-21,2020-07-15,2020-08-01` |
-| **2** | `stage2_random_weather.py` | `pv_tracking_stage2_…` | Summer `2020-06-01`…`2020-08-31`, `randomize_day=True`, `weather_source='historical'` (legacy filename retained) | `2020-06-07,2020-06-21,2020-07-15,2020-08-01` |
-
-Epoch counts and exploration steps live in the config files (not duplicated here). Always confirm with `verify_training_config.py` and `params.json` after the trial starts.
+Confirm `epoch_length=78`, `periods=79` with `verify_training_config.py` after merge.
 
 ---
 
 ## 3. Phase gates (automated)
 
-Run **after** `evaluate_agent.py --compare-baselines` into the **canonical** `evaluation/pv_stage*` directory for that stage.
+After `evaluate_agent.py --compare-baselines`:
 
 | Gate | Default | Meaning |
 |------|---------|---------|
-| Energy | mean(learned) / mean(sun) ≥ **0.95** | Primary harvest metric |
-| Action L1 | ratio ≥ **0.50** (productive sun, alt ≥ 5°) | Deploy policy is not quasi-static vs sun |
-| Tilt error | mean \|tilt − zenith\| ≤ **10°** | Tracks zenith |
-| vs fixed | learned energy > `fixed_no_motion` | Not only a static pose |
+| Energy | learned / sun ≥ **0.95** | Harvest vs sun tracker |
+| Action L1 | ratio ≥ **0.50** (alt ≥ 5°) | Not quasi-static |
+| Tilt error | mean \|tilt − zenith\| ≤ **10°** | Zenith tracking |
+| vs fixed | learned energy > fixed | Not only static pose |
 
-Exit code **0** = pass, **1** = fail (CI-friendly).
+`diagnose_tracking.py --gate` → exit **0** = pass.
 
-Failure analysis for a reference Stage 1 checkpoint: [PV_TRACKING_ROOT_CAUSES.md](PV_TRACKING_ROOT_CAUSES.md).
+Cloudy / movement-penalty runs may need relaxed thresholds — document any override in your study notes.
 
 ---
 
-## 4. Stage 0 — procedure A→Z (single day)
+## 4. Stage 0 — clearsky single day
 
-**Goal:** On `2020-06-21`, clearsky, `movement_penalty=0`, learned policy passes gates vs `sun_tracking`.
+**Goal:** Single-day clearsky proof vs `sun_tracking` on `2020-06-15`.
 
-### A — Preflight (repo)
+**Helper:** `./scripts/run_stage0_baseline_trial.sh {train|plot|eval|gate}`
 
-Follow [§0 clean warmup](#0-clean-stage-isolation-every-run) Steps 0–2 with:
-
-- `CONFIG_MODULE=examples.config.pv_tracking.stage0_single_day`
-- `CONFIG_PATH=examples/config/pv_tracking/stage0_single_day.py`
-
-**Pass:** `verify_training_config` prints `PASS`; rollout validator exits 0.
-
-### B — Dry run (optional, no learning)
+### Preflight
 
 ```bash
-mbpo run_example_dry examples.development \
-  --config=examples.config.pv_tracking.stage0_single_day \
-  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
+python scripts/verify_training_config.py --config examples.config.pv_tracking.stage0_single_day
+python scripts/validate_pv_rollouts.py --config-path examples/config/pv_tracking/stage0_single_day.py
 ```
 
-**Pass:** log shows `config_version` with `stage0`, `periods=40`, `observation_mode='physical'`.
-
-### C — Train
-
-§0 Step 3 — **no `--restore`**:
+### Train
 
 ```bash
-mbpo run_local examples.development \
-  --config=examples.config.pv_tracking.stage0_single_day \
-  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
+./scripts/run_stage0_baseline_trial.sh train
 ```
 
-Note the new `seed:…` trial directory Ray creates (or capture it before training ends).
-
-### D — Verify trial contract (`params.json`)
-
-§0 Step 4 — set `TRIAL` to **that** trial, not an arbitrary newest folder:
+### Verify `params.json`
 
 ```bash
-export TRIAL=/full/path/to/seed:YOUR_TRIAL_DIR
-export TRIAL="${TRIAL%/}"
-export CKPT="$TRIAL/best_eval_checkpoint"
-
-python scripts/verify_training_config.py \
-  --config examples.config.pv_tracking.stage0_single_day
+export TRIAL=$(cat sequential_stage_artifacts/stage0_baseline_trial_dir.txt)
 python -c "
 import json, sys
 v=json.load(open(sys.argv[1]+'/params.json'))
-print('config_version:', v.get('config_version'))
-print('restore:', v.get('restore'))
-assert v.get('restore') in (None, ''), 'Stage 0 must be a fresh run (no --restore)'
-k=v['algorithm_params']['kwargs']
 e=v['environment_params']['training']['kwargs']
-assert 'stage0' in (v.get('config_version') or '').lower(), 'wrong config — not Stage 0'
-assert e.get('randomize_day') is False, 'Stage 0 requires randomize_day=False'
-assert e.get('start_date')==e.get('end_date')=='2020-06-21', 'wrong training day'
-print('OK: Stage 0 params.json')
+assert 'stage0' in (v.get('config_version') or '')
+assert e.get('randomize_day') is False
+assert e.get('start_date')==e.get('end_date')=='2020-06-15'
+assert e.get('weather_source')=='clearsky'
+print('OK Stage 0 clearsky')
 " "$TRIAL"
 ```
 
-**Pass:** `config_version` contains `stage0`; `randomize_day=False`; dates `2020-06-21`.
+### Evaluate
 
-### E — Evaluate (canonical outdir only)
+```bash
+./scripts/run_stage0_baseline_trial.sh eval
+```
+
+Equivalent:
 
 ```bash
 python scripts/evaluate_agent.py "$CKPT" \
-  --outdir evaluation/pv_stage0_single_day \
+  --outdir evaluation/pv_stage0_baseline \
   --eval-protocol inherit \
-  --max-path-length 39 \
+  --max-path-length 78 \
   --compare-baselines \
-  --eval-weather-source clearsky \
-  --fixed-eval-dates 2020-06-21 \
   --num-rollouts 10
 ```
 
-`--deterministic` is **on by default** (`tanh(μ)`); use `--stochastic` only for ablations.
-
-**Pass:** `evaluation/pv_stage0_single_day/evaluation_summary.json` exists; `eval_config.fixed_eval_dates` = `["2020-06-21"]`; `movement_penalty` = `0.0`; `deterministic` = `true`.
-
-### F — Diagnose and gate
+### Gate
 
 ```bash
-python scripts/diagnose_tracking.py \
-  --eval-dir evaluation/pv_stage0_single_day \
-  --trial-dir "$TRIAL" \
-  --progress-csv "$TRIAL/progress.csv" \
-  --verify-env \
-  --gate \
-  --min-energy-ratio 0.95 \
-  --min-action-ratio 0.5 \
-  --max-tilt-error-deg 10
+./scripts/run_stage0_baseline_trial.sh gate
 ```
-
-**Pass:** exit code **0**; `diagnostics/tracking_diagnosis.txt` ends with `GATE STATUS: PASS`.
-
-### G — Advance
-
-Only after **F** passes → start [Stage 1](#5-stage-1--procedure-az-summer-clearsky).
-
-If gates fail with small actions / wrong sign, see [PV_TRACKING_ROOT_CAUSES.md](PV_TRACKING_ROOT_CAUSES.md) and [§7](#7-optional-imitation-warm-start).
 
 ---
 
-## 5. Stage 1 — procedure A→Z (summer clearsky)
+## 5. Stage 0 — cloudy historical + movement (paper track)
 
-**Goal:** Summer hold-out dates, clearsky, gates pass on `evaluation/pv_stage1_clearsky_summer/`.
+**Goal:** Single overcast historical day (`2020-06-21`), movement penalty, MBPO paper-style kwargs.
 
-Hold-out dates (must match eval flags): `2020-06-07`, `2020-06-21`, `2020-07-15`, `2020-08-01` (`STAGE1_FIXED_EVAL_DATES` in `0.py`).
+**Helper:** `./scripts/run_stage0_paper_trial.sh {train|plot|eval|gate|verify}`
 
-### A — Preflight
+| Artifact | Path |
+|----------|------|
+| Plots | `training_plots/stage0_mbpo_paper/` |
+| Eval | `evaluation/pv_stage0_mbpo_paper_movement/` |
 
-```bash
-python scripts/verify_training_config.py \
-  --config examples.config.pv_tracking.0
-python scripts/validate_pv_rollouts.py \
-  --config-path examples/config/pv_tracking/0.py
-```
-
-### B — Dry run (optional)
+### Evaluate (must match training weather)
 
 ```bash
-mbpo run_example_dry examples.development \
-  --config=examples.config.pv_tracking.0 \
-  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
+./scripts/run_stage0_paper_trial.sh eval
 ```
 
-### C — Train
+Uses **`--eval-protocol inherit`** only — **do not** pass `--eval-weather-source clearsky` (that was a common mismatch).
+
+### Gate
+
+```bash
+./scripts/run_stage0_paper_trial.sh gate
+```
+
+---
+
+## 6. Stage 1 — summer i.i.d. clearsky
+
+**Goal:** Random summer days, clearsky irradiance model, fixed summer hold-outs for checkpoint selection and post-train eval.
+
+**Hold-out dates:** `2020-06-07`, `2020-06-15`, `2020-07-15`, `2020-08-01` (`STAGE1_FIXED_EVAL_DATES`).
+
+### Train
 
 ```bash
 mbpo run_local examples.development \
   --config=examples.config.pv_tracking.0 \
-  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
+  --gpus=0 --trial-gpus=0 --cpus=10 --trial-cpus=4 \
+  --temp-dir=$PWD/.ray_tmp/stage1
 ```
 
-### D — Verify trial contract
-
-```bash
-export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
-export TRIAL="${TRIAL%/}"
-export CKPT="$TRIAL/best_eval_checkpoint"
-
-python -c "
-import json
-v=json.load(open('$TRIAL/params.json'))
-print('config_version:', v.get('config_version'))
-k=v['algorithm_params']['kwargs']
-e=v['environment_params']['training']['kwargs']
-assert 'stage1' in (v.get('config_version') or '').lower(), 'wrong config — not Stage 1'
-assert e.get('randomize_day') is True, 'Stage 1 training uses randomize_day=True'
-print('n_epochs', k.get('n_epochs'), 'min_alpha', k.get('min_alpha'))
-print('OK: Stage 1 params.json')
-"
-```
-
-### E — Evaluate
+### Evaluate
 
 ```bash
 python scripts/evaluate_agent.py "$CKPT" \
   --outdir evaluation/pv_stage1_clearsky_summer \
   --eval-protocol inherit \
-  --max-path-length 39 \
+  --max-path-length 78 \
   --compare-baselines \
-  --eval-weather-source clearsky \
-  --fixed-eval-dates 2020-06-07,2020-06-21,2020-07-15,2020-08-01 \
   --num-rollouts 10
 ```
 
-### F — Diagnose and gate
+### Gate
 
 ```bash
 python scripts/diagnose_tracking.py \
   --eval-dir evaluation/pv_stage1_clearsky_summer \
   --trial-dir "$TRIAL" \
   --progress-csv "$TRIAL/progress.csv" \
-  --verify-env \
-  --gate \
-  --min-energy-ratio 0.95 \
-  --min-action-ratio 0.5 \
-  --max-tilt-error-deg 10
+  --verify-env --gate
 ```
-
-**Pass:** exit code **0** on `evaluation/pv_stage1_clearsky_summer/`.
-
-### G — Advance
-
-Only after **F** passes → Stage 2 (historical weather), using
-`examples/config/pv_tracking/stage2_random_weather.py` and a new evaluation
-directory.
 
 ---
 
-## 6. Training vs evaluation environments
+## 7. Stage 2 — summer i.i.d. historical weather
 
-| Phase | Source | What it controls |
-|-------|--------|------------------|
-| **Training rollouts** | `environment_kwargs` in config | Day catalog, `randomize_day`, weather |
-| **In-training checkpoint pick** | `evaluation_environment_kwargs` | Fixed dates for `best_eval_checkpoint` |
-| **Post-train science eval** | `evaluate_agent.py` CLI | `--fixed-eval-dates`, `--eval-weather-source`, `--outdir` |
+**Goal:** Same summer day catalog and hold-outs as Stage 1, but **`weather_source=historical`** (PVGIS TMY). Isolates weather robustness before Stage 3.
 
-Post-train eval must use the **canonical `evaluation/pv_stage*`** directory for that stage. `evaluate_agent.py` reads checkpoint `params.json` for defaults but **overrides** day sampling via CLI flags above.
+**Config:** `stage2_random_weather.py` (filename legacy; weather is historical).
 
-`real_ratio=1.0` removes model-rollout bias; it does **not** fix small or wrong-signed deploy actions ([RC1–RC4](PV_TRACKING_ROOT_CAUSES.md)).
-
----
-
-## 6.5 Stage 2 — procedure A->Z (summer historical weather)
-
-**Goal:** Same summer hold-out dates, same physical observation/state contract,
-but now historical weather in both training and post-train evaluation. This isolates
-weather robustness before any Stage 3 full-year expansion.
-
-**Config:** `examples/config/pv_tracking/stage2_random_weather.py` (legacy filename retained)
-
-**Important:** Stage 2 intentionally preserves the current working training
-procedure and hyperparameters from Stage 1. It inherits the MBPO settings from
-Stage 1, including model-based rollouts; it is not a pure real-data SAC
-ablation.
-
-### A — Preflight
-
-```bash
-python scripts/verify_training_config.py \
-  --config examples.config.pv_tracking.stage2_random_weather
-python scripts/validate_pv_rollouts.py \
-  --config-path examples/config/pv_tracking/stage2_random_weather.py
-```
-
-### B — Dry run (optional)
-
-```bash
-mbpo run_example_dry examples.development \
-  --config=examples.config.pv_tracking.stage2_random_weather \
-  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
-```
-
-### C — Train
+### Train
 
 ```bash
 mbpo run_local examples.development \
   --config=examples.config.pv_tracking.stage2_random_weather \
-  --gpus=0 --trial-gpus=0 --cpus="$CPUS" --trial-cpus="$TRIAL_CPUS"
+  --temp-dir=$PWD/.ray_tmp/stage2
 ```
 
-### D — Verify trial contract
-
-```bash
-export TRIAL=$(ls -td ~/ray_mbpo/PVTracking/pv_tracking/seed:*/ | head -1)
-export TRIAL="${TRIAL%/}"
-export CKPT="$TRIAL/best_eval_checkpoint"
-
-python -c "
-import json
-v=json.load(open('$TRIAL/params.json'))
-print('config_version:', v.get('config_version'))
-k=v['algorithm_params']['kwargs']
-e=v['environment_params']['training']['kwargs']
-assert 'stage2' in (v.get('config_version') or '').lower(), 'wrong config — not Stage 2'
-assert e.get('randomize_day') is True, 'Stage 2 training uses randomize_day=True'
-assert e.get('weather_source') == 'historical', 'Stage 2 training must use historical weather'
-assert e.get('observation_mode') == 'physical', 'Stage 2 should stay on physical observations'
-print('n_epochs', k.get('n_epochs'), 'min_alpha', k.get('min_alpha'), 'real_ratio', k.get('real_ratio'))
-print('OK: Stage 2 params.json')
-"
-```
-
-### E — Evaluate
+### Evaluate
 
 ```bash
 python scripts/evaluate_agent.py "$CKPT" \
   --outdir evaluation/pv_stage2_random_weather_summer \
   --eval-protocol inherit \
-  --max-path-length 39 \
+  --max-path-length 78 \
   --compare-baselines \
-  --eval-weather-source historical \
-  --fixed-eval-dates 2020-06-07,2020-06-21,2020-07-15,2020-08-01 \
   --num-rollouts 10
 ```
 
-### F — Diagnose and gate
+### Gate
 
 ```bash
 python scripts/diagnose_tracking.py \
   --eval-dir evaluation/pv_stage2_random_weather_summer \
-  --trial-dir "$TRIAL" \
-  --progress-csv "$TRIAL/progress.csv" \
-  --verify-env \
-  --gate \
-  --min-energy-ratio 0.95 \
-  --min-action-ratio 0.5 \
-  --max-tilt-error-deg 10
+  --trial-dir "$TRIAL" --progress-csv "$TRIAL/progress.csv" \
+  --verify-env --gate
 ```
-
-**Pass:** exit code **0** on `evaluation/pv_stage2_random_weather_summer/`.
-
-### G — Advance
-
-Only after **F** passes → define Stage 3 (full-year catalog) with a new config
-and a new evaluation directory.
 
 ---
 
-## 7. Optional: imitation warm-start
+## 8. Stage 3 — full-year stochastic RL
 
-If Stage 0 gates fail on action magnitude or sign:
+**Config:** `stage3_fullyear_random_clean_split.py`  
+**Protocol:** [RL_EVAL_PROTOCOL.md](RL_EVAL_PROTOCOL.md) · **Workflow:** [STAGE3_FULLYEAR_WORKFLOW.md](STAGE3_FULLYEAR_WORKFLOW.md)
+
+| Item | Setting |
+|------|---------|
+| Training support | All calendar days `2020-01-01`…`2020-12-31` (no `excluded_dates`) |
+| Episode variability | `randomize_day` (annual weather scenarios); optional `randomize_initial_orientation` |
+| Irradiance augmentation | `irradiance_perturbation_std=0` (paper default) |
+| In-train checkpoint eval | Same annual support; independent seeds (no fixed calendar hold-out) |
+| Post-train eval | Frozen policy; `--eval-seed-base` rollouts over full year |
+
+### Train
+
+```bash
+./scripts/run_stage3_fullyear.sh train
+# or:
+mbpo run_local examples.development \
+  --config=examples.config.pv_tracking.stage3_fullyear_random_clean_split \
+  --temp-dir=$PWD/.ray_tmp/stage3
+```
+
+### Evaluate
+
+```bash
+./scripts/run_stage3_fullyear.sh eval
+python scripts/evaluate_fullyear_mc.py "$CKPT" \
+  --outdir evaluation/pv_stage3_fullyear_mc \
+  --date-set annual --num-rollouts 40 --eval-seed-base 100000
+```
+
+Optional fixed-date stress panel: `--date-set stress_test` (not the primary RL test set).
+
+---
+
+## 9. Training vs evaluation environments
+
+| Phase | Source | Controls |
+|-------|--------|----------|
+| **Training rollouts** | `environment_kwargs` | Day range, `randomize_day`, `weather_source`, penalty, ξ |
+| **In-training best checkpoint** | `evaluation_environment_kwargs` | Same annual support as training; Stage 3 uses seeds not fixed dates |
+| **Post-train science eval** | `evaluate_agent.py` | **`--eval-protocol inherit`**; independence via `--eval-seed-base`, not calendar hold-outs (Stage 3) |
+
+`evaluation_environment_kwargs` in the config should use the **same** `weather_source` as training. `verify_training_config.py` errors on a train/eval weather mismatch.
+
+---
+
+## 10. Optional: imitation warm-start
 
 ```bash
 python scripts/collect_sun_demonstrations.py \
@@ -613,37 +432,27 @@ python scripts/collect_sun_demonstrations.py \
   --num-episodes 200
 ```
 
-BC pretrain + SAC fine-tune is not wired into `mbpo run_local` yet; use demos for analysis or a future BC script.
+BC pretrain is not wired into `mbpo run_local` by default.
 
 ---
 
-## 8. Stage progression (summary)
+## 11. What we do not claim
 
-```text
-Stage 0  →  evaluation/pv_stage0_single_day/  →  diagnose --gate  →  PASS
-Stage 1  →  evaluation/pv_stage1_clearsky_summer/  →  diagnose --gate  →  PASS
-Stage 2  →  evaluation/pv_stage2_random_weather_summer/  →  diagnose --gate  →  PASS
-Stage 3  →  full-year catalog (define new config + NEW eval dir name)
-```
-
----
-
-## 9. What we do **not** claim
-
-- No proof that SAC/MBPO reaches a global optimum on pvlib.
-- `sun_tracking` is a strong clearsky heuristic; beating it needs sufficient **deploy** action scale (`tanh(μ)` at eval).
-- Scripts provide **engineering verification** (config merge, fairness, gates), not optimality proofs.
+- No proof of global optimality on pvlib physics.
+- `sun_tracking` is a strong heuristic; cloudy days and movement penalties change gate interpretation.
+- Scripts provide **engineering verification** (config, pvlib path, fairness, gates), not optimality proofs.
 
 ---
 
 ## Quick reference
 
-| Step | Stage 0 | Stage 1 | Stage 2 |
-|------|---------|---------|---------|
-| Config | `stage0_single_day` | `0` | `stage2_random_weather` |
-| Eval dir | `evaluation/pv_stage0_single_day` | `evaluation/pv_stage1_clearsky_summer` | `evaluation/pv_stage2_random_weather_summer` |
-| Fixed dates | `2020-06-21` | four summer dates in `0.py` | same four summer dates |
-| Eval weather | `clearsky` | `clearsky` | `random` |
-| Gate command | `diagnose_tracking.py --eval-dir evaluation/pv_stage0_single_day --gate` | same with `pv_stage1_clearsky_summer` | same with `pv_stage2_random_weather_summer` |
+| Step | Stage 0 clearsky | Stage 0 paper | Stage 1 | Stage 2 | Stage 3 |
+|------|------------------|---------------|---------|---------|---------|
+| Config | `stage0_single_day` | `stage0_single_day_mbpo_paper` | `0` | `stage2_random_weather` | `stage3_fullyear_random_clean_split` |
+| Helper | `run_stage0_baseline_trial.sh` | `run_stage0_paper_trial.sh` | — | — | — |
+| Train weather | clearsky | historical | clearsky | historical | historical |
+| Eval dir | `pv_stage0_baseline` | `pv_stage0_mbpo_paper_movement` | `pv_stage1_clearsky_summer` | `pv_stage2_random_weather_summer` | `pv_stage3_fullyear` |
+| Eval flags | `inherit` | `inherit` | `inherit` | `inherit` | `inherit` + `--eval-seed-base` |
+| Steps | 78 | 78 | 78 | 78 | 78 |
 
-See also: [evaluation/README.md](../evaluation/README.md), [STAGE1_CLEARSKY_TRAINING.md](STAGE1_CLEARSKY_TRAINING.md), [PV_TRACKING_ROOT_CAUSES.md](PV_TRACKING_ROOT_CAUSES.md).
+See also: [PV_SIMPLE_WORKFLOW.md](PV_SIMPLE_WORKFLOW.md), [PV_TRACKING_ROOT_CAUSES.md](PV_TRACKING_ROOT_CAUSES.md).

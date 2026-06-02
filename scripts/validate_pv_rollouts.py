@@ -389,6 +389,31 @@ def main():
     validate_env(env, num_steps=args.env_steps)
     validate_legacy_mode_spotcheck()
     validate_reward_power_decoupling(env)
+    validate_baseline_pvlib_path(env)
+
+
+def validate_baseline_pvlib_path(env):
+    """Baselines use env.step; power must follow poa_global * area * efficiency."""
+    from eval_utils import make_baseline_rollout
+
+    print('\nBaseline pvlib path validation:')
+    inner = env.unwrapped
+    path_length = int(inner.num_action_steps)
+    for name in ('sun_tracking', 'fixed_no_motion'):
+        path = make_baseline_rollout(env, name, path_length=min(path_length, 5), seed=0)
+        for i, info in enumerate(path['infos'][:3]):
+            poa = float(info['poa_global'])
+            power = float(info['power'])
+            expected = max(poa, 0.0) * float(inner.area) * float(inner.efficiency)
+            if abs(expected - power) > 0.05:
+                raise AssertionError(
+                    '%s step %d: power %.4f != pvlib poa*area*eff %.4f' % (
+                        name, i, power, expected))
+        energy_sum = sum(float(info['energy_kwh']) for info in path['infos'])
+        if energy_sum <= 0 and name == 'sun_tracking':
+            print('  note: %s energy_sum=%.6f (night/low sun steps OK on some dates)' % (
+                name, energy_sum))
+    print('  sun_tracking and fixed_no_motion: power/energy via env pvlib step OK')
 
 
 def validate_legacy_mode_spotcheck():

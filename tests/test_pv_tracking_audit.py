@@ -1,4 +1,5 @@
 import gzip
+import os
 import pickle
 import tempfile
 
@@ -230,7 +231,31 @@ def test_old_replay_experience_missing_remaining_steps_fails_loudly():
         env.close()
 
 
-def test_training_date_exclusion_is_enforced_programmatically():
+def test_training_samples_all_days_when_no_exclusion():
+    env = PVTrackingEnv(
+        randomize_day=True,
+        start_date='2020-01-01',
+        end_date='2020-01-10',
+        randomize_initial_orientation=False,
+        weather_source='clearsky',
+        movement_penalty=0.0,
+        observation_mode='physical',
+    )
+    try:
+        seen = set()
+        for seed in range(50):
+            env.seed(seed)
+            env.reset()
+            seen.add(str(env.current_date.date()))
+        assert seen == {
+            '2020-01-01', '2020-01-02', '2020-01-03', '2020-01-04', '2020-01-05',
+            '2020-01-06', '2020-01-07', '2020-01-08', '2020-01-09', '2020-01-10',
+        }
+    finally:
+        env.close()
+
+
+def test_excluded_dates_optional_mechanism():
     env = PVTrackingEnv(
         randomize_day=True,
         start_date='2020-06-01',
@@ -251,6 +276,89 @@ def test_training_date_exclusion_is_enforced_programmatically():
         assert '2020-06-02' not in seen
     finally:
         env.close()
+
+
+def test_different_days_differ_without_perturbation():
+    """Annual scenario: variability from day d, not intra-day cloud noise."""
+    kwargs = dict(
+        randomize_day=False,
+        randomize_initial_orientation=False,
+        weather_source='historical',
+        irradiance_perturbation_std=0.0,
+        movement_penalty=0.0,
+        observation_mode='physical',
+    )
+    e_summer = _run_episode_energy(
+        PVTrackingEnv(start_date='2020-06-21', end_date='2020-06-21', **kwargs), 1)
+    e_winter = _run_episode_energy(
+        PVTrackingEnv(start_date='2020-12-07', end_date='2020-12-07', **kwargs), 1)
+    assert e_summer != e_winter
+
+
+def test_same_day_different_seeds_differ_with_irradiance_perturbation():
+    d = '2020-06-21'
+    kwargs = dict(
+        start_date=d, end_date=d, randomize_day=False,
+        randomize_initial_orientation=False,
+        weather_source='historical',
+        irradiance_perturbation_std=0.05,
+        movement_penalty=0.0, observation_mode='physical',
+    )
+    e1 = _run_episode_energy(PVTrackingEnv(**kwargs), 101)
+    e2 = _run_episode_energy(PVTrackingEnv(**kwargs), 202)
+    assert e1 != e2
+
+
+def test_same_day_same_seed_identical_without_perturbation():
+    d = '2020-06-21'
+    kwargs = dict(
+        start_date=d, end_date=d, randomize_day=False,
+        randomize_initial_orientation=False,
+        weather_source='historical',
+        irradiance_perturbation_std=0.0,
+        movement_penalty=0.0, observation_mode='physical',
+    )
+    e1 = _run_episode_energy(PVTrackingEnv(**kwargs), 42)
+    e2 = _run_episode_energy(PVTrackingEnv(**kwargs), 42)
+    assert e1 == pytest.approx(e2)
+
+
+def _run_episode_energy(env, seed):
+    env.seed(seed)
+    env.reset()
+    total = 0.0
+    done = False
+    while not done:
+        _, _, done, info = env.step(np.zeros(2, dtype=np.float32))
+        total += float(info['energy_kwh'])
+    env.close()
+    return total
+
+
+def test_plot_paper_eval_imports():
+    import sys
+    scripts = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts')
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from plot_paper_eval import episode_metrics, generate_paper_figures, METHODS
+    assert 'learned_policy' in METHODS
+
+
+def test_run_stage3_posttrain_shell_rl_protocol():
+    """Post-train script must use seed-based annual eval, not calendar hold-outs."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, 'run_stage3_posttrain.sh')
+    text = open(path, encoding='utf-8').read()
+    assert 'STAGE3_VALIDATION_DATES' not in text
+    assert 'STAGE3_FINAL_TEST_DATES' not in text
+    assert 'excluded_dates' not in text or 'forbids excluded_dates' in text
+    assert 'EVAL_SEED_BASE' in text
+    assert 'eval-seed-base' in text
+    assert 'run_seed_based_eval' in text
+    assert 'run_stress_diagnostics' in text
+    seed_eval = text.split('run_seed_based_eval() {', 1)[1].split('run_rank_checkpoints()', 1)[0]
+    assert '--fixed-eval-dates' not in seed_eval
+    assert 'evaluate_agent.py' in seed_eval
 
 
 def test_historical_weather_changes_irradiance_and_power():

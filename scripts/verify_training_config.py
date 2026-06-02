@@ -102,6 +102,22 @@ def check_pv_config_file(mod, file_params, errors):
         if file_env['start_date'] > file_env['end_date']:
             errors.append('start_date > end_date in environment_kwargs')
 
+    train_ws = file_env.get('weather_source')
+    eval_ws = file_eval.get('weather_source', train_ws)
+    if train_ws and eval_ws and train_ws != eval_ws:
+        errors.append(
+            'weather_source train=%r != eval=%r (use same pvlib irradiance path)' % (
+                train_ws, eval_ws))
+
+    if train_ws == 'historical' and file_eval.get('fixed_eval_dates'):
+        try:
+            from examples.config.pv_tracking.verified_dates import (
+                assert_dates_in_historical_catalog,
+            )
+            assert_dates_in_historical_catalog(file_eval['fixed_eval_dates'])
+        except ValueError as exc:
+            errors.append(str(exc))
+
     if (file_env.get('start_date') == file_env.get('end_date')
             and file_env.get('randomize_day') is True
             and len(file_eval.get('fixed_eval_dates', [])) <= 1):

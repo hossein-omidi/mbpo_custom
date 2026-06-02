@@ -19,9 +19,11 @@ batches.
 
 import importlib
 
+from examples.config.pv_tracking.verified_dates import STAGE2_FIXED_EVAL_DATES
+
 _stage1 = importlib.import_module('examples.config.pv_tracking.0')
 
-CONFIG_VERSION = 'pv_tracking_stage2_random_weather_summer_physical_2026-05-25'
+CONFIG_VERSION = 'pv_tracking_stage2_random_weather_summer_physical_2026-06-02'
 TRAINING_STAGE = 'stage2'
 
 params = dict(_stage1.params)
@@ -35,4 +37,5 @@ params['evaluation_environment_kwargs'] = dict(
     _stage1.params['evaluation_environment_kwargs'])
 params['evaluation_environment_kwargs'].update({
     'weather_source': 'historical',
+    'fixed_eval_dates': STAGE2_FIXED_EVAL_DATES,
 })

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Diagnose PV tracking policy vs baselines (cheap, no retrain required).
 
-Reads rollout CSVs from evaluate_agent.py / evaluate_agent_advanced.py output,
-verifies incremental action-space semantics, and writes a structured report +
-plots under --outdir.
+Reads rollout CSVs from evaluate_agent.py output, verifies incremental
+action-space semantics, and writes a structured report plus plots under
+--outdir (including learned vs sun_tracking action comparison and 3D paths).
 
 Examples:
 
@@ -472,7 +472,9 @@ def verify_paired_fairness(learned_rows, baseline_rows, movement_penalty=None):
 
     lines.append('')
     lines.append('Comparison protocol: same get_eval_environment kwargs, seed=rollout_index,')
-    lines.append('same incremental action space; baselines decode obs (no oracle pvlib bypass).')
+    lines.append(
+        'same incremental action space; baselines decode obs and use env.step pvlib power '
+        '(no oracle irradiance bypass).')
     lines.append('Sun tracker: target_tilt=solar_zenith, target_az=solar_azimuth (strong heuristic).')
     lines.append('VERDICT: %s' % ('PASS — comparison is fair' if ok else 'FAIL — fix eval before interpreting metrics'))
     return ok, lines
@@ -675,6 +677,232 @@ def plot_action_vs_tilt_error(learned_rows, outpath, date):
     plt.close(fig)
 
 
+def _slug_tag(tag):
+    """Filesystem-safe tag for plot filenames."""
+    s = str(tag).replace(os.sep, '_').replace(' ', '_')
+    return ''.join(c if c.isalnum() or c in '-_.' else '_' for c in s)
+
+
+def _row_time_hours(rows):
+    return np.array([float(r['clock_hour_utc']) for r in rows], dtype=np.float64)
+
+
+def _row_actions(rows):
+    tilt = np.array([float(r.get('action_tilt', 0.0)) for r in rows], dtype=np.float64)
+    az = np.array([float(r.get('action_azimuth', 0.0)) for r in rows], dtype=np.float64)
+    return tilt, az
+
+
+def _row_panel_pose(rows):
+    tilt = np.array([float(r.get('tilt_deg', np.nan)) for r in rows], dtype=np.float64)
+    az = np.array([float(r.get('azimuth_deg', np.nan)) for r in rows], dtype=np.float64)
+    return tilt, az
+
+
+def _row_solar_target(rows):
+    zen = np.array([float(r.get('solar_zenith_deg', np.nan)) for r in rows], dtype=np.float64)
+    az = np.array([float(r.get('solar_azimuth_deg', np.nan)) for r in rows], dtype=np.float64)
+    return zen, az
+
+
+def _cumulative_net_reward(rows):
+    rewards = np.array([float(r.get('reward', np.nan)) for r in rows], dtype=np.float64)
+    if not np.all(np.isfinite(rewards)):
+        energies = np.array([float(r.get('energy_kwh', 0.0)) for r in rows], dtype=np.float64)
+        movement = np.array([float(r.get('movement_cost', 0.0)) for r in rows], dtype=np.float64)
+        rewards = energies - movement
+    return np.cumsum(rewards)
+
+
+def plot_actions_time_series(learned_rows, sun_rows, tag, outpath):
+    """Learned vs sun_tracker commanded actions over UTC clock time."""
+    if not learned_rows or not sun_rows or len(learned_rows) != len(sun_rows):
+        return None
+    t = _row_time_hours(learned_rows)
+    l_tilt, l_az = _row_actions(learned_rows)
+    s_tilt, s_az = _row_actions(sun_rows)
+    diff_l1 = np.abs(l_tilt - s_tilt) + np.abs(l_az - s_az)
+
+    fig, axes = plt.subplots(3, 1, sharex=True, figsize=(11, 8))
+    fig.suptitle('Actions: learned vs sun_tracking — %s' % tag, fontsize=11)
+
+    axes[0].plot(t, l_tilt, color='#1f77b4', lw=2, label='learned tilt')
+    axes[0].plot(t, s_tilt, color='#2ca02c', lw=1.6, ls='--', label='sun tilt')
+    axes[0].set_ylabel('action_tilt [-1,1]')
+    axes[0].legend(loc='upper right', fontsize=8)
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(t, l_az, color='#1f77b4', lw=2, label='learned az')
+    axes[1].plot(t, s_az, color='#2ca02c', lw=1.6, ls='--', label='sun az')
+    axes[1].set_ylabel('action_azimuth [-1,1]')
+    axes[1].legend(loc='upper right', fontsize=8)
+    axes[1].grid(True, alpha=0.3)
+
+    axes[2].plot(t, diff_l1, color='#d62728', lw=1.8, label='|Δa| L1')
+    axes[2].fill_between(t, 0, diff_l1, color='#d62728', alpha=0.15)
+    axes[2].set_ylabel('|learned − sun|')
+    axes[2].set_xlabel('Clock hour UTC')
+    axes[2].legend(loc='upper right', fontsize=8)
+    axes[2].grid(True, alpha=0.3)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+    return outpath
+
+
+def plot_actions_3d(learned_rows, sun_rows, tag, outpath):
+    """3D action trajectories: time × action_tilt × action_azimuth."""
+    if not learned_rows or not sun_rows:
+        return None
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
+
+    t = _row_time_hours(learned_rows)
+    l_tilt, l_az = _row_actions(learned_rows)
+    s_tilt, s_az = _row_actions(sun_rows)
+    n = min(len(t), len(s_tilt))
+    t, l_tilt, l_az = t[:n], l_tilt[:n], l_az[:n]
+    s_tilt, s_az = s_tilt[:n], s_az[:n]
+
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot(t, l_tilt, l_az, color='#1f77b4', lw=2.2, label='learned')
+    ax.plot(t, s_tilt, s_az, color='#2ca02c', lw=1.8, ls='--', label='sun_tracking')
+    ax.scatter(t[0], l_tilt[0], l_az[0], color='#1f77b4', s=40, depthshade=False)
+    ax.scatter(t[-1], l_tilt[-1], l_az[-1], color='#1f77b4', s=55, marker='s', depthshade=False)
+    ax.scatter(t[0], s_tilt[0], s_az[0], color='#2ca02c', s=40, depthshade=False)
+    ax.scatter(t[-1], s_tilt[-1], s_az[-1], color='#2ca02c', s=55, marker='s', depthshade=False)
+
+    ax.set_xlabel('Clock hour UTC')
+    ax.set_ylabel('action_tilt')
+    ax.set_zlabel('action_azimuth')
+    ax.set_title('Action paths (3D) — %s' % tag)
+    ax.legend(loc='upper left', fontsize=8)
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+    return outpath
+
+
+def plot_orientation_3d(learned_rows, sun_rows, tag, outpath):
+    """3D panel orientation vs solar target: time × tilt × azimuth."""
+    if not learned_rows or not sun_rows:
+        return None
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+    t = _row_time_hours(learned_rows)
+    l_tilt, l_az = _row_panel_pose(learned_rows)
+    s_tilt, s_az = _row_panel_pose(sun_rows)
+    tgt_tilt, tgt_az = _row_solar_target(sun_rows)
+    n = min(len(t), len(s_tilt), len(tgt_tilt))
+    t = t[:n]
+    l_tilt, l_az = l_tilt[:n], l_az[:n]
+    s_tilt, s_az = s_tilt[:n], s_az[:n]
+    tgt_tilt, tgt_az = tgt_tilt[:n], tgt_az[:n]
+
+    fig = plt.figure(figsize=(11, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot(t, l_tilt, l_az, color='#1f77b4', lw=2.2, label='learned panel')
+    ax.plot(t, s_tilt, s_az, color='#2ca02c', lw=1.8, ls='--', label='sun_tracking panel')
+    ax.plot(t, tgt_tilt, tgt_az, color='#9467bd', lw=1.4, ls=':', label='solar target (zenith, az)')
+
+    ax.set_xlabel('Clock hour UTC')
+    ax.set_ylabel('Panel tilt (deg)')
+    ax.set_zlabel('Panel azimuth (deg)')
+    ax.set_title('Orientation paths vs sun target (3D) — %s' % tag)
+    ax.legend(loc='upper left', fontsize=8)
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+    return outpath
+
+
+def plot_action_vs_sun_scatter(learned_rows, sun_rows, tag, outpath):
+    """Scatter learned action components vs sun tracker (per step)."""
+    if not learned_rows or not sun_rows or len(learned_rows) != len(sun_rows):
+        return None
+    l_tilt, l_az = _row_actions(learned_rows)
+    s_tilt, s_az = _row_actions(sun_rows)
+    t = _row_time_hours(learned_rows)
+    lim = (-1.05, 1.05)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.5))
+    fig.suptitle('Learned action vs sun_tracking — %s' % tag, fontsize=11)
+    sc = None
+    for ax, lx, sx, xlab in (
+            (axes[0], l_tilt, s_tilt, 'action_tilt'),
+            (axes[1], l_az, s_az, 'action_azimuth')):
+        sc = ax.scatter(sx, lx, c=t, cmap='viridis', s=28, alpha=0.85)
+        ax.plot(lim, lim, 'k--', lw=1, alpha=0.5)
+        ax.set_xlim(lim)
+        ax.set_ylim(lim)
+        ax.set_xlabel('sun %s' % xlab)
+        ax.set_ylabel('learned %s' % xlab)
+        ax.set_aspect('equal', adjustable='box')
+        ax.grid(True, alpha=0.3)
+    if sc is not None:
+        fig.colorbar(sc, ax=axes.ravel().tolist(), label='clock hour UTC', shrink=0.85)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+    return outpath
+
+
+def plot_cumulative_energy_net(learned_rows, sun_rows, tag, outpath, movement_penalty=None):
+    """Gross cumulative energy vs net (cumsum reward) for learned and sun."""
+    if not learned_rows or not sun_rows:
+        return None
+    t = _row_time_hours(learned_rows)
+    n = min(len(t), len(sun_rows))
+
+    def _gross(rows):
+        return np.cumsum([float(r.get('energy_kwh', 0.0)) for r in rows[:n]])
+
+    l_gross, s_gross = _gross(learned_rows), _gross(sun_rows)
+    l_net, s_net = _cumulative_net_reward(learned_rows)[:n], _cumulative_net_reward(sun_rows)[:n]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(t[:n], l_gross, color='#1f77b4', lw=1.8, ls='--', alpha=0.65, label='learned gross')
+    ax.plot(t[:n], s_gross, color='#2ca02c', lw=1.8, ls='--', alpha=0.65, label='sun gross')
+    ax.plot(t[:n], l_net, color='#1f77b4', lw=2.2, label='learned net (reward)')
+    ax.plot(t[:n], s_net, color='#2ca02c', lw=2.0, label='sun net (reward)')
+    penalty_note = ''
+    if movement_penalty is not None and float(movement_penalty) > 0:
+        penalty_note = ' (penalty=%g)' % float(movement_penalty)
+    ax.set_title('Cumulative energy — %s%s' % (tag, penalty_note))
+    ax.set_xlabel('Clock hour UTC')
+    ax.set_ylabel('kWh (cumulative)')
+    ax.legend(loc='upper left', fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+    return outpath
+
+
+def plot_all_tracking_diagnostics(learned_rows, sun_rows, tag, plot_dir, movement_penalty=None):
+    """Write full learned-vs-sun plot set for one paired rollout."""
+    slug = _slug_tag(tag)
+    paths = []
+    for fn, plotter in (
+            ('tilt_zenith_%s.png', lambda p: plot_tilt_vs_zenith(learned_rows, sun_rows, tag, p)),
+            ('action_hist_%s.png', lambda p: plot_action_histogram(learned_rows, sun_rows, tag, p)),
+            ('action_vs_error_%s.png', lambda p: plot_action_vs_tilt_error(learned_rows, p, tag)),
+            ('actions_time_%s.png', lambda p: plot_actions_time_series(learned_rows, sun_rows, tag, p)),
+            ('actions_3d_%s.png', lambda p: plot_actions_3d(learned_rows, sun_rows, tag, p)),
+            ('orientation_3d_%s.png', lambda p: plot_orientation_3d(learned_rows, sun_rows, tag, p)),
+            ('action_vs_sun_scatter_%s.png', lambda p: plot_action_vs_sun_scatter(learned_rows, sun_rows, tag, p)),
+            ('cumulative_energy_net_%s.png',
+             lambda p: plot_cumulative_energy_net(
+                 learned_rows, sun_rows, tag, p, movement_penalty=movement_penalty)),
+    ):
+        out = os.path.join(plot_dir, fn % slug)
+        result = plotter(out)
+        if result:
+            paths.append(result)
+    return paths
+
+
 def write_report(outdir, sections):
     path = os.path.join(outdir, 'tracking_diagnosis.txt')
     with open(path, 'w', encoding='utf-8') as f:
@@ -778,12 +1006,8 @@ def _run_diagnosis(args):
         if lrows and lrows[0].get('weather_condition') == 'clear':
             clear_day_pairs.append((lrows, srows, tag))
 
-        if isinstance(tag, str) and tag.startswith('2020'):
-            plot_tilt_vs_zenith(lrows, srows, tag,
-                                os.path.join(plot_dir, 'tilt_zenith_%s.png' % tag))
-            plot_action_histogram(lrows, srows, tag,
-                                  os.path.join(plot_dir, 'action_hist_%s.png' % tag))
-            plot_action_vs_tilt_error(lrows, os.path.join(plot_dir, 'action_vs_error_%s.png' % tag), tag)
+        plot_all_tracking_diagnostics(
+            lrows, srows, tag, plot_dir, movement_penalty=movement_penalty)
 
     # Aggregate comparison
     def _mean(key, summaries):
@@ -800,6 +1024,8 @@ def _run_diagnosis(args):
             _mean('mean_action_l1_productive', sun_summaries), 1e-6)
         energy_ratio_table = _mean('total_energy_kwh', learned_summaries) / max(
             _mean('total_energy_kwh', sun_summaries), 1e-6)
+        net_ratio_table = _mean('total_net_reward_kwh', learned_summaries) / max(
+            _mean('total_net_reward_kwh', sun_summaries), 1e-6)
         agg_lines = [
             'Paired rollouts: %d' % len(pairs),
             '',
@@ -812,13 +1038,24 @@ def _run_diagnosis(args):
                 _fmt(_mean('mean_action_l1_productive', learned_summaries), '%.3f'),
                 _fmt(_mean('mean_action_l1_productive', sun_summaries), '%.3f'),
                 _fmt(action_ratio_table, '%.2f')),
-            'total energy kWh (mean)         %8s    %8s    %s' % (
+            'total gross energy kWh (mean)   %8s    %8s    %s' % (
                 _fmt(_mean('total_energy_kwh', learned_summaries), '%.4f'),
                 _fmt(_mean('total_energy_kwh', sun_summaries), '%.4f'),
                 _fmt(energy_ratio_table, '%.2f')),
+            'total net return kWh (mean)     %8s    %8s    %s' % (
+                _fmt(_mean('total_net_reward_kwh', learned_summaries), '%.4f'),
+                _fmt(_mean('total_net_reward_kwh', sun_summaries), '%.4f'),
+                _fmt(net_ratio_table, '%.2f')),
             'total movement cost (mean)    %8s    %8s' % (
                 _fmt(_mean('total_movement_cost', learned_summaries), '%.5f'),
                 _fmt(_mean('total_movement_cost', sun_summaries), '%.5f')),
+            '',
+            'Plots per paired date/tag (under diagnostics/plots/):',
+            '  actions_time_* — learned vs sun action commands over UTC time',
+            '  actions_3d_* — 3D path (time, action_tilt, action_azimuth)',
+            '  orientation_3d_* — panel tilt/az vs solar target in 3D',
+            '  action_vs_sun_scatter_* — per-step learned vs sun in action space',
+            '  cumulative_energy_net_* — gross vs net cumulative (learned & sun)',
         ]
     else:
         agg_lines = [
@@ -960,8 +1197,12 @@ def _run_diagnosis(args):
         '',
         'RC2 [100%%] Small deterministic deploy action magnitude: rho_A=%s (need ~0.3+ to track zenith swing).'
         % _fmt(ratio_action, '%.3f'),
-        '     Necessary |a| bound ~D/(5T) with D=zenith swing, T=39: see docs/PV_TRACKING_ROOT_CAUSES.md.',
-        '     rho_G=%s (learned/sun energy).' % _fmt(ratio_energy, '%.3f'),
+        '     Necessary |a| bound ~D/(5T) with D=zenith swing, T=78: see docs/PV_TRACKING_ROOT_CAUSES.md.',
+        '     rho_G=%s gross energy; rho_net=%s net return (learned/sun).'
+        % (_fmt(ratio_energy, '%.3f'),
+           _fmt(_mean('total_net_reward_kwh', learned_summaries) / max(
+               _mean('total_net_reward_kwh', sun_summaries), 1e-6), '%.3f')
+           if sun_summaries else 'n/a'),
         '',
         'RC3 [100%] Wrong-signed tilt control (greedy zenith rule; step-0 + full episode):',
         '     sign agreement=%.0f%% (n=%d)  corr(e,a_tilt)=%.2f'
@@ -988,8 +1229,11 @@ def _run_diagnosis(args):
                    ex.get('sun_action_tilt', float('nan'))))
     verdict_lines.extend([
         '',
-        'RC4 [100%%] Local energy optimum: G_fixed < G_learned < G_sun (%.4f < %.4f < %.4f kWh).'
+        'RC4 [100%%] Local energy optimum: G_fixed < G_learned < G_sun gross (%.4f < %.4f < %.4f kWh).'
         % (e_fixed, e_learned, _mean('total_energy_kwh', sun_summaries)),
+        '     Net return (with movement penalty): learned=%.4f  sun=%.4f kWh.'
+        % (_mean('total_net_reward_kwh', learned_summaries),
+           _mean('total_net_reward_kwh', sun_summaries)),
         '     Not pvlib/reset/action-space bug (CSV scaling PASS).',
         '',
         'RC5 [checkpoint-specific] Train MDP vs eval:',

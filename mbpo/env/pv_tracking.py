@@ -109,6 +109,9 @@ class PVTrackingEnv(gym.Env):
         movement_penalty=0.01,
         fixed_eval_dates=None,
         excluded_dates=None,
+        # Optional bounded irradiance augmentation (0 = paper default, deterministic profile per day).
+        irradiance_perturbation_std=0.0,
+        observation_noise_std=0.0,
         observation_mode='legacy',
         log_observations=False,
     ):
@@ -131,6 +134,9 @@ class PVTrackingEnv(gym.Env):
         self.wind_speed = wind_speed
         self.wind_speed_variation = 1.0
         self.movement_penalty = movement_penalty
+        # Optional bounded augmentation on catalog irradiance (0 = deterministic weather(d)).
+        self.irradiance_perturbation_std = float(irradiance_perturbation_std)
+        self.observation_noise_std = float(observation_noise_std)
         if weather_source not in WEATHER_SOURCES:
             raise ValueError(
                 'weather_source must be one of {}, got {!r}.'.format(
@@ -271,6 +277,33 @@ class PVTrackingEnv(gym.Env):
                 self.location, times, self._historical_weather_catalog)
 
         return weather
+
+    def _apply_episode_weather_stochasticity(self):
+        """Optional bounded irradiance augmentation (not intra-day cloud dynamics).
+
+        When irradiance_perturbation_std > 0, applies one episode-level lognormal scale
+        to the catalog dni/dhi/ghi series. Default 0.0: weather(d) is fixed for the day;
+        pvlib remains the deterministic physics map from that trajectory.
+        """
+        if self.irradiance_perturbation_std <= 0.0:
+            return
+        for col in ('dni', 'dhi', 'ghi'):
+            scale = self.np_random.lognormal(
+                mean=0.0,
+                sigma=self.irradiance_perturbation_std,
+                size=len(self.weather_profile))
+            self.weather_profile[col] = np.maximum(
+                self.weather_profile[col].values * scale, 0.0)
+
+    def _maybe_noise_observation(self, obs):
+        if self.observation_noise_std <= 0.0:
+            return obs
+        noise = self.np_random.normal(
+            0.0, self.observation_noise_std, size=obs.shape).astype(np.float32)
+        return np.clip(
+            obs + noise,
+            self.observation_space.low,
+            self.observation_space.high).astype(np.float32)
 
     def _current_weather(self):
         weather = self.weather_profile.iloc[self.step_index]
@@ -427,6 +460,7 @@ class PVTrackingEnv(gym.Env):
 
         self.times = self._build_times(self.current_date)
         self.weather_profile = self._build_weather_profile(self.times)
+        self._apply_episode_weather_stochasticity()
 
         if self.randomize_initial_orientation:
             self.tilt = float(self.np_random.uniform(*self.tilt_limits))
@@ -455,7 +489,7 @@ class PVTrackingEnv(gym.Env):
             power,
         )
         self._log_observation_vector(obs, 'reset')
-        return obs
+        return self._maybe_noise_observation(obs)
 
     def step(self, action):
         delta_tilt = float(action[0]) * self.max_delta_tilt
@@ -542,8 +576,10 @@ class PVTrackingEnv(gym.Env):
                 if self._rollout_seed is not None else None),
         }
         info.update(time_meta)
+        info['irradiance_perturbation_std'] = float(self.irradiance_perturbation_std)
+        info['observation_noise_std'] = float(self.observation_noise_std)
 
-        return obs, float(reward), bool(done), info
+        return self._maybe_noise_observation(obs), float(reward), bool(done), info
 
     def render(self, mode='human'):
         print(

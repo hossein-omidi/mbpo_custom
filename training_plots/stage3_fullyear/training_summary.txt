@@ -1,0 +1,9 @@
+Source: /home/user01/ray_mbpo/PVTracking/pv_tracking/seed:4755_2026-06-02_23-02-363qbjsnqe/progress.csv
+Rows: 8
+evaluation/return-average: first=0.556007 last=0.444779
+training/return-average: first=0.762019 last=1.294852
+model/val_loss: first=0.000015 last=0.000009
+policy/shifts-mean: first=0.000494 last=-0.044280
+policy/actions-std: first=0.602412 last=0.598398
+alpha: first=0.703849 last=0.060976
+real_batch_ratio: first=0.500000 last=0.500000

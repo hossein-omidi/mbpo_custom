@@ -3,15 +3,19 @@
 Full A→Z procedure and directories: docs/TRAINING_PROTOCOL.md
   - Clean start: §0 (fresh trial, no --restore)
   - Train: mbpo run_local … --config=examples.config.pv_tracking.stage0_single_day
-  - Eval:  evaluation/pv_stage0_single_day  (--fixed-eval-dates 2020-06-21)
+  - Eval:  evaluation/pv_stage0_single_day  (inherit config; verified clear day)
   - Gate:  scripts/diagnose_tracking.py --eval-dir evaluation/pv_stage0_single_day --gate
+
+Power/energy: pvlib via PVTrackingEnv (same path for learned policy and baselines).
 """
 
 import importlib
 
+from examples.config.pv_tracking.verified_dates import STAGE0_CLEARSKY_DAY
+
 _stage1 = importlib.import_module('examples.config.pv_tracking.0')
 
-CONFIG_VERSION = 'pv_tracking_stage0_single_day_physical_autoentropy_2026-05-25'
+CONFIG_VERSION = 'pv_tracking_stage0_single_day_clearsky_verified_2026-06-02'
 TRAINING_STAGE = 'stage0'
 
 params = dict(_stage1.params)
@@ -24,16 +28,16 @@ params['kwargs'].update({
 })
 params['environment_kwargs'] = dict(_stage1.params['environment_kwargs'])
 params['environment_kwargs'].update({
-    'start_date': '2020-06-21',
-    'end_date': '2020-06-21',
+    'start_date': STAGE0_CLEARSKY_DAY,
+    'end_date': STAGE0_CLEARSKY_DAY,
     'randomize_day': False,
     'weather_source': 'clearsky',
 })
 params['evaluation_environment_kwargs'] = dict(_stage1.params['evaluation_environment_kwargs'])
 params['evaluation_environment_kwargs'].update({
-    'start_date': '2020-06-21',
-    'end_date': '2020-06-21',
+    'start_date': STAGE0_CLEARSKY_DAY,
+    'end_date': STAGE0_CLEARSKY_DAY,
     'randomize_day': False,
-    'fixed_eval_dates': ['2020-06-21'],
+    'fixed_eval_dates': [STAGE0_CLEARSKY_DAY],
     'weather_source': 'clearsky',
 })

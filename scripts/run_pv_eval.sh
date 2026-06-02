@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# Simple PV eval workflow for stage0 MBPO paper run.
+# PV monitor / midterm / final eval (auto-detects newest trial).
 #
-# Usage:
-#   ./scripts/run_pv_eval.sh monitor     # training curves only (safe while training)
-#   ./scripts/run_pv_eval.sh midterm     # quick eval → evaluation/midterm/latest/
-#   ./scripts/run_pv_eval.sh final       # full eval + diagnose + gate → evaluation/pv_stage0_mbpo_paper_movement/
+#   ./scripts/run_pv_eval.sh trial          # print active TRIAL + CKPT
+#   ./scripts/run_pv_eval.sh monitor        # plots once → training_plots/active_run/
+#   ./scripts/run_pv_eval.sh watch-progress # tail progress.csv every 30s
+#   ./scripts/run_pv_eval.sh watch-plots    # refresh plots every 60s
+#   ./scripts/run_pv_eval.sh midterm        # → evaluation/active_latest/
+#   ./scripts/run_pv_eval.sh final          # → evaluation/paper_movement_final/
 #
-# Optional env overrides:
-#   TRIAL=/path/to/seed:...   (default: sequential_stage_artifacts/stage0_mbpo_paper_trial_dir.txt)
-#   NUM_ROLLOUTS=5            (midterm default 5, final default 10)
+# Override:  TRIAL=/path/to/seed:...  CKPT=...  NUM_ROLLOUTS=5
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-}"
+RAY_ROOT="${RAY_ROOT:-$HOME/ray_mbpo/PVTracking/pv_tracking}"
 ARTIFACT="$ROOT/sequential_stage_artifacts/stage0_mbpo_paper_trial_dir.txt"
 CONFIG_PATH="$ROOT/examples/config/pv_tracking/stage0_single_day_mbpo_paper.py"
-EVAL_DATE="2020-06-21"
+# Inherit eval date + weather_source from checkpoint config (historical cloudy day).
+PLOT_DIR="$ROOT/training_plots/active_run"
+MID_DIR="$ROOT/evaluation/active_latest"
+FINAL_DIR="$ROOT/evaluation/paper_movement_final"
 
 CONDA_SH="${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}"
 source "$CONDA_SH"
@@ -23,113 +27,133 @@ conda activate "${CONDA_ENV_NAME:-mbpo}"
 cd "$ROOT"
 
 if [[ -z "$MODE" || "$MODE" == "-h" || "$MODE" == "--help" ]]; then
-  sed -n '2,8p' "$0"
+  sed -n '2,11p' "$0"
   exit 0
 fi
 
-# --- resolve trial ---
-if [[ -n "${TRIAL:-}" ]]; then
-  TRIAL="${TRIAL%/}"
-elif [[ -f "$ARTIFACT" ]]; then
-  TRIAL="$(tr -d '\n\r' < "$ARTIFACT")"
-else
-  echo "ERROR: set TRIAL=... or train first (missing $ARTIFACT)" >&2
+resolve_trial() {
+  if [[ -n "${TRIAL:-}" ]]; then
+    echo "${TRIAL%/}"
+    return
+  fi
+  local newest
+  newest="$(ls -1dt "$RAY_ROOT"/seed:* 2>/dev/null | head -1 || true)"
+  if [[ -n "$newest" && -f "$newest/params.json" ]]; then
+    echo "${newest%/}"
+    return
+  fi
+  if [[ -f "$ARTIFACT" ]]; then
+    tr -d '\n\r' < "$ARTIFACT"
+    return
+  fi
+  echo "ERROR: no trial — set TRIAL= or train first" >&2
   exit 1
-fi
-if [[ ! -f "$TRIAL/params.json" ]]; then
-  echo "ERROR: not a Ray trial (no params.json): $TRIAL" >&2
-  exit 1
-fi
+}
 
-# --- resolve checkpoint ---
-if [[ -n "${CKPT:-}" ]]; then
-  CKPT="${CKPT%/}"
-elif [[ -d "$TRIAL/best_eval_checkpoint" ]]; then
-  CKPT="$TRIAL/best_eval_checkpoint"
-elif [[ -d "$TRIAL/latest_checkpoint" ]]; then
-  CKPT="$TRIAL/latest_checkpoint"
-else
-  CKPT="$(ls -1dt "$TRIAL"/checkpoint_* 2>/dev/null | head -1 || true)"
-fi
-if [[ -z "$CKPT" || ! -d "$CKPT" ]]; then
-  echo "ERROR: no checkpoint in $TRIAL (wait for first save)" >&2
+resolve_ckpt() {
+  local trial="$1"
+  if [[ -n "${CKPT:-}" ]]; then
+    echo "${CKPT%/}"
+    return
+  fi
+  local numbered
+  numbered="$(ls -1d "$trial"/checkpoint_* 2>/dev/null | sort -t_ -k2 -n | tail -1 || true)"
+  if [[ -n "$numbered" && -d "$numbered" ]]; then
+    echo "$numbered"
+    return
+  fi
+  if [[ -d "$trial/best_eval_checkpoint" ]]; then
+    echo "$trial/best_eval_checkpoint"
+    return
+  fi
+  if [[ -d "$trial/latest_checkpoint" ]]; then
+    echo "$trial/latest_checkpoint"
+    return
+  fi
+  echo "ERROR: no checkpoint in $trial (wait for save)" >&2
   exit 1
-fi
+}
 
-echo "TRIAL=$TRIAL"
-echo "CKPT=$CKPT"
+TRIAL="$(resolve_trial)"
+CKPT="$(resolve_ckpt "$TRIAL")"
+echo "Active trial: $TRIAL"
+echo "Checkpoint:   $CKPT"
 
 case "$MODE" in
+  trial)
+    echo "export TRIAL=$TRIAL"
+    echo "export CKPT=$CKPT"
+    ;;
+
   monitor)
-    OUT="$ROOT/training_plots/midterm/latest"
-    mkdir -p "$OUT"
-    python scripts/plot_training_progress.py "$TRIAL" --outdir "$OUT" \
+    mkdir -p "$PLOT_DIR"
+    python scripts/plot_training_progress.py "$TRIAL" --outdir "$PLOT_DIR" \
       -m evaluation/return-average policy/shifts-mean model/val_loss real_batch_ratio alpha
-    echo ""
-    echo "Plots: $OUT"
-    echo "Live log: tail -f $TRIAL/progress.csv"
+    echo "Plots: $PLOT_DIR"
+    echo "Live:  tail -f $TRIAL/progress.csv"
+    ;;
+
+  watch-progress)
+    echo "Refreshing every 30s (Ctrl+C to stop)"
+    watch -n 30 "tail -1 $TRIAL/progress.csv | cut -d',' -f1-3"
+    ;;
+
+  watch-plots)
+    mkdir -p "$PLOT_DIR"
+    echo "Refreshing plots every 60s → $PLOT_DIR (Ctrl+C to stop)"
+    watch -n 60 "python scripts/plot_training_progress.py \"$TRIAL\" --outdir \"$PLOT_DIR\" >/dev/null 2>&1"
     ;;
 
   midterm)
-    OUT="$ROOT/evaluation/midterm/latest"
     N="${NUM_ROLLOUTS:-5}"
-    mkdir -p "$OUT"
+    mkdir -p "$MID_DIR"
     python scripts/evaluate_agent.py "$CKPT" \
-      --outdir "$OUT" \
+      --outdir "$MID_DIR" \
       --eval-protocol inherit \
       --compare-baselines \
-      --eval-weather-source clearsky \
-      --fixed-eval-dates "$EVAL_DATE" \
-      --num-rollouts "$N"
+      --num-rollouts "$N" \
+      --max-path-length 78
     python scripts/diagnose_tracking.py \
-      --eval-dir "$OUT" \
-      --outdir "$OUT/diagnostics" \
+      --eval-dir "$MID_DIR" \
+      --outdir "$MID_DIR/diagnostics" \
       --trial-dir "$TRIAL" \
       --progress-csv "$TRIAL/progress.csv" \
       --verify-env
     python scripts/verify_movement_cost_fairness.py \
       --config-path "$CONFIG_PATH" \
-      --eval-dir "$OUT"
-    python scripts/plot_training_progress.py "$TRIAL" \
-      --outdir "$ROOT/training_plots/midterm/latest"
-    echo ""
-    echo "Eval:  $OUT"
-    echo "Diag:  $OUT/diagnostics/tracking_diagnosis.txt"
-    echo "Plots: $OUT/evaluation_method_comparison.png"
+      --eval-dir "$MID_DIR"
+    echo "Eval:  $MID_DIR"
+    echo "Diag:  $MID_DIR/diagnostics/tracking_diagnosis.txt"
     ;;
 
   final)
-    OUT="$ROOT/evaluation/pv_stage0_mbpo_paper_movement"
     N="${NUM_ROLLOUTS:-10}"
-    mkdir -p "$OUT"
+    mkdir -p "$FINAL_DIR"
     python scripts/evaluate_agent.py "$CKPT" \
-      --outdir "$OUT" \
+      --outdir "$FINAL_DIR" \
       --eval-protocol inherit \
       --compare-baselines \
-      --eval-weather-source clearsky \
-      --fixed-eval-dates "$EVAL_DATE" \
-      --num-rollouts "$N"
+      --num-rollouts "$N" \
+      --max-path-length 78
     python scripts/diagnose_tracking.py \
-      --eval-dir "$OUT" \
+      --eval-dir "$FINAL_DIR" \
+      --outdir "$FINAL_DIR/diagnostics" \
       --trial-dir "$TRIAL" \
       --progress-csv "$TRIAL/progress.csv" \
       --verify-env \
       --gate
     python scripts/verify_movement_cost_fairness.py \
       --config-path "$CONFIG_PATH" \
-      --eval-dir "$OUT"
-    python scripts/plot_training_progress.py "$TRIAL" \
-      --outdir "$ROOT/training_plots/stage0_mbpo_paper" \
+      --eval-dir "$FINAL_DIR"
+    python scripts/plot_training_progress.py "$TRIAL" --outdir "$PLOT_DIR" \
       -m evaluation/return-average policy/shifts-mean model/val_loss alpha
-    echo ""
-    echo "Eval:  $OUT"
-    echo "Diag:  $OUT/diagnostics/tracking_diagnosis.txt"
-    echo "Plots: $OUT/evaluation_method_comparison.png"
-    echo "Train: $ROOT/training_plots/stage0_mbpo_paper/"
+    echo "Eval:  $FINAL_DIR"
+    echo "Diag:  $FINAL_DIR/diagnostics/tracking_diagnosis.txt"
+    echo "Plots: $PLOT_DIR"
     ;;
 
   *)
-    echo "Unknown mode: $MODE  (use monitor | midterm | final)" >&2
+    echo "Unknown mode: $MODE" >&2
     exit 1
     ;;
 esac

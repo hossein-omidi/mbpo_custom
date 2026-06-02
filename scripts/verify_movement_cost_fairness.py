@@ -14,6 +14,8 @@ import importlib.util
 import os
 import sys
 
+import numpy as np
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(_SCRIPT_DIR)
 if _REPO_ROOT not in sys.path:
@@ -21,6 +23,16 @@ if _REPO_ROOT not in sys.path:
 
 from softlearning.environments.utils import get_environment_from_params
 from eval_utils import make_baseline_rollout, get_eval_environment
+
+
+def eval_settings_from_config(params):
+    """First fixed eval date and weather_source aligned with training config."""
+    train = params.get('environment_kwargs', {})
+    ev = params.get('evaluation_environment_kwargs', {}) or {}
+    dates = ev.get('fixed_eval_dates') or [train.get('start_date')]
+    date = dates[0] if dates else None
+    weather = ev.get('weather_source', train.get('weather_source', 'clearsky'))
+    return date, weather
 
 
 def load_config(path):
@@ -60,6 +72,12 @@ def check_config(params):
     pen_e = float(ev.get('movement_penalty', 0.0))
     if pen_t != pen_e:
         errors.append('train movement_penalty %s != eval %s' % (pen_t, pen_e))
+    train_ws = train.get('weather_source')
+    eval_ws = ev.get('weather_source', train_ws)
+    if train_ws and eval_ws and train_ws != eval_ws:
+        errors.append(
+            'train weather_source=%r != eval %r (eval must use same pvlib inputs)' % (
+                train_ws, eval_ws))
     if float(algo.get('discount', 0.99)) != 1.0:
         errors.append('expected discount=1.0, got %s' % algo.get('discount'))
     return pen_t, errors
@@ -82,11 +100,29 @@ def check_env_steps(env, label, n_steps=5):
     return errors
 
 
-def check_baselines(variant, penalty, path_length=10):
+def check_baseline_pvlib_power(path, inner, label):
+    """info['power'] must match poa_global * area * efficiency from pvlib step."""
+    errors = []
+    for i, info in enumerate(path.get('infos', [])[:5]):
+        poa = float(info.get('poa_global', np.nan))
+        power = float(info.get('power', np.nan))
+        if not np.isfinite(poa):
+            continue
+        expected = max(poa, 0.0) * float(inner.area) * float(inner.efficiency)
+        if abs(expected - power) > 0.05:
+            errors.append(
+                '%s step %d: power %.4f != poa_global*area*eff %.4f (pvlib path)' % (
+                    label, i, power, expected))
+    return errors
+
+
+def check_baselines(variant, penalty, eval_date, eval_weather, path_length=10):
     errors = []
     for name in ('sun_tracking', 'fixed_no_motion'):
         env, _ = get_eval_environment(
-            variant, fixed_eval_dates='2020-06-21', eval_weather_source='clearsky')
+            variant,
+            fixed_eval_dates=eval_date,
+            eval_weather_source=eval_weather)
         env.seed(0)
         path = make_baseline_rollout(env, name, path_length=path_length, seed=0)
         inner = env.unwrapped
@@ -98,6 +134,7 @@ def check_baselines(variant, penalty, path_length=10):
         total_move = sum(info['movement_cost'] for info in path['infos'])
         if abs(total_reward - (total_energy - total_move)) > 1e-5:
             errors.append('%s: sum(reward) != sum(energy)-sum(movement)' % name)
+        errors += check_baseline_pvlib_power(path, inner, name)
         env.close()
     return errors
 
@@ -173,17 +210,20 @@ def main():
     print('movement_penalty=%s  discount=%s' % (
         penalty, params['kwargs'].get('discount')))
 
+    eval_date, eval_weather = eval_settings_from_config(params)
+    print('eval date=%s weather_source=%s' % (eval_date, eval_weather))
+
     variant = build_variant(params)
     train_env = get_environment_from_params(variant['environment_params']['training'])
     errors += check_env_steps(train_env, 'train')
     train_env.close()
 
     eval_env, _ = get_eval_environment(
-        variant, fixed_eval_dates='2020-06-21', eval_weather_source='clearsky')
+        variant, fixed_eval_dates=eval_date, eval_weather_source=eval_weather)
     errors += check_env_steps(eval_env, 'eval')
     eval_env.close()
 
-    errors += check_baselines(variant, penalty)
+    errors += check_baselines(variant, penalty, eval_date, eval_weather)
 
     if args.eval_dir:
         errors += check_eval_dir(os.path.join(_REPO_ROOT, args.eval_dir))

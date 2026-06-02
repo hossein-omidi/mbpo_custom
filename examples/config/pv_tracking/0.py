@@ -1,16 +1,10 @@
 # Bumped when training hyperparameters change; verify_training_config.py checks this.
 # Stage 1 — summer i.i.d. days, clearsky, zero motion cost, hold-out-aligned training eval.
 # A→Z procedure: docs/TRAINING_PROTOCOL.md  |  eval: evaluation/pv_stage1_clearsky_summer
-CONFIG_VERSION = 'pv_tracking_stage1_clearsky_physical_autoentropy_2026-06-01'
-TRAINING_STAGE = 'stage1'
+from examples.config.pv_tracking.verified_dates import STAGE1_FIXED_EVAL_DATES
 
-# Summer hold-out dates for in-training checkpoint selection (matches Phase D eval).
-STAGE1_FIXED_EVAL_DATES = [
-    '2020-06-07',
-    '2020-06-21',
-    '2020-07-15',
-    '2020-08-01',
-]
+CONFIG_VERSION = 'pv_tracking_stage1_clearsky_physical_autoentropy_2026-06-02'
+TRAINING_STAGE = 'stage1'
 
 params = {
     'type': 'MBPO',
@@ -44,11 +38,11 @@ params = {
         'num_networks': 7,
         'num_elites': 4,
 
-        'real_ratio': 0.8,
-        'min_alpha': 0.0,
-        'max_model_rollout_length': 5,
+        'real_ratio': .5,
+        'min_alpha': 0.01,
+        'max_model_rollout_length': 2,
         'target_entropy': 'auto',
-        'rollout_schedule': [30, 220, 2, 5],
+        'rollout_schedule': [200, 400, 1, 2],
         'save_every_epochs': 5,
         'early_stop_patience': None,
         'monitor_metric': 'evaluation/return-average',
@@ -67,7 +61,7 @@ params = {
         'randomize_day': True,
         'randomize_initial_orientation': False,
         'weather_source': 'clearsky',
-        'temperature': 23.0,
+        'temperature': 25.0,
         'wind_speed': 2.0,
         'movement_penalty': 0.001,
         'observation_mode': 'physical',
