@@ -1,4 +1,5 @@
 import gzip
+import importlib.util
 import os
 import pickle
 import tempfile
@@ -342,6 +343,69 @@ def test_plot_paper_eval_imports():
         sys.path.insert(0, scripts)
     from plot_paper_eval import episode_metrics, generate_paper_figures, METHODS
     assert 'learned_policy' in METHODS
+
+
+def test_fixed_no_motion_has_zero_movement_cost():
+    import sys
+    scripts = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts')
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from eval_utils import make_baseline_rollout
+
+    env = PVTrackingEnv(
+        randomize_day=False,
+        start_date='2020-06-21',
+        end_date='2020-06-21',
+        randomize_initial_orientation=True,
+        weather_source='clearsky',
+        movement_penalty=0.001,
+        observation_mode='physical',
+    )
+    env.seed(42)
+    path = make_baseline_rollout(env, 'fixed_no_motion', path_length=20, seed=42)
+    total_move = sum(info['movement_cost'] for info in path['infos'])
+    assert total_move == 0.0, 'fixed_no_motion must use action=0 → zero movement_cost'
+    env.close()
+
+
+def test_season_calendar_vs_env_june():
+    import sys
+    scripts = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts')
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from eval_utils import season_from_calendar_date, season_from_day_of_year
+    import pandas as pd
+    doy = int(pd.Timestamp('2020-06-01').dayofyear)
+    assert season_from_day_of_year(doy) == 'spring'
+    assert season_from_calendar_date('2020-06-01') == 'summer'
+
+
+def test_plot_daily_gain_matplotlib_colors():
+    """Old matplotlib rejects 3-digit hex (#666); figures must use #666666."""
+    import sys
+    import tempfile
+    scripts = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts')
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from plot_paper_eval import plot_daily_gain_distributions, plot_return_process_evaluation
+
+    mock_path = {
+        'rewards': [0.5, 0.6],
+        'infos': [
+            {'energy_kwh': 0.2, 'movement_cost': 0.01, 'day_gain_vs_fixed': 0.1},
+            {'energy_kwh': 0.3, 'movement_cost': 0.02, 'day_gain_vs_fixed': 0.05},
+        ],
+    }
+    paths_by_name = {
+        'learned_policy': [mock_path, mock_path],
+        'sun_tracking': [mock_path],
+        'fixed_no_motion': [mock_path],
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        p1 = plot_daily_gain_distributions(tmp, paths_by_name)
+        p2 = plot_return_process_evaluation(tmp, paths_by_name)
+        assert p1 and os.path.isfile(p1)
+        assert p2 and os.path.isfile(p2)
 
 
 def test_run_stage3_posttrain_shell_rl_protocol():

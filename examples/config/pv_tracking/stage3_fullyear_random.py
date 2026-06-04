@@ -1,6 +1,6 @@
-"""Legacy alias — use stage3_fullyear_random_clean_split.py (RL annual config)."""
+"""Legacy alias — use stage3_fullyear_stable_mbpo.py (canonical Stage 3 RL config)."""
 
-from examples.config.pv_tracking.stage3_fullyear_random_clean_split import (  # noqa: F401
+from examples.config.pv_tracking.stage3_fullyear_stable_mbpo import (  # noqa: F401
     CONFIG_VERSION,
     IRRADIANCE_PERTURBATION_STD,
     OBSERVATION_NOISE_STD,

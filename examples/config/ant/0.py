@@ -20,7 +20,7 @@ params = {
         'reward_scale': 1.0,
 
         'model_train_freq': 100,
-        'model_retain_epochs': 1,
+        'model_retain_epochs': 3,
         'rollout_batch_size': 10e3,
         'deterministic': False,
         'num_networks': 7,

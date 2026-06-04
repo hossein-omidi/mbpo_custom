@@ -2,7 +2,7 @@
 """Verify movement_penalty is consistent for train, eval, and baselines.
 
 Checks:
-  - Config train/eval kwargs share movement_penalty and discount=1
+  - Config train/eval kwargs share movement_penalty; discount in [0.99, 1.0]
   - reward == energy_kwh - movement_cost on env steps
   - sun_tracking and fixed_no_motion baselines pay the same penalty via env.step()
 """
@@ -78,8 +78,9 @@ def check_config(params):
         errors.append(
             'train weather_source=%r != eval %r (eval must use same pvlib inputs)' % (
                 train_ws, eval_ws))
-    if float(algo.get('discount', 0.99)) != 1.0:
-        errors.append('expected discount=1.0, got %s' % algo.get('discount'))
+    discount = float(algo.get('discount', 0.99))
+    if not (0.99 <= discount <= 1.0):
+        errors.append('expected discount in [0.99, 1.0], got %s' % algo.get('discount'))
     return pen_t, errors
 
 

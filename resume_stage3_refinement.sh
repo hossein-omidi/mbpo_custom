@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Same-stage Stage 3 only: extend an annual-scenario Stage 3 trial with --restore.
-# Requires config aligned with stage3_fullyear_random_clean_split (no calendar hold-out).
+# Requires config aligned with stage3_fullyear_stable_mbpo (same Stage 3 MDP).
 # Do NOT restore Stage 0/1/2 checkpoints here. See docs/RL_EVAL_PROTOCOL.md.
 set -euo pipefail
 
@@ -204,7 +204,7 @@ total epoch budget so a restored checkpoint can continue optimizing.
 
 import importlib
 
-_base = importlib.import_module('examples.config.pv_tracking.stage3_fullyear_random_clean_split')
+_base = importlib.import_module('examples.config.pv_tracking.stage3_fullyear_stable_mbpo')
 
 CONFIG_VERSION = 'pv_tracking_stage3_refine_to_${TARGET_TOTAL_EPOCHS}_${STAMP}'
 TRAINING_STAGE = 'stage3'

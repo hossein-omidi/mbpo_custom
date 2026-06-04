@@ -1,9 +1,10 @@
-Source: /home/user01/ray_mbpo/PVTracking/pv_tracking/seed:4755_2026-06-02_23-02-363qbjsnqe/progress.csv
-Rows: 8
-evaluation/return-average: first=0.556007 last=0.444779
-training/return-average: first=0.762019 last=1.294852
-model/val_loss: first=0.000015 last=0.000009
-policy/shifts-mean: first=0.000494 last=-0.044280
-policy/actions-std: first=0.602412 last=0.598398
-alpha: first=0.703849 last=0.060976
-real_batch_ratio: first=0.500000 last=0.500000
+Source: /home/user01/ray_mbpo/PVTracking/pv_tracking/seed:1470_2026-06-04_00-35-39teaup2o8/progress.csv
+Rows: 504
+evaluation/return-average: first=0.745511 last=0.753201
+training/return-average: first=0.797929 last=1.289670
+model/val_loss: first=0.000013 last=0.000004
+model_rollout_length: first=1.000000 last=4.000000
+real_batch_ratio: first=0.097656 last=0.097656
+alpha: first=0.626052 last=0.020000
+Q_loss: first=0.006072 last=0.002387
+policy/shifts-mean: first=-0.007017 last=0.075343

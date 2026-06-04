@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from examples.config.pv_tracking.verified_dates import SEASON_ORDER
+from eval_utils import SEASON_CALENDAR_ORDER
 from eval_utils import (
     compute_total_energy_kwh,
     describe_eval_config,
@@ -75,6 +76,17 @@ def build_episode_table(paths_by_name):
                 **m,
             })
     return rows
+
+
+def _sample_stats(values):
+    """Sample mean E[X] and sample std σ for finite MC rollouts (ddof=1)."""
+    v = np.asarray(values, dtype=np.float64)
+    n = len(v)
+    if n == 0:
+        return np.nan, np.nan, 0
+    mean = float(np.mean(v))
+    std = float(np.std(v, ddof=1)) if n > 1 else 0.0
+    return mean, std, n
 
 
 def _error_bar(values, error='std'):
@@ -174,8 +186,9 @@ def plot_seasonal_comparison(outdir, paths_by_name, error='std'):
         ('net_energy_kwh', 'Net energy (kWh)', 'seasonal_net_energy.png'),
         ('movement_cost', 'Movement cost', 'seasonal_movement_cost.png'),
     ):
-        seasons = [s for s in SEASON_ORDER if any(
-            episode_metrics(p)['season'] == s for paths in paths_by_name.values()
+        seasons = [s for s in SEASON_CALENDAR_ORDER if any(
+            get_rollout_metadata(p).get('season_calendar', episode_metrics(p)['season']) == s
+            for paths in paths_by_name.values()
             for p in paths)]
         methods = [m for m in METHODS if m in paths_by_name]
         x = np.arange(len(seasons))
@@ -187,7 +200,8 @@ def plot_seasonal_comparison(outdir, paths_by_name, error='std'):
                 vals = [
                     episode_metrics(p)[metric]
                     for p in paths_by_name[method]
-                    if episode_metrics(p)['season'] == season]
+                    if get_rollout_metadata(p).get(
+                        'season_calendar', episode_metrics(p)['season']) == season]
                 means.append(float(np.mean(vals)) if vals else np.nan)
                 errs.append(_error_bar(vals, error)[0])
             offset = (i - (len(methods) - 1) / 2.0) * width
@@ -197,8 +211,9 @@ def plot_seasonal_comparison(outdir, paths_by_name, error='std'):
         ax.set_xticks(x)
         ax.set_xticklabels(seasons)
         ax.set_ylabel(ylabel)
-        ax.set_title('%s by season (mean ± %s)' % (ylabel, error))
-        ax.legend()
+        ax.set_title('%s by calendar season (mean ± %s)' % (ylabel, error))
+        if seasons and methods:
+            ax.legend(loc='best', fontsize=9)
         ax.grid(axis='y', linestyle='--', alpha=0.35)
         fig.tight_layout()
         path = os.path.join(outdir, fname)
@@ -206,6 +221,104 @@ def plot_seasonal_comparison(outdir, paths_by_name, error='std'):
         plt.close(fig)
         paths_out.append(path)
     return paths_out
+
+
+def plot_return_process_evaluation(outdir, paths_by_name):
+    """MC evaluation return R = sum_t r_t: report E[R] and σ across rollouts per method.
+
+    Post-train protocol: independent episodes indexed by eval seed; bars show
+    sample mean ± sample std (not SEM unless n is large).
+    """
+    methods = [m for m in METHODS if m in paths_by_name]
+    if not methods:
+        return None
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+
+    # Panel A: bar chart E[R] ± σ
+    ax = axes[0]
+    x = np.arange(len(methods))
+    means, stds, ns = [], [], []
+    for method in methods:
+        rewards = [episode_metrics(p)['total_reward'] for p in paths_by_name[method]]
+        mu, sig, n = _sample_stats(rewards)
+        means.append(mu)
+        stds.append(sig)
+        ns.append(n)
+    ax.bar(x, means, yerr=stds, capsize=6, color=[METHOD_COLORS[m] for m in methods],
+           alpha=0.9, edgecolor='white')
+    ax.set_xticks(x)
+    ax.set_xticklabels([METHOD_LABELS[m] for m in methods], rotation=12, ha='right')
+    ax.set_ylabel('Episode total return (kWh net)')
+    ax.set_title('E[R] ± σ over MC rollouts (annual scenario)')
+    ax.grid(axis='y', linestyle='--', alpha=0.35)
+    for i, (mu, sig, n) in enumerate(zip(means, stds, ns)):
+        if np.isfinite(mu):
+            ax.text(i, mu + sig + 0.01 * max(abs(mu), 1e-6), 'n=%d' % n,
+                    ha='center', va='bottom', fontsize=8)
+
+    # Panel B: rollout-index process (scatter + E[R] line)
+    ax = axes[1]
+    for method in methods:
+        rewards = [episode_metrics(p)['total_reward'] for p in paths_by_name[method]]
+        idx = np.arange(1, len(rewards) + 1)
+        mu, sig, _ = _sample_stats(rewards)
+        ax.scatter(idx, rewards, alpha=0.55, s=28, color=METHOD_COLORS[method],
+                   label=METHOD_LABELS[method])
+        ax.axhline(mu, color=METHOD_COLORS[method], linestyle='--', linewidth=1.2, alpha=0.85)
+        ax.fill_between([idx.min(), idx.max()], mu - sig, mu + sig,
+                        color=METHOD_COLORS[method], alpha=0.12)
+    ax.set_xlabel('Rollout index (matched eval seeds)')
+    ax.set_ylabel('Total return R')
+    ax.set_title('Return process — per-rollout R with E[R] ± σ band')
+    ax.legend(loc='best', fontsize=8)
+    ax.grid(True, linestyle='--', alpha=0.35)
+
+    fig.suptitle(
+        'Frozen-policy MC evaluation: R = Σ_t (energy − movement), T=78',
+        fontsize=11, y=1.02)
+    fig.tight_layout()
+    path = os.path.join(outdir, 'return_process_evaluation.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return path
+
+
+def plot_cumulative_return_intraday(outdir, paths_by_name, field='cumulative_net'):
+    """Intraday cumulative net energy: mean trajectory ± 1σ across MC rollouts (learned policy)."""
+    learned = paths_by_name.get('learned_policy', [])
+    if not learned:
+        return None
+    buckets = defaultdict(list)
+    for path in learned:
+        cum = 0.0
+        for info in path.get('infos', []):
+            cum += float(info.get('energy_kwh', 0.0)) - float(info.get('movement_cost', 0.0))
+            t = info.get('clock_hour_utc', info.get('clock_hour', np.nan))
+            if np.isfinite(t):
+                buckets[round(float(t), 3)].append(cum)
+    hours = sorted(buckets.keys())
+    if len(hours) < 2:
+        return None
+    mean_y = np.array([np.mean(buckets[h]) for h in hours])
+    std_y = np.array([np.std(buckets[h], ddof=1) if len(buckets[h]) > 1 else 0.0 for h in hours])
+
+    fig, ax = plt.subplots(figsize=(11, 4))
+    ax.plot(hours, mean_y, color=METHOD_COLORS['learned_policy'], lw=2,
+            label='E[cumulative net energy]')
+    ax.fill_between(hours, mean_y - std_y, mean_y + std_y,
+                    color=METHOD_COLORS['learned_policy'], alpha=0.25,
+                    label='±1σ across rollouts')
+    ax.set_xlabel('UTC clock hour (post-step)')
+    ax.set_ylabel('Cumulative net energy (kWh)')
+    ax.set_title('Intraday return accumulation — MBPO-SAC (MC mean ± σ)')
+    ax.legend(loc='best')
+    ax.grid(True, linestyle='--', alpha=0.35)
+    path = os.path.join(outdir, 'cumulative_return_intraday.png')
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
 
 
 def plot_daily_gain_distributions(outdir, paths_by_name):
@@ -235,8 +348,8 @@ def plot_daily_gain_distributions(outdir, paths_by_name):
             continue
         ax.hist(v, bins=min(15, max(5, len(v) // 2)), color=METHOD_COLORS['learned_policy'],
                 alpha=0.75, edgecolor='white')
-        ax.axvline(np.mean(v), color='black', linestyle='--', label='mean=%.4f' % np.mean(v))
-        ax.axvline(0.0, color='#666', linestyle='-', linewidth=0.8)
+        ax.axvline(np.mean(v), color='black', linestyle='--', label='E[gain]=%.4f' % np.mean(v))
+        ax.axvline(0.0, color='#666666', linestyle='-', linewidth=0.8)
         ax.set_xlabel('Net energy gain (kWh)')
         ax.set_title('%s (n=%d matched seeds)' % (title, len(v)))
         ax.legend(fontsize=8)
@@ -521,14 +634,28 @@ def generate_paper_figures(
     write_paper_metrics_json(paper_dir, paths_by_name, eval_env_params, protocol_note)
 
     outputs = []
+
+    def _safe(name, fn, *a, **kw):
+        try:
+            p = fn(*a, **kw)
+            if p:
+                outputs.append(p)
+        except Exception as exc:
+            print('[plot_paper_eval] %s failed: %s' % (name, exc))
+
     if len(paths_by_name) >= 2:
-        outputs.append(plot_annual_performance_bars(paper_dir, paths_by_name, error=error))
-        outputs.append(plot_energy_decomposition(paper_dir, paths_by_name, error=error))
-        outputs.extend(plot_seasonal_comparison(paper_dir, paths_by_name, error=error))
-        outputs.append(plot_daily_gain_distributions(paper_dir, paths_by_name))
-        outputs.append(plot_movement_efficiency(paper_dir, paths_by_name))
+        _safe('return_process_evaluation', plot_return_process_evaluation, paper_dir, paths_by_name)
+        _safe('cumulative_return_intraday', plot_cumulative_return_intraday, paper_dir, paths_by_name)
+        _safe('annual_performance_bars', plot_annual_performance_bars, paper_dir, paths_by_name, error=error)
+        _safe('energy_decomposition', plot_energy_decomposition, paper_dir, paths_by_name, error=error)
+        try:
+            outputs.extend(plot_seasonal_comparison(paper_dir, paths_by_name, error=error) or [])
+        except Exception as exc:
+            print('[plot_paper_eval] seasonal_comparison failed: %s' % exc)
+        _safe('daily_gain_distributions', plot_daily_gain_distributions, paper_dir, paths_by_name)
+        _safe('movement_efficiency', plot_movement_efficiency, paper_dir, paths_by_name)
         outputs.extend(plot_representative_daily_trajectories(
-            paper_dir, paths_by_name, top_k=top_representative_days))
+            paper_dir, paths_by_name, top_k=top_representative_days) or [])
         p = plot_mc_timeseries_band(paper_dir, paths_by_name, field='power')
         if p:
             outputs.append(p)

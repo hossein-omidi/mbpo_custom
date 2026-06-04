@@ -2,7 +2,7 @@
 
 Standalone full-year experiment: **empirical annual weather scenarios** (day sampling), deterministic pvlib physics, seed-based evaluation. Stages 0–2 are **not** required.
 
-**Canonical config:** `examples/config/pv_tracking/stage3_fullyear_random_clean_split.py`  
+**Canonical config:** `examples/config/pv_tracking/stage3_fullyear_stable_mbpo.py`  
 **Protocol:** [RL_EVAL_PROTOCOL.md](RL_EVAL_PROTOCOL.md)
 
 **Baselines** = `sun_tracking` and `fixed_no_motion` (same env, same pvlib energy path).

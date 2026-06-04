@@ -19,6 +19,7 @@ import numpy as np
 from softlearning.environments.utils import get_environment_from_params
 from examples.config.pv_tracking.verified_dates import (
     STAGE3_STRESS_TEST_DATES,
+    STAGE3_VALIDATION_DATES,
     dates_by_season,
     training_day_count,
 )
@@ -26,8 +27,8 @@ from mbpo.env.pv_tracking import PVTrackingEnv
 from eval_utils import make_baseline_rollout, season_from_day_of_year
 
 
-DEFAULT_CONFIG = 'examples.config.pv_tracking.stage3_fullyear_random_clean_split'
-DEFAULT_CONFIG_PATH = 'examples/config/pv_tracking/stage3_fullyear_random_clean_split.py'
+DEFAULT_CONFIG = 'examples.config.pv_tracking.stage3_fullyear_stable_mbpo'
+DEFAULT_CONFIG_PATH = 'examples/config/pv_tracking/stage3_fullyear_stable_mbpo.py'
 
 
 def load_params(config_module):
@@ -85,8 +86,18 @@ def main():
         errors.append('RL protocol: training must not use excluded_dates (got %s)' % (
             train.get('excluded_dates')))
     if ev.get('fixed_eval_dates'):
-        errors.append('RL protocol: in-train eval should not use fixed_eval_dates (got %s)' % (
-            ev.get('fixed_eval_dates')))
+        fixed = list(ev.get('fixed_eval_dates'))
+        if fixed != list(STAGE3_VALIDATION_DATES):
+            errors.append(
+                'in-train eval fixed_eval_dates must be STAGE3_VALIDATION_DATES '
+                '(got %s)' % fixed)
+        else:
+            lines.append(
+                'In-train eval: STAGE3_VALIDATION_DATES (%d seasonally spaced dates)' % (
+                    len(fixed)))
+        if ev.get('randomize_day'):
+            errors.append(
+                'in-train eval must set randomize_day=False when using fixed_eval_dates')
     if not train.get('randomize_day'):
         errors.append('training randomize_day must be True for annual RL')
     if train.get('weather_source') != 'historical':
@@ -167,6 +178,16 @@ def main():
         expected = max(poa, 0.0) * inner.area * inner.efficiency
         if abs(expected - power) > 0.05:
             errors.append('baseline power != pvlib path')
+    eval_env.close()
+
+    eval_env = get_environment_from_params(variant['environment_params']['evaluation'])
+    fixed_path = make_baseline_rollout(
+        eval_env, 'fixed_no_motion', path_length=min(10, inner.num_action_steps), seed=42)
+    fixed_move = sum(float(i['movement_cost']) for i in fixed_path['infos'])
+    if fixed_move > 1e-9:
+        errors.append('fixed_no_motion must have zero movement_cost (got %.6f)' % fixed_move)
+    else:
+        lines.append('fixed_no_motion: movement_cost=0 (action=0, frozen pose)')
     eval_env.close()
     env.close()
 

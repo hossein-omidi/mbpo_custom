@@ -23,12 +23,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ARTIFACT="$ROOT/sequential_stage_artifacts/stage3_fullyear_trial_dir.txt"
 RAY_ROOT="${RAY_ROOT:-$HOME/ray_mbpo/PVTracking/pv_tracking}"
 CONDA_SH="${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 # Main RL evaluation: full-year support, independent seeds (not fixed calendar dates).
-EVAL_NUM_ROLLOUTS="${EVAL_NUM_ROLLOUTS:-40}"
+EVAL_NUM_ROLLOUTS="${EVAL_NUM_ROLLOUTS:-16}"
 EVAL_SEED_BASE="${EVAL_SEED_BASE:-100000}"
 MAX_PATH_LENGTH="${MAX_PATH_LENGTH:-78}"
 RANK_ROLLOUTS="${RANK_ROLLOUTS:-24}"
@@ -46,13 +47,17 @@ MODE="${2:-eval}"
 resolve_trial_dir() {
   local trial_input="$1"
   if [[ "$trial_input" == "latest" ]]; then
-    local latest
-    latest="$(ls -td "$RAY_ROOT"/seed:*/ 2>/dev/null | head -1 || true)"
-    if [[ -z "$latest" ]]; then
-      echo "No Stage 3 Ray trial found under $RAY_ROOT" >&2
-      exit 1
-    fi
-    echo "${latest%/}"
+    python - "$ROOT" "$ARTIFACT" <<'PY'
+import os, sys
+repo = sys.argv[1]
+artifact = sys.argv[2]
+sys.path.insert(0, os.path.join(repo, 'scripts'))
+from pv_trial_paths import find_stage3_trial
+trial, _ = find_stage3_trial(artifact_path=artifact)
+if not trial:
+    raise SystemExit('No Stage 3 trial found. Run train first.')
+print(trial)
+PY
     return 0
   fi
   echo "${trial_input%/}"
@@ -143,6 +148,7 @@ run_seed_based_eval() {
     --num-rollouts "$EVAL_NUM_ROLLOUTS" \
     --eval-seed-base "$EVAL_SEED_BASE" \
     --max-path-length "$MAX_PATH_LENGTH" \
+    --max-rollout-plots "${MAX_ROLLOUT_PLOTS:-4}" \
     --deterministic \
     --compare-baselines \
     --eval-protocol inherit

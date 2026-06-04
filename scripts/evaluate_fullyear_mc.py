@@ -41,13 +41,16 @@ from examples.config.pv_tracking.verified_dates import (
 )
 from eval_utils import (
     EVAL_PROTOCOL_INHERIT,
+    SEASON_CALENDAR_ORDER,
     compute_total_energy_kwh,
     get_rollout_metadata,
     night_intervals_from_path,
     rollout_time_axis,
     rollout_xlabel,
     save_rollout_csv,
+    season_from_calendar_date,
     write_eval_scenario_confirmation,
+    write_eval_statistics_readme,
 )
 
 from evaluate_agent import (
@@ -104,6 +107,19 @@ def run_method_rollout(variant, args, path_length, policy, method, seed,
         env.close()
 
 
+def _season_key(meta):
+    """Calendar season for MC seasonal yield (month buckets)."""
+    date = meta.get('date')
+    if date not in (None, '', 'unknown'):
+        return season_from_calendar_date(date)
+    return meta.get('season_calendar', meta.get('season', 'unknown'))
+
+
+def sample_std(values):
+    v = np.asarray(values, dtype=np.float64)
+    return float(np.std(v, ddof=1)) if len(v) > 1 else 0.0
+
+
 def sem(values):
     v = np.asarray(values, dtype=np.float64)
     if len(v) <= 1:
@@ -143,21 +159,23 @@ def plot_ensemble_actions(outpath, paths, date):
 
 
 def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_tag=''):
-    """Grouped bar chart: mean daily energy by season and method."""
-    seasons = [s for s in SEASON_ORDER if any(r['season'] == s for r in records)]
+    """Grouped bar chart: mean daily energy by calendar season and method."""
+    seasons = [s for s in SEASON_CALENDAR_ORDER if any(
+        r.get('season_calendar', r.get('season')) == s for r in records)]
     methods = [m for m in METHODS if any(r['method'] == m for r in records)]
     x = np.arange(len(seasons))
     width = 0.8 / max(len(methods), 1)
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    err_fn = sem if error == 'sem' else (lambda v: float(np.std(v)))
+    err_fn = sem if error == 'sem' else sample_std
 
     for i, method in enumerate(methods):
         means = []
         errs = []
         for season in seasons:
             vals = [r['energy_kwh'] for r in records
-                    if r['season'] == season and r['method'] == method]
+                    if r.get('season_calendar', r.get('season')) == season
+                    and r['method'] == method]
             means.append(float(np.mean(vals)) if vals else np.nan)
             errs.append(err_fn(vals) if vals else 0.0)
         style = METHOD_STYLES.get(method, {'color': 'gray', 'label': method})
@@ -168,7 +186,7 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
     ax.set_xticks(x)
     ax.set_xticklabels(seasons)
     ax.set_ylabel('Daily energy yield (kWh)')
-    ax.set_title('Energy yield by season and tracker%s\n(error bars = %s across episodes)' % (
+    ax.set_title('Energy yield by calendar season and tracker%s\n(error bars = %s across MC episodes)' % (
         title_suffix, error))
     ax.legend(loc='best')
     ax.grid(axis='y', linestyle='--', alpha=0.35)
@@ -181,33 +199,29 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
 
 
 def plot_season_ratio_bars(outdir, records, baseline='sun_tracking', error='sem'):
-    """Learned / baseline energy ratio by season with uncertainty."""
-    seasons = [s for s in SEASON_ORDER if any(r['season'] == s for r in records)]
+    """Learned / baseline energy ratio by calendar season (paired by seed/replicate)."""
+    seasons = [s for s in SEASON_CALENDAR_ORDER if any(
+        r.get('season_calendar', r.get('season')) == s for r in records)]
     ratios_by_season = {s: [] for s in seasons}
+    err_fn = sem if error == 'sem' else sample_std
     for season in seasons:
-        dates = sorted({r['date'] for r in records if r['season'] == season})
-        for date in dates:
-            learned = [r['energy_kwh'] for r in records
-                       if r['date'] == date and r['method'] == 'learned_policy']
-            base = [r['energy_kwh'] for r in records
-                    if r['date'] == date and r['method'] == baseline]
-            if not learned or not base:
+        for r in records:
+            if r['method'] != 'learned_policy':
                 continue
-            # Pair aligned replicates by replicate index when available
-            pairs = []
-            for r in records:
-                if r['date'] == date and r['method'] == 'learned_policy':
-                    b = [x for x in records if x['date'] == date and x['method'] == baseline
-                         and x.get('replicate', 0) == r.get('replicate', 0)]
-                    if b and b[0]['energy_kwh'] > 0:
-                        pairs.append(r['energy_kwh'] / b[0]['energy_kwh'])
-            if pairs:
-                ratios_by_season[season].extend(pairs)
+            if r.get('season_calendar', r.get('season')) != season:
+                continue
+            b = [x for x in records
+                 if x['method'] == baseline
+                 and x.get('date') == r.get('date')
+                 and x.get('replicate', 0) == r.get('replicate', 0)
+                 and x.get('seed') == r.get('seed')]
+            if b and b[0]['energy_kwh'] > 0:
+                ratios_by_season[season].append(r['energy_kwh'] / b[0]['energy_kwh'])
 
     x = np.arange(len(seasons))
     means = [float(np.mean(ratios_by_season[s])) if ratios_by_season[s] else np.nan
              for s in seasons]
-    errs = [sem(ratios_by_season[s]) if ratios_by_season[s] else 0.0 for s in seasons]
+    errs = [err_fn(ratios_by_season[s]) if ratios_by_season[s] else 0.0 for s in seasons]
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
     ax.bar(x, means, yerr=errs, capsize=4, color='#1f77b4', alpha=0.88)
@@ -256,6 +270,8 @@ def write_mc_report(outdir, args, dates, records):
                 f.write('  %s: %.4f ± %.4f (n=%d)\n' % (
                     method, np.mean(vals), np.std(vals, ddof=1) if len(vals) > 1 else 0.0,
                     len(vals)))
+        f.write('\nSeason bars use season_calendar (month buckets), not env equinox labels.\n')
+        f.write('Paired methods share seed; E[energy] and std use sample statistics (ddof=1).\n')
         f.write('\nAll rollouts: real PVTrackingEnv, pvlib power path, T=78.\n')
     return path
 
@@ -270,7 +286,7 @@ def parse_args():
                    help='annual=RL seed rollouts over full year; stress_test=fixed calendar panel')
     p.add_argument('--fixed-eval-dates', default=None,
                    help='Override dates (comma-separated). Implies --date-set custom.')
-    p.add_argument('--num-rollouts', type=int, default=40,
+    p.add_argument('--num-rollouts', type=int, default=16,
                    help='Rollouts for --date-set annual (independent eval seeds)')
     p.add_argument('--eval-seed-base', type=int, default=100000,
                    help='Base eval seed (independent of training)')
@@ -347,8 +363,10 @@ def main():
                         policy_stochastic and method == 'learned_policy'))
                 meta = get_rollout_metadata(path)
                 em = episode_metrics(path)
+                sk = _season_key(meta)
                 records.append({
                     'date': meta.get('date'), 'season': meta.get('season'),
+                    'season_calendar': sk,
                     'method': method, 'replicate': idx + 1, 'seed': seed,
                     'energy_kwh': meta['total_energy_kwh'],
                     'gross_energy_kwh': em['gross_energy_kwh'],
@@ -448,6 +466,8 @@ def main():
                 aligned_by_method[bmethod], prefix='aligned')
 
     write_mc_report(args.outdir, args, dates or ['annual'], records)
+    if args.date_set == 'annual':
+        write_eval_statistics_readme(args.outdir, args.num_rollouts, args.eval_seed_base)
     with open(os.path.join(args.outdir, 'mc_records.json'), 'w') as f:
         json.dump(records, f, indent=2)
 

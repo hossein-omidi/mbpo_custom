@@ -33,9 +33,9 @@ params = dict(_stage2.params)
 params['config_version'] = CONFIG_VERSION
 params['kwargs'] = dict(_stage2.params['kwargs'])
 params['kwargs'].update({
-    'n_epochs': 1500,
+    'n_epochs': 2500,
     'real_ratio': 0.5,
-    'n_initial_exploration_steps': 8000,
+    'n_initial_exploration_steps': 12000, # was 8000
 })
 params['environment_kwargs'] = dict(_stage2.params['environment_kwargs'])
 params['environment_kwargs'].update({
@@ -46,7 +46,7 @@ params['environment_kwargs'].update({
     'weather_source': 'historical',
     'irradiance_perturbation_std': IRRADIANCE_PERTURBATION_STD,
     'observation_noise_std': OBSERVATION_NOISE_STD,
-    'movement_penalty': 0.001,
+    'movement_penalty': 0.00,
     'observation_mode': 'physical',
 })
 params['environment_kwargs'].pop('excluded_dates', None)
@@ -60,6 +60,6 @@ params['evaluation_environment_kwargs'].update({
     'weather_source': 'historical',
     'irradiance_perturbation_std': IRRADIANCE_PERTURBATION_STD,
     'observation_noise_std': OBSERVATION_NOISE_STD,
-    'movement_penalty': 0.001,
+    'movement_penalty': 0.00,
 })
 params['evaluation_environment_kwargs'].pop('fixed_eval_dates', None)

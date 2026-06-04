@@ -59,6 +59,8 @@ def parse_args():
                    help='Run live PVTrackingEnv action-space sanity checks')
     p.add_argument('--summer-dates', default='2020-06-07,2020-06-21',
                    help='Comma-separated dates for season comparison if present in CSVs')
+    p.add_argument('--max-paired-plot-days', type=int, default=6,
+                   help='Max learned-vs-sun diagnostic plot sets (8 PNGs each); rest use MC summaries')
     p.add_argument('--gate', action='store_true',
                    help='Exit 1 if phase gates fail (CI / TRAINING_PROTOCOL.md)')
     p.add_argument('--min-energy-ratio', type=float, default=0.95,
@@ -995,7 +997,15 @@ def _run_diagnosis(args):
     fixed_summaries = []
     clear_day_pairs = []
 
-    for lp, sp, tag in pairs:
+    max_plot_days = max(0, int(getattr(args, 'max_paired_plot_days', 6)))
+    if max_plot_days > 0 and len(pairs) > max_plot_days:
+        plot_pair_indices = set(
+            int(round(i * (len(pairs) - 1) / float(max_plot_days - 1)))
+            for i in range(max_plot_days))
+    else:
+        plot_pair_indices = set(range(len(pairs)))
+
+    for plot_pair_index, (lp, sp, tag) in enumerate(pairs):
         lrows = load_csv(lp)
         srows = load_csv(sp)
         ls = summarize_trajectory(lrows, 'learned')
@@ -1006,8 +1016,9 @@ def _run_diagnosis(args):
         if lrows and lrows[0].get('weather_condition') == 'clear':
             clear_day_pairs.append((lrows, srows, tag))
 
-        plot_all_tracking_diagnostics(
-            lrows, srows, tag, plot_dir, movement_penalty=movement_penalty)
+        if plot_pair_index < len(plot_pair_indices):
+            plot_all_tracking_diagnostics(
+                lrows, srows, tag, plot_dir, movement_penalty=movement_penalty)
 
     # Aggregate comparison
     def _mean(key, summaries):
@@ -1050,7 +1061,9 @@ def _run_diagnosis(args):
                 _fmt(_mean('total_movement_cost', learned_summaries), '%.5f'),
                 _fmt(_mean('total_movement_cost', sun_summaries), '%.5f')),
             '',
-            'Plots per paired date/tag (under diagnostics/plots/):',
+            'Per-date diagnostic plots: %d of %d pairs (see --max-paired-plot-days); MC summaries in eval dir.' % (
+                len(plot_pair_indices), len(pairs)),
+            'Plot types when enabled (diagnostics/plots/):',
             '  actions_time_* — learned vs sun action commands over UTC time',
             '  actions_3d_* — 3D path (time, action_tilt, action_azimuth)',
             '  orientation_3d_* — panel tilt/az vs solar target in 3D',
@@ -1069,9 +1082,11 @@ def _run_diagnosis(args):
     if fixed_paths:
         for fp in fixed_paths[:len(learned_paths)]:
             fixed_summaries.append(summarize_trajectory(load_csv(fp), 'fixed'))
+        fixed_move = _mean('total_movement_cost', fixed_summaries)
         sections.append(('Learned vs fixed_no_motion (energy)', [
             'mean energy learned: %.4f kWh' % _mean('total_energy_kwh', learned_summaries),
             'mean energy fixed:   %.4f kWh' % _mean('total_energy_kwh', fixed_summaries),
+            'mean movement fixed: %.6f (expect ~0: action=0, frozen at reset pose)' % fixed_move,
             'PASS beats fixed' if _mean('total_energy_kwh', learned_summaries) > _mean(
                 'total_energy_kwh', fixed_summaries) else
             'FAIL: learned below fixed — wrong tracking, not just vs sun tracker',

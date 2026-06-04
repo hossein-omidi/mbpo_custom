@@ -47,6 +47,7 @@ from softlearning.samplers import rollout
 from softlearning.utils.keras import _apply_keras_hdf5_compat_patches
 
 from eval_utils import (
+    SEASON_CALENDAR_ORDER,
     TIME_WINDOWS,
     SOLAR_ALTITUDE_WINDOWS,
     analyze_rollout_path,
@@ -70,6 +71,7 @@ from eval_utils import (
     rollout_xlabel,
     night_intervals_from_path,
     write_eval_scenario_confirmation,
+    write_eval_statistics_readme,
     write_reward_time_report,
 )
 
@@ -91,8 +93,13 @@ def parse_args():
     parser.add_argument(
         '--num-rollouts', '-n',
         type=int,
-        default=10,
-        help='Number of evaluation rollouts to run.')
+        default=16,
+        help='Number of MC evaluation rollouts (independent seeds).')
+    parser.add_argument(
+        '--max-rollout-plots',
+        type=int,
+        default=4,
+        help='Max per-rollout combined PNGs (0 = skip). Use MC summary plots for the rest.')
     parser.add_argument(
         '--max-path-length', '-l',
         type=int,
@@ -424,7 +431,8 @@ def save_summary(
     season_stats = None
     weather_stats = None
     if report_by_season:
-        season_stats = summarize_by_group(paths, lambda m: m['season'])
+        season_stats = summarize_by_group(
+            paths, lambda m: m.get('season_calendar', m['season']))
         weather_stats = summarize_by_group(paths, lambda m: m['weather_condition'])
 
     baseline_stats = {}
@@ -453,8 +461,11 @@ def save_summary(
         _write_stats_block(f, '  Episode length', policy_stats['episode_length'])
 
         if season_stats:
-            f.write('\nBy season (learned policy):\n')
-            for season, stats in season_stats.items():
+            f.write('\nBy calendar season (learned policy; month buckets):\n')
+            for season in SEASON_CALENDAR_ORDER:
+                if season not in season_stats:
+                    continue
+                stats = season_stats[season]
                 f.write('  %s:\n' % season)
                 _write_stats_block(f, '    Reward', stats['reward'])
                 _write_stats_block(f, '    Energy kWh', stats['total_energy_kwh'])
@@ -469,13 +480,19 @@ def save_summary(
                     stats['reward']['count'],
                 ))
 
-        f.write('\nPer-rollout detail (with peak times):\n')
-        for idx, path in enumerate(paths, 1):
+        f.write('\nPer-rollout detail (sample; full data in rollouts/*.csv):\n')
+        detail_indices = list(range(1, len(paths) + 1))
+        if len(paths) > 12:
+            detail_indices = list(range(1, 6)) + list(range(len(paths) - 2, len(paths) + 1))
+        for idx in detail_indices:
+            path = paths[idx - 1]
             meta = analyze_rollout_path(path)
             f.write(
-                '  rollout_%d: date=%s season=%s weather=%s '
+                '  rollout_%d: date=%s season_cal=%s env_season=%s weather=%s '
                 'reward=%.4f energy_kwh=%.4f movement=%.4f\n' % (
-                    idx, meta['date'], meta['season'], meta['weather_condition'],
+                    idx, meta['date'],
+                    meta.get('season_calendar', meta['season']),
+                    meta['season'], meta['weather_condition'],
                     meta['total_reward'], meta['total_energy_kwh'],
                     meta['total_movement_cost']))
             f.write(
@@ -484,6 +501,8 @@ def save_summary(
                     meta['peak_power_w'], meta['peak_power_time_hour'],
                     meta['at_peak_reward']['reward'], meta['peak_reward_time_hour'],
                     meta['mean_power_w']))
+        if len(paths) > 12:
+            f.write('  ... (%d rollouts total; see evaluation_rewards.png E[R]±σ)\n' % len(paths))
 
         if baseline_stats:
             f.write('\nBaseline comparison (same env settings, matched seeds):\n')
@@ -511,7 +530,7 @@ def save_summary(
         'reward_by_time_window': aggregate_time_windows(paths),
     }
     if season_stats:
-        payload['by_season'] = season_stats
+        payload['by_season_calendar'] = season_stats
     if baseline_stats:
         payload['baselines'] = baseline_stats
 
@@ -523,13 +542,23 @@ def save_summary(
 
 def plot_rewards(outdir, paths):
     rewards = [get_rollout_metadata(p)['total_reward'] for p in paths]
+    n = len(rewards)
+    mu = float(np.mean(rewards)) if n else np.nan
+    sig = float(np.std(rewards, ddof=1)) if n > 1 else 0.0
+    idx = np.arange(1, n + 1)
+
     fig, ax = plt.subplots(figsize=(9, 4))
-    ax.plot(np.arange(1, len(rewards) + 1), rewards, marker='o', linestyle='-', color='#2171b5')
-    ax.axhline(np.mean(rewards), color='#636363', linestyle='--', label='mean')
-    ax.set_title('Evaluation episode total reward')
+    ax.scatter(idx, rewards, color='#2171b5', alpha=0.7, s=36, label='R_i per rollout')
+    if n:
+        ax.axhline(mu, color='#636363', linestyle='--', linewidth=1.5,
+                   label='E[R]=%.4f' % mu)
+        if n > 1:
+            ax.fill_between([idx.min(), idx.max()], mu - sig, mu + sig,
+                            color='#2171b5', alpha=0.15, label='±σ=%.4f (n=%d)' % (sig, n))
+    ax.set_title('MC evaluation return process (annual scenario)')
     ax.set_xlabel('Rollout index')
-    ax.set_ylabel('Total reward')
-    ax.legend()
+    ax.set_ylabel('Total return R')
+    ax.legend(loc='best', fontsize=9)
     ax.grid(True, linestyle='--', alpha=0.4)
     filepath = os.path.join(outdir, 'evaluation_rewards.png')
     fig.tight_layout()
@@ -542,15 +571,16 @@ def plot_by_season(outdir, paths):
     season_groups = defaultdict(list)
     for path in paths:
         meta = get_rollout_metadata(path)
-        season_groups[meta['season']].append(meta['total_reward'])
+        season = meta.get('season_calendar', meta['season'])
+        season_groups[season].append(meta['total_reward'])
 
-    seasons = sorted(season_groups.keys())
+    seasons = [s for s in SEASON_CALENDAR_ORDER if s in season_groups]
     means = [np.mean(season_groups[s]) for s in seasons]
-    stds = [np.std(season_groups[s]) for s in seasons]
+    stds = [np.std(season_groups[s], ddof=1) if len(season_groups[s]) > 1 else 0.0 for s in seasons]
 
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.bar(seasons, means, yerr=stds, capsize=4, color='#41ab5d', alpha=0.85)
-    ax.set_title('Mean total reward by season')
+    ax.set_title('E[R] by calendar season ± σ (MC rollouts)')
     ax.set_ylabel('Total reward')
     ax.grid(axis='y', linestyle='--', alpha=0.4)
     filepath = os.path.join(outdir, 'evaluation_by_season.png')
@@ -853,6 +883,8 @@ def main(args):
         args.outdir, paths, paths_by_name=paths_by_name if args.compare_baselines else None)
     scenario_report = write_eval_scenario_confirmation(
         args.outdir, eval_env_params, paths_by_name, path_length)
+    stats_readme = write_eval_statistics_readme(
+        args.outdir, len(paths), int(args.eval_seed_base))
 
     reward_plot = plot_rewards(args.outdir, paths)
     plot_files = [
@@ -874,8 +906,17 @@ def main(args):
         )
 
     rollout_plot_files = []
-    for idx, path in enumerate(paths, start=1):
-        rollout_plot_files.append(plot_rollout_combined(args.outdir, path, idx))
+    max_rp = int(args.max_rollout_plots)
+    if max_rp > 0:
+        plot_indices = list(range(1, len(paths) + 1))
+        if len(paths) > max_rp:
+            plot_indices = [1] + [
+                1 + int(round(i * (len(paths) - 1) / float(max_rp - 1)))
+                for i in range(1, max_rp)
+            ]
+        for idx in sorted(set(plot_indices)):
+            rollout_plot_files.append(
+                plot_rollout_combined(args.outdir, paths[idx - 1], idx))
 
     print('Evaluation complete.')
     print('Saved:')
@@ -883,6 +924,7 @@ def main(args):
     print('  %s' % json_path)
     print('  %s' % reward_time_report)
     print('  %s' % scenario_report)
+    print('  %s' % stats_readme)
     for p in plot_files:
         print('  %s' % p)
     print('  %s' % rollouts_dir)

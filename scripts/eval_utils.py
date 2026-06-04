@@ -292,6 +292,7 @@ def deep_update(original, override):
 
 
 def season_from_day_of_year(day_of_year):
+    """Equinox-based season label (matches PVTrackingEnv.step info['season'])."""
     day = int(day_of_year)
     if 80 <= day <= 171:
         return 'spring'
@@ -300,6 +301,26 @@ def season_from_day_of_year(day_of_year):
     if 264 <= day <= 354:
         return 'fall'
     return 'winter'
+
+
+def season_from_calendar_date(date_str):
+    """Calendar-month season for post-train reporting (Dec–Feb winter, etc.).
+
+    Differs from env ``season`` before ~Jun 21: e.g. 2020-06-01 is env-spring
+    (day 153 < 172) but calendar-summer. Use this for seasonal bar charts.
+    """
+    import pandas as pd
+    month = int(pd.Timestamp(str(date_str)).month)
+    if month in (12, 1, 2):
+        return 'winter'
+    if month in (3, 4, 5):
+        return 'spring'
+    if month in (6, 7, 8):
+        return 'summer'
+    return 'fall'
+
+
+SEASON_CALENDAR_ORDER = ('winter', 'spring', 'summer', 'fall')
 
 
 def normalize_angle_diff(target, current):
@@ -678,7 +699,21 @@ def make_baseline_rollout(env, baseline_type, path_length, seed=None):
         current_tilt = decoded['panel_tilt_deg']
         current_azimuth = decoded['panel_azimuth_deg']
 
-        if baseline_type in ('fixed', 'fixed_no_motion'):
+        if baseline_type == 'fixed_no_motion':
+            # True fixed mount: zero incremental action → Δtilt=Δaz=0 → movement_cost=0.
+            action = np.zeros(2, dtype=np.float32)
+            next_obs, reward, terminal, info = env.step(action)
+            observations.append(obs)
+            actions.append(action)
+            rewards.append(reward)
+            terminals.append(terminal)
+            next_observations.append(next_obs)
+            infos.append(info)
+            obs = next_obs
+            done = terminal
+            step += 1
+            continue
+        if baseline_type in ('fixed', 'fixed_tilt_south'):
             target_tilt = 30.0
             target_azimuth = 180.0
         elif baseline_type == 'single_axis':
@@ -884,13 +919,18 @@ def get_rollout_metadata(path):
     infos = path.get('infos', [])
     info0 = infos[0] if infos else {}
     day_of_year = info0.get('day_of_year')
+    date = info0.get('date', 'unknown')
     season = info0.get('season') or (
         season_from_day_of_year(day_of_year)
         if day_of_year is not None else 'unknown')
+    season_calendar = (
+        season_from_calendar_date(date)
+        if date not in (None, '', 'unknown') else 'unknown')
     return {
-        'date': info0.get('date', 'unknown'),
+        'date': date,
         'day_of_year': day_of_year,
         'season': season,
+        'season_calendar': season_calendar,
         'weather_condition': info0.get('weather_condition', 'unknown'),
         'weather_source': info0.get('weather_source', 'unknown'),
         'episode_length': len(path.get('rewards', [])),
@@ -902,13 +942,16 @@ def get_rollout_metadata(path):
 
 
 def summarize_values(values):
+    """Sample mean and sample std (ddof=1) over finite MC rollouts."""
     values = np.asarray(values, dtype=np.float64)
+    n = int(len(values))
+    std = float(np.std(values, ddof=1)) if n > 1 else 0.0
     return OrderedDict([
-        ('count', int(len(values))),
-        ('mean', float(np.mean(values))),
-        ('std', float(np.std(values))),
-        ('min', float(np.min(values))),
-        ('max', float(np.max(values))),
+        ('count', n),
+        ('mean', float(np.mean(values)) if n else np.nan),
+        ('std', std),
+        ('min', float(np.min(values)) if n else np.nan),
+        ('max', float(np.max(values)) if n else np.nan),
     ])
 
 
@@ -934,6 +977,39 @@ def summarize_by_group(paths, key_fn):
         group: summarize_paths(group_paths)
         for group, group_paths in sorted(groups.items())
     }
+
+
+def write_eval_statistics_readme(outdir, num_rollouts, eval_seed_base):
+    """Document post-train estimators (not SAC entropy / Q bounds)."""
+    path = os.path.join(outdir, 'EVAL_STATISTICS.txt')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('Post-training evaluation statistics\n')
+        f.write('=' * 40 + '\n\n')
+        f.write('Checkpoint / policy\n')
+        f.write('  Loaded from trial params.json + checkpoint policy_weights.\n')
+        f.write('  Deploy: tanh(mu) when deterministic=True (matches training eval).\n')
+        f.write('  Integrity: evaluate_agent validates policy_input_dim vs env obs dim.\n\n')
+        f.write('Per-step reward (all methods, same env.step):\n')
+        f.write('  r_t = energy_kwh_t - movement_penalty * (|a0| + |a1|)\n')
+        f.write('  Episode return R = sum_t r_t  (discount=1 in PV env).\n\n')
+        f.write('Monte Carlo over rollouts (this eval):\n')
+        f.write('  N = %d independent episodes, seed_i = %d + i.\n' % (
+            num_rollouts, eval_seed_base))
+        f.write('  E[R]  = (1/N) sum_i R_i   (reported as mean)\n')
+        f.write('  sigma = sqrt(1/(N-1) sum_i (R_i - E[R])^2)  (ddof=1, not SAC std)\n\n')
+        f.write('In-training progress.csv (different estimator):\n')
+        f.write('  evaluation/return-average = mean of n_eval episodes that epoch.\n')
+        f.write('  evaluation/return-std = std of those n_eval episodes (Ray Tune log).\n\n')
+        f.write('Season labels in summaries:\n')
+        f.write('  season_calendar: month buckets (Jun-Aug = summer).\n')
+        f.write('  season (env): equinox buckets in PVTrackingEnv (Jun 1 can be spring).\n\n')
+        f.write('Baselines:\n')
+        f.write('  sun_tracking: slew toward solar zenith/azimuth each step.\n')
+        f.write('  fixed_no_motion: action=0 (panel frozen at reset pose; movement_cost=0).\n')
+        f.write('  fixed_tilt_south: optional slew to 30/180 (not default in Stage 3).\n\n')
+        f.write('Episode clock (UTC): 13:30 start, 7min30s steps, 78 transitions.\n')
+        f.write('  Same grid as training; see eval_config episode_preset in summary.\n')
+    return path
 
 
 def rollout_xlabel(path):
