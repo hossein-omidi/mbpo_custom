@@ -27,8 +27,8 @@ from mbpo.env.pv_tracking import PVTrackingEnv
 from eval_utils import make_baseline_rollout, season_from_day_of_year
 
 
-DEFAULT_CONFIG = 'examples.config.pv_tracking.stage3_fullyear_stable_mbpo'
-DEFAULT_CONFIG_PATH = 'examples/config/pv_tracking/stage3_fullyear_stable_mbpo.py'
+DEFAULT_CONFIG = 'examples.config.pv_tracking.conf1'
+DEFAULT_CONFIG_PATH = 'examples/config/pv_tracking/conf1.py'
 
 
 def load_params(config_module):

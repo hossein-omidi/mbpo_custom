@@ -1,7 +1,7 @@
 ## PV tracking environment (conda-forge only; no MuJoCo).
 ## The default Anaconda channel is blocked on some VMs (HTTP 403).
 ##
-##   cd /home/user01/mbpo_custom
+##   cd <path-to-repo>
 ##   source ~/miniconda3/etc/profile.d/conda.sh
 ##   conda env create -f environment/pv-env.yml
 ##   conda activate mbpo

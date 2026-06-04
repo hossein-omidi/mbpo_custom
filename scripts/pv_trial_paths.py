@@ -117,14 +117,29 @@ def _is_stage3_trial(trial_dir):
 
 
 def find_stage3_trial(artifact_path=None, preferred_root=None):
-    """Best-effort Stage 3 trial directory.
+    """Best-effort trial directory.
 
     Priority:
       1. $TRIAL environment variable
-      2. Artifact file (stage3_fullyear_trial_dir.txt)
-      3. Newest Stage 3 trial under search_roots
-      4. Newest any trial under search_roots (with warning)
+      2. runs/<RUN_NAME>/trial_dir.txt if $RUN_NAME set
+      3. Artifact file (legacy stage3_fullyear_trial_dir.txt)
+      4. Newest Stage 3 trial under search_roots
+      5. Newest any trial under search_roots (with warning)
     """
+    run_name = os.environ.get('RUN_NAME', '').strip()
+    if run_name:
+        import sys
+        _scripts = os.path.join(_REPO_ROOT, 'scripts')
+        if _scripts not in sys.path:
+            sys.path.insert(0, _scripts)
+        try:
+            from run_registry import resolve_trial_for_run
+            trial, warn = resolve_trial_for_run(run_name)
+            if trial:
+                return trial, warn
+        except ImportError:
+            pass
+
     env_trial = os.environ.get('TRIAL', '').strip()
     if env_trial and not is_placeholder_trial(env_trial):
         try:

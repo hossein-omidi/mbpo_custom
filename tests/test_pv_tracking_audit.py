@@ -408,21 +408,19 @@ def test_plot_daily_gain_matplotlib_colors():
         assert p2 and os.path.isfile(p2)
 
 
-def test_run_stage3_posttrain_shell_rl_protocol():
-    """Post-train script must use seed-based annual eval, not calendar hold-outs."""
+def test_train_result_shell_entrypoints():
+    """Root train.sh / result.sh use MC eval and compare-baselines."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(root, 'run_stage3_posttrain.sh')
-    text = open(path, encoding='utf-8').read()
-    assert 'STAGE3_VALIDATION_DATES' not in text
-    assert 'STAGE3_FINAL_TEST_DATES' not in text
-    assert 'excluded_dates' not in text or 'forbids excluded_dates' in text
-    assert 'EVAL_SEED_BASE' in text
-    assert 'eval-seed-base' in text
-    assert 'run_seed_based_eval' in text
-    assert 'run_stress_diagnostics' in text
-    seed_eval = text.split('run_seed_based_eval() {', 1)[1].split('run_rank_checkpoints()', 1)[0]
-    assert '--fixed-eval-dates' not in seed_eval
-    assert 'evaluate_agent.py' in seed_eval
+    train = open(os.path.join(root, 'train.sh'), encoding='utf-8').read()
+    result = open(os.path.join(root, 'result.sh'), encoding='utf-8').read()
+    assert 'conf_registry' in train or 'resolve_conf' in train
+    assert 'run_local' in train
+    assert 'runs/' in train
+    assert 'evaluate_agent.py' in result
+    assert 'compare-baselines' in result
+    assert 'eval-seed-base' in result
+    assert 'fixed_no_motion' not in result or 'sun_tracking' in result
+    assert 'resolve_trial_for_run' in result or 'trial_pointer' in result
 
 
 def test_historical_weather_changes_irradiance_and_power():
