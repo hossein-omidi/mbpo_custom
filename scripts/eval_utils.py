@@ -560,10 +560,11 @@ def get_eval_environment(
         eval_protocol=EVAL_PROTOCOL_INHERIT):
     """Build frozen-policy evaluation env on the real PVTrackingEnv.
 
-    RL protocol: Monte Carlo sampling of days from the annual weather distribution
-    and independent eval seeds — not calendar-day hold-out. pvlib is deterministic
-    given each day's exogenous trajectory. Optional irradiance_perturbation_std is
-    bounded augmentation only (paper default 0). Fixed dates only for stress tests.
+    RL protocol: Monte Carlo over episodes (annual days or NSRDB scenarios e~p(e))
+    with independent eval seeds — not calendar-day hold-out. Within each episode
+    weather follows one fixed exogenous trajectory (not per-step random draws).
+    pvlib is deterministic given that trajectory. Optional irradiance_perturbation_std
+    is bounded episode-level augmentation only (paper default 0).
     """
     environment_params = variant['environment_params']
     eval_env_params = (
@@ -598,6 +599,13 @@ def get_eval_environment(
     kwargs.pop('excluded_dates', None)
     if fixed_eval_dates is None:
         kwargs.pop('fixed_eval_dates', None)
+        # Post-train MC: do not inherit in-train fixed_eval_scenarios (5 validation ids).
+        kwargs.pop('fixed_eval_scenarios', None)
+
+    ws = kwargs.get('weather_source') or kwargs.get('weather_scenario_mode')
+    if ws in ('nsrdb_multiyear',) and fixed_eval_dates is None:
+        kwargs['randomize_scenario'] = True
+        kwargs['randomize_day'] = False
 
     if eval_weather_source is not None:
         kwargs['weather_source'] = eval_weather_source
@@ -636,9 +644,17 @@ def describe_eval_config(eval_env_params):
         'randomize_initial_orientation: %s' % kwargs.get(
             'randomize_initial_orientation', False),
         'weather_source: %s' % kwargs.get('weather_source', '(from env default)'),
+        'weather_scenario_mode: %s' % kwargs.get(
+            'weather_scenario_mode', '(from weather_source)'),
+        'randomize_scenario: %s' % kwargs.get('randomize_scenario', False),
+        'fixed_eval_scenarios: %s' % kwargs.get('fixed_eval_scenarios', None),
         'movement_penalty: %s' % kwargs.get('movement_penalty', '(from env default)'),
         'observation_mode: %s' % kwargs.get('observation_mode', 'legacy (default)'),
         'fixed_eval_dates: %s' % kwargs.get('fixed_eval_dates', None),
+        'control_grid: %s UTC, %d periods, %s (78 actions)' % (
+            kwargs.get('start_time', PV_EPISODE_START_TIME),
+            int(kwargs.get('periods', PV_EPISODE_PERIODS)),
+            kwargs.get('freq', PV_EPISODE_FREQ)),
     ]
     return lines
 
@@ -669,6 +685,24 @@ def _extract_underlying_env(env):
     if hasattr(env, '_env'):
         return env._env
     return env
+
+
+def _greedy_poa_orientation(underlying, solar_zenith, solar_azimuth, weather=None):
+    """Myopic POA-maximizing tilt/azimuth (oracle upper bound, not deployable)."""
+    if weather is None:
+        weather = underlying._current_weather()
+    best_power = -1.0
+    best_tilt, best_az = float(solar_zenith), float(solar_azimuth)
+    az_center = float(solar_azimuth)
+    for tilt in np.linspace(0.0, 90.0, 19):
+        for az_offset in np.linspace(-90.0, 90.0, 19):
+            az = float(np.mod(az_center + az_offset, 360.0))
+            power = underlying._power_from_orientation(
+                solar_zenith, solar_azimuth, tilt, az)
+            if power > best_power:
+                best_power = power
+                best_tilt, best_az = float(tilt), az
+    return best_tilt, best_az
 
 
 def make_baseline_rollout(env, baseline_type, path_length, seed=None):
@@ -722,6 +756,9 @@ def make_baseline_rollout(env, baseline_type, path_length, seed=None):
         elif baseline_type in ('sun_seeking', 'sun_tracking'):
             target_tilt = solar_zenith
             target_azimuth = solar_azimuth
+        elif baseline_type in ('poa_greedy_oracle', 'greedy_poa_oracle'):
+            target_tilt, target_azimuth = _greedy_poa_orientation(
+                underlying, solar_zenith, solar_azimuth)
         else:
             raise ValueError('Unknown baseline type: %s' % baseline_type)
 
@@ -891,15 +928,19 @@ def aggregate_solar_altitude_windows(paths):
 
 
 def compare_method_table(paths_by_name):
-    """Build comparison rows for policy vs baselines."""
+    """Build comparison rows for policy vs baselines (mean over MC rollouts)."""
     rows = []
     for method, paths in paths_by_name.items():
         analyses = [analyze_rollout_path(p) for p in paths]
+        rewards = [a['total_reward'] for a in analyses]
+        energies = [a['total_energy_kwh'] for a in analyses]
         rows.append({
             'method': method,
             'n_rollouts': len(paths),
-            'total_reward_mean': float(np.mean([a['total_reward'] for a in analyses])),
-            'total_energy_kwh_mean': float(np.mean([a['total_energy_kwh'] for a in analyses])),
+            'total_reward_mean': float(np.mean(rewards)) if rewards else np.nan,
+            'total_reward_std': float(np.std(rewards, ddof=1)) if len(rewards) > 1 else 0.0,
+            'total_energy_kwh_mean': float(np.mean(energies)) if energies else np.nan,
+            'total_energy_kwh_std': float(np.std(energies, ddof=1)) if len(energies) > 1 else 0.0,
             'mean_power_w_mean': float(np.mean([a['mean_power_w'] for a in analyses])),
             'peak_power_w_mean': float(np.mean([a['peak_power_w'] for a in analyses])),
             'peak_power_time_mean': float(np.mean([a['peak_power_time_hour'] for a in analyses])),
@@ -913,6 +954,174 @@ def compare_method_table(paths_by_name):
                 for p in paths])),
         })
     return rows
+
+
+def _rollout_net_energy(path):
+    return float(np.sum(path.get('rewards', [])))
+
+
+def _rollout_seed(path, fallback_index=0):
+    infos = path.get('infos', []) or []
+    if infos:
+        seed = infos[0].get('rollout_seed')
+        if seed not in (None, ''):
+            try:
+                return int(seed)
+            except (TypeError, ValueError):
+                pass
+    return int(fallback_index)
+
+
+def align_paired_rollouts(paths_by_name, reference='learned_policy'):
+    """Align methods by rollout index (matched-seed MC). Returns list of dicts per pair."""
+    ref_paths = paths_by_name.get(reference, [])
+    n = len(ref_paths)
+    pairs = []
+    for i in range(n):
+        row = {'index': i, 'seed': _rollout_seed(ref_paths[i], i)}
+        row[reference] = ref_paths[i]
+        meta = get_rollout_metadata(ref_paths[i])
+        row['scenario_id'] = meta.get('scenario_id')
+        row['date'] = meta.get('date')
+        for method, paths in paths_by_name.items():
+            if method == reference:
+                continue
+            if i < len(paths):
+                row[method] = paths[i]
+        pairs.append(row)
+    return pairs
+
+
+def summarize_paired_mc(paths_by_name, reference='learned_policy'):
+    """MC estimators: per-method mean/std and paired deltas (same scenario per seed)."""
+    pairs = align_paired_rollouts(paths_by_name, reference=reference)
+    if not pairs:
+        return {}
+
+    methods = sorted(paths_by_name.keys())
+    out = {'n_pairs': len(pairs), 'methods': {}, 'paired_deltas': {}}
+
+    for method in methods:
+        vals = [_rollout_net_energy(pairs[i][method])
+                for i in range(len(pairs)) if method in pairs[i]]
+        out['methods'][method] = summarize_values(vals)
+
+    def _paired_delta(method_a, method_b):
+        deltas = []
+        scenario_mismatch = 0
+        for row in pairs:
+            if method_a not in row or method_b not in row:
+                continue
+            ma = get_rollout_metadata(row[method_a])
+            mb = get_rollout_metadata(row[method_b])
+            if (ma.get('scenario_id') and mb.get('scenario_id')
+                    and ma['scenario_id'] != mb['scenario_id']):
+                scenario_mismatch += 1
+            deltas.append(_rollout_net_energy(row[method_a]) - _rollout_net_energy(row[method_b]))
+        stats = summarize_values(deltas)
+        stats['scenario_id_mismatches'] = scenario_mismatch
+        return stats
+
+    if 'sun_tracking' in methods and 'fixed_no_motion' in methods:
+        out['paired_deltas']['sun_minus_fixed'] = _paired_delta(
+            'sun_tracking', 'fixed_no_motion')
+    if 'learned_policy' in methods and 'sun_tracking' in methods:
+        out['paired_deltas']['learned_minus_sun'] = _paired_delta(
+            'learned_policy', 'sun_tracking')
+    if 'learned_policy' in methods and 'fixed_no_motion' in methods:
+        out['paired_deltas']['learned_minus_fixed'] = _paired_delta(
+            'learned_policy', 'fixed_no_motion')
+    return out
+
+
+def verify_rollout_pvlib_power(path, area=1.0, efficiency=0.18, atol=0.5, max_steps=10):
+    """Spot-check env.step power matches pvlib POA × area × efficiency."""
+    from pvlib.irradiance import get_total_irradiance
+    infos = path.get('infos', [])
+    if not infos:
+        return True, 0.0, []
+    errors = []
+    for info in infos[:max_steps]:
+        dni = float(info.get('dni_wm2', info.get('dni', 0.0)))
+        dhi = float(info.get('dhi_wm2', info.get('dhi', 0.0)))
+        ghi = float(info.get('ghi_wm2', info.get('ghi', 0.0)))
+        tilt = float(info.get('tilt', 0.0))
+        az = float(info.get('azimuth', 0.0))
+        zen = float(info.get('solar_zenith_deg', 0.0))
+        saz = float(info.get('solar_azimuth_deg', 0.0))
+        poa = get_total_irradiance(
+            surface_tilt=tilt, surface_azimuth=az,
+            solar_zenith=zen, solar_azimuth=saz,
+            dni=dni, ghi=ghi, dhi=dhi, model='isotropic')
+        expected = max(float(poa['poa_global']), 0.0) * area * efficiency
+        reported = float(info.get('power', 0.0))
+        if float(poa['poa_global']) < 1.0 and abs(reported) < 1.0:
+            continue
+        errors.append(abs(reported - expected))
+    if not errors:
+        return True, 0.0, []
+    max_err = float(max(errors))
+    return max_err <= atol, max_err, errors
+
+
+def write_paired_mc_comparison_report(outdir, paths_by_name, eval_mode='mc', error='std'):
+    """Text report: mean±std where MC applies; paired deltas on matched scenarios."""
+    path = os.path.join(outdir, 'PAIRED_MC_COMPARISON.txt')
+    summary = summarize_paired_mc(paths_by_name)
+    pairs = align_paired_rollouts(paths_by_name)
+
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('Paired Monte Carlo comparison (pvlib env, T=78)\n')
+        f.write('=' * 48 + '\n\n')
+        if eval_mode == 'nsrdb':
+            f.write('Distribution: e = (year, month, day) ~ Uniform(manifest)\n')
+            f.write('Each rollout index i uses the same seed → same scenario_id for all methods.\n')
+        else:
+            f.write('Distribution: calendar day ~ training support (TMY or annual MC)\n')
+            f.write('Each rollout index i uses seed_i = eval_seed_base + i (matched across methods).\n')
+        f.write('\nEstimators (finite N rollouts, ddof=1):\n')
+        f.write('  E[X]   = (1/N) sum_i X_i\n')
+        f.write('  σ_X    = sqrt(1/(N-1) sum_i (X_i - E[X])^2)\n')
+        f.write('  Δ_i    = X_i^A - X_i^B  on the SAME scenario (paired)\n')
+        f.write('  E[Δ], σ_Δ describe A vs B controlling weather/orientation reset.\n')
+        f.write('  Error bars in plots use %s (σ for std, SEM = σ/sqrt(N) for mean of mean).\n\n' % error)
+
+        f.write('Per-method net energy (kWh = sum_t reward_t):\n')
+        for method, stats in summary.get('methods', {}).items():
+            f.write('  %-18s  E=%.4f  σ=%.4f  n=%d  [min=%.4f max=%.4f]\n' % (
+                method, stats['mean'], stats['std'], stats['count'],
+                stats['min'], stats['max']))
+
+        f.write('\nPaired deltas (same scenario per row):\n')
+        for label, stats in summary.get('paired_deltas', {}).items():
+            f.write('  %-22s  E[Δ]=%+.4f kWh  σ_Δ=%.4f  n=%d' % (
+                label, stats['mean'], stats['std'], stats['count']))
+            if stats.get('scenario_id_mismatches', 0):
+                f.write('  WARN mismatches=%d' % stats['scenario_id_mismatches'])
+            f.write('\n')
+
+        f.write('\nScenario alignment (first %d rollouts):\n' % min(8, len(pairs)))
+        for row in pairs[:8]:
+            parts = ['idx=%d seed=%s' % (row['index'], row.get('seed'))]
+            if row.get('scenario_id'):
+                parts.append('scenario=%s' % row['scenario_id'])
+            for method in sorted(paths_by_name.keys()):
+                if method in row:
+                    meta = get_rollout_metadata(row[method])
+                    parts.append('%s=%.4f' % (method, meta['total_energy_kwh']))
+            f.write('  %s\n' % ' | '.join(parts))
+
+        f.write('\npvlib consistency (spot-check first 10 steps per method):\n')
+        for method, paths in sorted(paths_by_name.items()):
+            if not paths:
+                continue
+            ok, max_err, _ = verify_rollout_pvlib_power(paths[0])
+            f.write('  %-18s  %s  max_abs_err=%.4g W\n' % (
+                method, 'PASS' if ok else 'CHECK', max_err))
+
+        f.write('\nNote: deterministic physics checks (OAT sensitivity, single-day tilt sweep)\n')
+        f.write('belong in verify_pv_state_space.py — not repeated here.\n')
+    return path
 
 
 def get_rollout_metadata(path):
@@ -933,6 +1142,8 @@ def get_rollout_metadata(path):
         'season_calendar': season_calendar,
         'weather_condition': info0.get('weather_condition', 'unknown'),
         'weather_source': info0.get('weather_source', 'unknown'),
+        'scenario_id': info0.get('scenario_id'),
+        'scenario_year': info0.get('scenario_year'),
         'episode_length': len(path.get('rewards', [])),
         'total_reward': float(np.sum(path.get('rewards', []))),
         'total_energy_kwh': compute_total_energy_kwh(path),
@@ -1076,9 +1287,20 @@ def write_eval_scenario_confirmation(outdir, eval_env_params, paths_by_name, max
             for idx, p in enumerate(paths, 1):
                 meta = get_rollout_metadata(p)
                 seed = _path_seed(p, idx - 1)
-                f.write('    rollout_%d seed=%d date=%s weather=%s steps=%d energy=%.4f kWh\n' % (
-                    idx, seed, meta.get('date'), meta.get('weather_condition'),
+                sid = meta.get('scenario_id') or ''
+                sid_part = (' scenario=%s' % sid) if sid else ''
+                f.write('    rollout_%d seed=%d date=%s%s weather=%s steps=%d energy=%.4f kWh\n' % (
+                    idx, seed, meta.get('date'), sid_part, meta.get('weather_condition'),
                     meta.get('episode_length'), meta.get('total_energy_kwh')))
+        if len(paths_by_name) >= 2:
+            paired = summarize_paired_mc(paths_by_name)
+            f.write('\nPaired MC summary (net energy kWh, same seed per index):\n')
+            for method, stats in paired.get('methods', {}).items():
+                f.write('  %-18s  mean=%.4f  std=%.4f  n=%d\n' % (
+                    method, stats['mean'], stats['std'], stats['count']))
+            for label, stats in paired.get('paired_deltas', {}).items():
+                f.write('  %-22s  mean_delta=%+.4f  std=%.4f\n' % (
+                    label, stats['mean'], stats['std']))
         f.write('\nTime standard: tz=%s, grid %s–%s UTC, %d steps per episode.\n' % (
             kwargs.get('tz', PV_TIMEZONE),
             kwargs.get('start_time', PV_EPISODE_START_TIME),

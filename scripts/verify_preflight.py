@@ -40,6 +40,17 @@ def main():
     mod = importlib.import_module(args.config)
     print('[verify_preflight] CONFIG_VERSION=%s' % getattr(mod, 'CONFIG_VERSION', '?'))
 
+    env_kw = getattr(mod, 'params', {}).get('environment_kwargs', {})
+    if env_kw.get('weather_source') == 'nsrdb_multiyear':
+        for script in ('verify_nsrdb_multiyear.py', 'verify_nsrdb_timing_sync.py'):
+            cmd = [sys.executable, 'scripts/' + script,
+                   '--config', args.config]
+            if script == 'verify_nsrdb_multiyear.py':
+                cmd.extend(['--config-path', args.config_path])
+            print('[verify_preflight]', ' '.join(cmd))
+            if subprocess.run(cmd, cwd=_REPO_ROOT).returncode != 0:
+                errors.append('failed: %s' % script)
+
     if errors:
         raise SystemExit('Preflight FAILED:\n  ' + '\n  '.join(errors))
     print('Preflight OK (%s)' % args.config)

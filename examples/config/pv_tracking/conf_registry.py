@@ -24,10 +24,15 @@ CONFIGS = {
         'conf_smoke.py',
         'Short smoke run (model rollouts + remaining_steps audit)',
     ),
-    'conf4': (                                   # <-- added
+    'conf4': (
         'examples.config.pv_tracking.conf4',
         'conf4.py',
         'Full-year random environment + alternative hyperparams (parallel to conf3)',
+    ),
+    'stage3_nsrdb': (
+        'examples.config.pv_tracking.stage3_multiyear_nsrdb_scenario',
+        'stage3_multiyear_nsrdb_scenario.py',
+        'Full-year NSRDB multi-year scenarios e=(year,day) ~ p(e) (not TMY)',
     ),
 }
 

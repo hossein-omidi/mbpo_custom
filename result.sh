@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Results for a named run: ./result.sh <run_name> [--plot-only | --eval-only | --full | --status]
+#
+# TMY baseline (conf1/conf2): evaluate_agent.py — annual day MC
+# NSRDB (stage3_nsrdb):       evaluate_fullyear_mc.py --date-set nsrdb_multiyear — scenario MC
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -8,6 +11,7 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 usage() {
   echo "Usage: $0 <run_name> [--status | --plot-only | --eval-only | --full]"
+  echo "  NSRDB runs (stage3_nsrdb): eval uses --date-set nsrdb_multiyear automatically"
   exit 1
 }
 
@@ -48,9 +52,12 @@ trial, warn = resolve_trial_for_run('$RUN_NAME', meta.get('conf'))
 if not trial:
     raise SystemExit('No trial for run $RUN_NAME. Run: ./train.sh $RUN_NAME conf1')
 ckpt = resolve_checkpoint(trial)
+conf = meta.get('conf', '')
 print('TRIAL=%s' % trial)
 print('CKPT=%s' % ckpt)
-print('CONF=%s' % meta.get('conf', ''))
+print('CONF=%s' % conf)
+is_nsrdb = 1 if conf == 'stage3_nsrdb' else 0
+print('IS_NSRDB=%s' % is_nsrdb)
 if warn:
     import sys as _s
     print('WARN=%s' % warn, file=_s.stderr)
@@ -78,7 +85,7 @@ for t in list_trial_dirs(root, 5):
 fi
 
 read_vars
-export TRIAL CKPT
+export TRIAL CKPT CONF IS_NSRDB
 mkdir -p "$TRAIN_PLOTS" "$EVAL_OUT"
 
 do_plot() {
@@ -89,10 +96,8 @@ do_plot() {
   cp -f "$TRIAL/progress.csv" "$RESULTS/progress.csv" 2>/dev/null || true
 }
 
-do_eval() {
-  echo "=== Eval → $EVAL_OUT (checkpoint: $CKPT) ==="
-  rm -rf "$EVAL_OUT"
-  mkdir -p "$EVAL_OUT"
+do_eval_tmy() {
+  echo "=== TMY eval → $EVAL_OUT (checkpoint: $CKPT) ==="
   python scripts/evaluate_agent.py "$CKPT" \
     --outdir "$EVAL_OUT" \
     --eval-protocol inherit \
@@ -101,12 +106,44 @@ do_eval() {
     --num-rollouts "$NUM_ROLLOUTS" \
     --max-rollout-plots 4 \
     --eval-seed-base 100000
+}
+
+do_eval_nsrdb() {
+  echo "=== NSRDB scenario MC eval → $EVAL_OUT (checkpoint: $CKPT) ==="
+  echo "    Protocol: e~p(e) per episode; fixed NSRDB trajectory within episode; 7min30s control"
+  rm -rf "$EVAL_OUT"
+  mkdir -p "$EVAL_OUT"
+  python scripts/evaluate_fullyear_mc.py "$CKPT" \
+    --outdir "$EVAL_OUT" \
+    --date-set nsrdb_multiyear \
+    --num-rollouts "$NUM_ROLLOUTS" \
+    --eval-seed-base 100000 \
+    --max-path-length 78 \
+    --eval-protocol inherit \
+    --policy-mode deterministic
+}
+
+do_eval() {
+  rm -rf "$EVAL_OUT"
+  mkdir -p "$EVAL_OUT"
+  if [[ "${IS_NSRDB:-0}" -eq 1 ]]; then
+    do_eval_nsrdb
+  else
+    do_eval_tmy
+  fi
   python scripts/diagnose_tracking.py \
     --eval-dir "$EVAL_OUT" \
     --outdir "$EVAL_OUT/diagnostics" \
     --trial-dir "$TRIAL" \
     --progress-csv "$TRIAL/progress.csv" \
     --max-paired-plot-days 6
+  if [[ "${IS_NSRDB:-0}" -eq 1 ]]; then
+    echo "=== NSRDB state-space / baseline MC check ==="
+    python scripts/verify_pv_state_space.py \
+      --mode nsrdb \
+      --nsrdb-mc-rollouts 8 \
+      --outdir "$EVAL_OUT/state_space_check"
+  fi
 }
 
 case "$MODE" in
@@ -118,5 +155,9 @@ esac
 echo ""
 echo "Results folder: $RESULTS"
 echo "  training/     learning curves (E[R] ± σ from progress.csv)"
-echo "  evaluation/   MC eval vs sun + fixed, summaries, paper_figures/"
+if [[ "${IS_NSRDB:-0}" -eq 1 ]]; then
+  echo "  evaluation/   NSRDB scenario MC: PAIRED_MC_COMPARISON.txt, paper_figures/, mc_records.json"
+else
+  echo "  evaluation/   TMY annual MC: PAIRED_MC_COMPARISON.txt, paper_figures/, evaluation_summary.txt"
+fi
 ls -la "$RESULTS" 2>/dev/null || true

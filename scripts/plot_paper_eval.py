@@ -321,6 +321,60 @@ def plot_cumulative_return_intraday(outdir, paths_by_name, field='cumulative_net
     return path
 
 
+def plot_baseline_sun_vs_fixed(outdir, paths_by_name, error='std'):
+    """Sun tracker vs fixed: net energy mean ± uncertainty (paired MC, pvlib path)."""
+    methods = [m for m in ('sun_tracking', 'fixed_no_motion') if m in paths_by_name]
+    if len(methods) < 2:
+        return None
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+
+    x = np.arange(len(methods))
+    means, errs, ns = [], [], []
+    for method in methods:
+        vals = [episode_metrics(p)['net_energy_kwh'] for p in paths_by_name[method]]
+        means.append(float(np.mean(vals)))
+        err, n = _error_bar(vals, error)
+        errs.append(err)
+        ns.append(n)
+    axes[0].bar(x, means, yerr=errs, capsize=5,
+                color=[METHOD_COLORS[m] for m in methods], alpha=0.9, edgecolor='white')
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels([METHOD_LABELS[m] for m in methods])
+    axes[0].set_ylabel('Net energy (kWh)')
+    axes[0].set_title('Baselines: mean ± %s (n=%d matched rollouts)' % (
+        error, max(ns) if ns else 0))
+    axes[0].grid(axis='y', linestyle='--', alpha=0.35)
+
+    n = min(len(paths_by_name['sun_tracking']), len(paths_by_name['fixed_no_motion']))
+    deltas = []
+    for i in range(n):
+        es = episode_metrics(paths_by_name['sun_tracking'][i])['net_energy_kwh']
+        ef = episode_metrics(paths_by_name['fixed_no_motion'][i])['net_energy_kwh']
+        deltas.append(es - ef)
+    deltas = np.asarray(deltas, dtype=np.float64)
+    axes[1].hist(deltas, bins=min(15, max(5, len(deltas) // 2)),
+                 color=METHOD_COLORS['sun_tracking'], alpha=0.75, edgecolor='white')
+    axes[1].axvline(float(np.mean(deltas)), color='black', linestyle='--',
+                    label='E[sun−fixed]=%.4f' % float(np.mean(deltas)))
+    if len(deltas) > 1:
+        axes[1].axvline(float(np.mean(deltas) + np.std(deltas, ddof=1)),
+                        color='#666666', linestyle=':', alpha=0.8)
+        axes[1].axvline(float(np.mean(deltas) - np.std(deltas, ddof=1)),
+                        color='#666666', linestyle=':', alpha=0.8)
+    axes[1].axvline(0.0, color='#999999', linewidth=0.8)
+    axes[1].set_xlabel('Paired Δ net energy (kWh)')
+    axes[1].set_title('Sun tracker − fixed (same scenario per seed)')
+    axes[1].legend(fontsize=8)
+    axes[1].grid(axis='y', linestyle='--', alpha=0.35)
+
+    fig.suptitle('Baseline comparison — pvlib env.step, empirical weather MC', fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    path = os.path.join(outdir, 'baseline_sun_vs_fixed_mc.png')
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def plot_daily_gain_distributions(outdir, paths_by_name):
     """Distributions of paired daily gains: MBPO-SAC − baseline."""
     learned = paths_by_name.get('learned_policy', [])
@@ -632,6 +686,12 @@ def generate_paper_figures(
 
     write_protocol_readme(paper_dir, eval_env_params, protocol_note, is_stress=is_stress)
     write_paper_metrics_json(paper_dir, paths_by_name, eval_env_params, protocol_note)
+    try:
+        from eval_utils import write_paired_mc_comparison_report
+        eval_mode = 'nsrdb' if 'nsrdb' in str(protocol_note).lower() else 'mc'
+        write_paired_mc_comparison_report(paper_dir, paths_by_name, eval_mode=eval_mode, error=error)
+    except Exception as exc:
+        print('[plot_paper_eval] paired MC report failed: %s' % exc)
 
     outputs = []
 
@@ -653,6 +713,7 @@ def generate_paper_figures(
         except Exception as exc:
             print('[plot_paper_eval] seasonal_comparison failed: %s' % exc)
         _safe('daily_gain_distributions', plot_daily_gain_distributions, paper_dir, paths_by_name)
+        _safe('baseline_sun_vs_fixed', plot_baseline_sun_vs_fixed, paper_dir, paths_by_name, error=error)
         _safe('movement_efficiency', plot_movement_efficiency, paper_dir, paths_by_name)
         outputs.extend(plot_representative_daily_trajectories(
             paper_dir, paths_by_name, top_k=top_representative_days) or [])

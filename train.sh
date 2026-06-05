@@ -10,7 +10,9 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 usage() {
   echo "Usage: $0 <run_name> <conf> [--cpus N] [--trial-cpus M] [--verify]"
-  echo "  conf: conf1 | conf2 | conf3 | conf_smoke  (see: python -c \"from examples.config.pv_tracking.conf_registry import list_configs; list_configs()\")"
+  echo "  conf: conf1 | conf2 | conf3 | conf_smoke | stage3_nsrdb"
+  echo "        conf1/conf2 = PVGIS-TMY annual   stage3_nsrdb = NSRDB multi-year (5-min→7min30s)"
+  echo "  list: python -c \"from examples.config.pv_tracking.conf_registry import list_configs; list_configs()\""
   exit 1
 }
 
@@ -105,4 +107,4 @@ print(t)
 echo "Trial saved: $TRIAL"
 echo "Pointer:     $RUN_DIR/trial_dir.txt"
 echo "Next:        ./result.sh $RUN_NAME --plot-only   # while or after training"
-echo "             ./result.sh $RUN_NAME --full        # plot + eval"
+echo "             ./result.sh $RUN_NAME --full        # plot + eval (NSRDB: scenario MC auto)"

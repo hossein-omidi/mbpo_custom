@@ -883,6 +883,13 @@ def main(args):
         args.outdir, paths, paths_by_name=paths_by_name if args.compare_baselines else None)
     scenario_report = write_eval_scenario_confirmation(
         args.outdir, eval_env_params, paths_by_name, path_length)
+    if args.compare_baselines and len(paths_by_name) > 1:
+        from eval_utils import write_paired_mc_comparison_report
+        ws = eval_env_params.get('kwargs', {}).get('weather_source', '')
+        write_paired_mc_comparison_report(
+            args.outdir, paths_by_name,
+            eval_mode='nsrdb' if ws == 'nsrdb_multiyear' else 'mc',
+            error='std')
     stats_readme = write_eval_statistics_readme(
         args.outdir, len(paths), int(args.eval_seed_base))
 

@@ -14,12 +14,24 @@ from .historical_weather import (
     load_historical_weather_catalog,
     using_default_site,
 )
+from .nsrdb_weather import (
+    NsrdbYearCache,
+    build_weather_profile_from_scenario,
+    default_manifest_path,
+    episode_weather_diagnostics,
+    filter_scenarios_by_date_range,
+    index_scenarios,
+    load_scenario_manifest,
+    scenario_episode_date,
+    scenario_id,
+)
 
 logger = logging.getLogger(__name__)
 
 # Observation layouts (must stay in sync with mbpo/static/pv_tracking.py).
 OBSERVATION_MODES = ('legacy', 'physical')
-WEATHER_SOURCES = ('clearsky', 'historical')
+WEATHER_SOURCES = ('clearsky', 'historical', 'nsrdb_multiyear')
+WEATHER_SCENARIO_MODES = ('pvgis_tmy', 'nsrdb_multiyear', 'clearsky')
 
 LEGACY_OBS_LABELS = (
     'solar_zenith_norm',
@@ -103,7 +115,11 @@ class PVTrackingEnv(gym.Env):
         randomize_day=True,
         randomize_initial_orientation=True,
         weather_source='clearsky',
+        weather_scenario_mode=None,
         weather_file=None,
+        scenario_manifest=None,
+        randomize_scenario=False,
+        fixed_eval_scenarios=None,
         temperature=25.0,
         wind_speed=2.0,
         movement_penalty=0.01,
@@ -127,8 +143,30 @@ class PVTrackingEnv(gym.Env):
         self.max_delta_azimuth = max_delta_azimuth
         self.randomize_day = randomize_day
         self.randomize_initial_orientation = randomize_initial_orientation
+        if weather_scenario_mode is not None:
+            mode = str(weather_scenario_mode).lower()
+            if mode not in WEATHER_SCENARIO_MODES:
+                raise ValueError(
+                    'weather_scenario_mode must be one of {}, got {!r}.'.format(
+                        WEATHER_SCENARIO_MODES, weather_scenario_mode))
+            if mode == 'nsrdb_multiyear':
+                weather_source = 'nsrdb_multiyear'
+            elif mode == 'pvgis_tmy':
+                weather_source = 'historical'
+            elif mode == 'clearsky':
+                weather_source = 'clearsky'
+            self.weather_scenario_mode = mode
+        else:
+            if weather_source == 'nsrdb_multiyear':
+                self.weather_scenario_mode = 'nsrdb_multiyear'
+            elif weather_source == 'historical':
+                self.weather_scenario_mode = 'pvgis_tmy'
+            else:
+                self.weather_scenario_mode = 'clearsky'
         self.weather_source = weather_source
         self.weather_file = weather_file
+        self.scenario_manifest_path = scenario_manifest
+        self.randomize_scenario = bool(randomize_scenario)
         self.temperature = temperature
         self.temperature_variation = 5.0
         self.wind_speed = wind_speed
@@ -157,6 +195,17 @@ class PVTrackingEnv(gym.Env):
         self.excluded_dates = None
         self._fixed_eval_date_index = 0
         self._rollout_seed = None
+        self._current_scenario = None
+        self._nsrdb_year_cache = None
+        self._nsrdb_scenarios = []
+        self._nsrdb_by_id = {}
+        self._nsrdb_by_mday = {}
+        self.fixed_eval_scenarios = None
+        self._fixed_eval_scenario_index = 0
+        if fixed_eval_scenarios is not None:
+            if isinstance(fixed_eval_scenarios, str):
+                fixed_eval_scenarios = [fixed_eval_scenarios]
+            self.fixed_eval_scenarios = list(fixed_eval_scenarios)
         if fixed_eval_dates is not None:
             if isinstance(fixed_eval_dates, (str, pd.Timestamp)):
                 fixed_eval_dates = [fixed_eval_dates]
@@ -193,6 +242,47 @@ class PVTrackingEnv(gym.Env):
                 date for date in self.start_dates
                 if (int(date.month), int(date.day)) in available
             ])
+        elif self.weather_source == 'nsrdb_multiyear':
+            manifest_path = self.scenario_manifest_path or default_manifest_path()
+            manifest = load_scenario_manifest(manifest_path)
+            scenarios, by_id, by_mday = index_scenarios(manifest)
+            scenarios = filter_scenarios_by_date_range(
+                scenarios, self.start_date, self.end_date, tz=tz)
+            if self.excluded_dates:
+                scenarios = [
+                    s for s in scenarios
+                    if pd.Timestamp(
+                        int(s['year']), int(s['month']), int(s['day']), tz=tz
+                    ).normalize() not in self.excluded_dates
+                ]
+            if not scenarios:
+                raise ValueError(
+                    'No NSRDB scenarios in date range {}; check manifest {}'.format(
+                        (self.start_date.date(), self.end_date.date()), manifest_path))
+            self._nsrdb_manifest = manifest
+            self._nsrdb_year_cache = NsrdbYearCache(manifest)
+            self._nsrdb_scenarios = scenarios
+            self._nsrdb_by_id = by_id
+            self._nsrdb_by_mday = {
+                k: [s for s in v if s in scenarios]
+                for k, v in by_mday.items()
+            }
+            if self.fixed_eval_scenarios:
+                for sid in self.fixed_eval_scenarios:
+                    if sid not in by_id:
+                        raise ValueError(
+                            'fixed_eval_scenarios id {!r} not in manifest'.format(sid))
+            # Calendar days that have at least one scenario (for randomize_day path).
+            day_keys = sorted({(int(s['month']), int(s['day'])) for s in scenarios})
+            self.start_dates = pd.DatetimeIndex([
+                pd.Timestamp(
+                    year=self.start_date.year, month=m, day=d, tz=tz)
+                for m, d in day_keys
+            ])
+            if self.randomize_scenario and self.randomize_day:
+                logger.warning(
+                    'nsrdb_multiyear: randomize_scenario=True takes precedence over '
+                    'randomize_day (uniform over all scenarios).')
         if self.excluded_dates:
             self.start_dates = pd.DatetimeIndex([
                 date for date in self.start_dates
@@ -272,11 +362,45 @@ class PVTrackingEnv(gym.Env):
                 'wind_speed': np.full(len(times), self.wind_speed, dtype=np.float64),
                 'condition': ['clear'] * len(times),
             }, index=times)
+        elif self.weather_source == 'nsrdb_multiyear':
+            if self._current_scenario is None:
+                raise RuntimeError('NSRDB scenario not set before _build_weather_profile')
+            year = int(self._current_scenario['year'])
+            year_weather = self._nsrdb_year_cache.get_year(year)
+            weather = build_weather_profile_from_scenario(
+                self.location, times, year_weather, self._current_scenario)
         else:
             weather = build_weather_profile_from_catalog(
                 self.location, times, self._historical_weather_catalog)
 
         return weather
+
+    def _select_nsrdb_scenario(self):
+        """Sample one scenario e ~ p(e) once per episode reset.
+
+        Weather within the episode is the fixed NSRDB trajectory for that scenario
+        (see _build_weather_profile); it is not re-sampled at each control step.
+        """
+        if self.fixed_eval_scenarios is not None:
+            if self._rollout_seed is not None:
+                index = int(self._rollout_seed) % len(self.fixed_eval_scenarios)
+            else:
+                index = self._fixed_eval_scenario_index % len(self.fixed_eval_scenarios)
+                self._fixed_eval_scenario_index += 1
+            sid = self.fixed_eval_scenarios[index]
+            return self._nsrdb_by_id[sid]
+        if self.randomize_scenario or not self.randomize_day:
+            index = self.np_random.randint(len(self._nsrdb_scenarios))
+            return self._nsrdb_scenarios[index]
+        # randomize_day: pick calendar day then uniform over years with that month/day.
+        index = self.np_random.randint(len(self.start_dates))
+        m = int(self.start_dates[index].month)
+        d = int(self.start_dates[index].day)
+        pool = self._nsrdb_by_mday.get((m, d), [])
+        if not pool:
+            index = self.np_random.randint(len(self._nsrdb_scenarios))
+            return self._nsrdb_scenarios[index]
+        return pool[self.np_random.randint(len(pool))]
 
     def _apply_episode_weather_stochasticity(self):
         """Optional bounded irradiance augmentation (not intra-day cloud dynamics).
@@ -441,7 +565,23 @@ class PVTrackingEnv(gym.Env):
 
     def reset(self, date=None):
         self.step_index = 0
-        if date is not None:
+        if self.weather_source == 'nsrdb_multiyear':
+            if date is not None:
+                ts = pd.Timestamp(date, tz=self.location.tz)
+                pool = self._nsrdb_by_mday.get(
+                    (int(ts.month), int(ts.day)), self._nsrdb_scenarios)
+                manifest_years = {int(s['year']) for s in self._nsrdb_scenarios}
+                if int(ts.year) in manifest_years:
+                    by_year = [s for s in pool if int(s['year']) == int(ts.year)]
+                    pool = by_year or pool
+                self._current_scenario = (
+                    pool[0] if len(pool) == 1
+                    else pool[self.np_random.randint(len(pool))])
+            else:
+                self._current_scenario = self._select_nsrdb_scenario()
+            self.current_date = scenario_episode_date(
+                self._current_scenario, tz=self.location.tz)
+        elif date is not None:
             self.current_date = pd.Timestamp(date, tz=self.location.tz)
         elif self.fixed_eval_dates is not None:
             if len(self.fixed_eval_dates) == 0:
@@ -461,6 +601,8 @@ class PVTrackingEnv(gym.Env):
         self.times = self._build_times(self.current_date)
         self.weather_profile = self._build_weather_profile(self.times)
         self._apply_episode_weather_stochasticity()
+        self._episode_weather_diagnostics = episode_weather_diagnostics(
+            self.weather_profile)
 
         if self.randomize_initial_orientation:
             self.tilt = float(self.np_random.uniform(*self.tilt_limits))
@@ -551,7 +693,18 @@ class PVTrackingEnv(gym.Env):
             'day_of_year': day_of_year,
             'season': season,
             'weather_source': self.weather_source,
+            'weather_scenario_mode': self.weather_scenario_mode,
+            'scenario_id': (
+                scenario_id(self._current_scenario)
+                if self._current_scenario is not None else None),
+            'scenario_year': (
+                int(self._current_scenario['year'])
+                if self._current_scenario is not None else None),
             'weather_condition': self.weather_profile['condition'].iloc[self.step_index],
+            'episode_diffuse_fraction': float(
+                self._episode_weather_diagnostics.get('diffuse_fraction', 0.0)),
+            'episode_dni_fraction': float(
+                self._episode_weather_diagnostics.get('dni_fraction', 0.0)),
             'solar_zenith_deg': float(solar_position.zenith),
             'solar_azimuth_deg': float(solar_position.azimuth),
             'solar_altitude_deg': solar_alt,
@@ -570,6 +723,15 @@ class PVTrackingEnv(gym.Env):
             'delta_azimuth_deg': float(delta_azimuth),
             'interval_hours': float(self.interval_hours),
             'freq': str(self.freq),
+            'control_interval_minutes': float(self.interval_hours * 60.0),
+            'weather_native_interval_minutes': (
+                float(self._nsrdb_manifest.get('meta', {}).get('interval_minutes', 5))
+                if self.weather_source == 'nsrdb_multiyear'
+                and getattr(self, '_nsrdb_manifest', None) is not None
+                else None),
+            'weather_resampling': (
+                'time_interpolate_to_episode_grid'
+                if self.weather_source == 'nsrdb_multiyear' else None),
             'num_action_steps': int(self.num_action_steps),
             'rollout_seed': (
                 int(self._rollout_seed)

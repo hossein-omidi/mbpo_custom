@@ -76,6 +76,7 @@ from evaluate_agent_advanced import (
 )
 
 METHODS = ('learned_policy', 'sun_tracking', 'fixed_no_motion')
+NSRDB_METHODS = METHODS + ('poa_greedy_oracle',)
 BASELINE_METHODS = ('sun_tracking', 'fixed_no_motion')
 
 
@@ -90,7 +91,7 @@ def resolve_date_set(name, custom_dates):
         return list(STAGE3_FINAL_TEST_DATES)
     if name in ('holdout',):
         return list(STAGE3_STRESS_TEST_DATES)
-    if name == 'annual':
+    if name in ('annual', 'nsrdb_multiyear'):
         return None
     raise ValueError('Unknown date-set %r' % name)
 
@@ -102,7 +103,8 @@ def run_method_rollout(variant, args, path_length, policy, method, seed,
     try:
         if method == 'learned_policy':
             return run_learned(env, policy, path_length, seed, policy_stochastic)
-        return run_baseline(env, method, path_length, seed)
+        baseline = 'poa_greedy_oracle' if method == 'poa_greedy_oracle' else method
+        return run_baseline(env, baseline, path_length, seed)
     finally:
         env.close()
 
@@ -239,14 +241,21 @@ def plot_season_ratio_bars(outdir, records, baseline='sun_tracking', error='sem'
     return path
 
 
-def write_mc_report(outdir, args, dates, records):
+def write_mc_report(outdir, args, dates, records, paths_by_name=None):
     path = os.path.join(outdir, 'mc_evaluation_report.txt')
     is_annual = args.date_set == 'annual' or dates == ['annual']
+    is_nsrdb = args.date_set == 'nsrdb_multiyear' or dates == ['nsrdb_multiyear']
     with open(path, 'w', encoding='utf-8') as f:
         f.write('Stage 3 Monte Carlo evaluation report\n')
         f.write('=' * 40 + '\n\n')
-        if is_annual:
-            f.write('MODE: MAIN PAPER — annual-scenario MC (random days, matched seeds)\n')
+        if is_nsrdb:
+            f.write('MODE: NSRDB multi-year empirical weather MC (e~p(e), matched seeds)\n')
+            f.write('weather_scenario_mode: nsrdb_multiyear (not PVGIS-TMY)\n')
+            f.write('date_set: nsrdb_multiyear\n')
+            f.write('num_rollouts: %d\n' % args.num_rollouts)
+            f.write('eval_seed_base: %d\n' % args.eval_seed_base)
+        elif is_annual:
+            f.write('MODE: TMY annual-scenario MC (random calendar days, matched seeds)\n')
             f.write('date_set: annual\n')
             f.write('num_rollouts: %d\n' % args.num_rollouts)
             f.write('eval_seed_base: %d\n' % args.eval_seed_base)
@@ -258,7 +267,7 @@ def write_mc_report(outdir, args, dates, records):
         f.write('policy_mode: %s\n' % args.policy_mode)
         f.write('vary_init_orientation: %s\n' % args.vary_init_orientation)
         f.write('eval_protocol: inherit\n\n')
-        if not is_annual:
+        if not is_annual and not is_nsrdb:
             by_season = dates_by_season(dates)
             f.write('Dates by season:\n')
             for s, ds in by_season.items():
@@ -270,9 +279,27 @@ def write_mc_report(outdir, args, dates, records):
                 f.write('  %s: %.4f ± %.4f (n=%d)\n' % (
                     method, np.mean(vals), np.std(vals, ddof=1) if len(vals) > 1 else 0.0,
                     len(vals)))
+        if paths_by_name:
+            from eval_utils import summarize_paired_mc
+            paired = summarize_paired_mc(paths_by_name)
+            f.write('\nPaired deltas (same scenario_id per seed):\n')
+            for label, stats in paired.get('paired_deltas', {}).items():
+                f.write('  %s: E[Δ]=%+.4f ± %.4f kWh (n=%d)\n' % (
+                    label, stats['mean'], stats['std'], stats['count']))
         f.write('\nSeason bars use season_calendar (month buckets), not env equinox labels.\n')
         f.write('Paired methods share seed; E[energy] and std use sample statistics (ddof=1).\n')
         f.write('\nAll rollouts: real PVTrackingEnv, pvlib power path, T=78.\n')
+        if is_nsrdb:
+            learned = [r for r in records if r['method'] == 'learned_policy']
+            if learned and learned[0].get('diffuse_fraction') is not None:
+                diffs = [r['diffuse_fraction'] for r in learned if r.get('diffuse_fraction') is not None]
+                gains = [r['mbpo_minus_sun_kwh'] for r in learned if r.get('mbpo_minus_sun_kwh') is not None]
+                f.write('\nNSRDB cloudy/diffuse diagnostics (learned policy episodes):\n')
+                f.write('  diffuse_fraction=sum(DHI)/sum(GHI): mean=%.3f std=%.3f\n' % (
+                    np.mean(diffs), np.std(diffs, ddof=1) if len(diffs) > 1 else 0.0))
+                if gains:
+                    f.write('  MBPO-SAC minus sun_tracker (kWh): mean=%.4f std=%.4f\n' % (
+                        np.mean(gains), np.std(gains, ddof=1) if len(gains) > 1 else 0.0))
     return path
 
 
@@ -281,9 +308,10 @@ def parse_args():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('checkpoint')
     p.add_argument('--outdir', default='evaluation/pv_stage3_fullyear_mc')
-    p.add_argument('--date-set', choices=('annual', 'final_test', 'stress_test', 'holdout', 'custom'),
+    p.add_argument('--date-set', choices=(
+        'annual', 'nsrdb_multiyear', 'final_test', 'stress_test', 'holdout', 'custom'),
                    default='annual',
-                   help='annual=RL seed rollouts over full year; stress_test=fixed calendar panel')
+                   help='annual=TMY random days; nsrdb_multiyear=NSRDB scenario MC; stress_test=fixed dates')
     p.add_argument('--fixed-eval-dates', default=None,
                    help='Override dates (comma-separated). Implies --date-set custom.')
     p.add_argument('--num-rollouts', type=int, default=16,
@@ -306,6 +334,8 @@ def parse_args():
     p.add_argument('--no-pdf', action='store_true')
     p.add_argument('--run-standard-eval', action='store_true',
                    help='Also write standard evaluate_agent summaries/plots')
+    p.add_argument('--include-poa-oracle', action='store_true',
+                   help='Also run greedy POA oracle baseline (NSRDB eval only)')
     return p.parse_args()
 
 
@@ -352,11 +382,18 @@ def main():
     records = []
     aligned_by_method = {m: [] for m in METHODS}
 
-    if args.date_set == 'annual':
+    if args.date_set in ('annual', 'nsrdb_multiyear'):
+        mode_label = 'nsrdb' if args.date_set == 'nsrdb_multiyear' else 'annual'
+        methods = list(
+            NSRDB_METHODS if args.date_set == 'nsrdb_multiyear' and args.include_poa_oracle
+            else METHODS)
+        for m in methods:
+            aligned_by_method.setdefault(m, [])
         for idx in range(args.num_rollouts):
             seed = int(args.eval_seed_base) + idx
-            print('[mc] annual rollout %d/%d seed=%d' % (idx + 1, args.num_rollouts, seed))
-            for method in METHODS:
+            print('[mc] %s rollout %d/%d seed=%d' % (
+                mode_label, idx + 1, args.num_rollouts, seed))
+            for method in methods:
                 path = run_method_rollout(
                     variant, args, path_length, policy, method, seed,
                     weather_source, policy_stochastic=(
@@ -364,9 +401,14 @@ def main():
                 meta = get_rollout_metadata(path)
                 em = episode_metrics(path)
                 sk = _season_key(meta)
+                info0 = path['infos'][0] if path.get('infos') else {}
+                diffuse = info0.get('episode_diffuse_fraction')
+                dni_frac = info0.get('episode_dni_fraction')
                 records.append({
                     'date': meta.get('date'), 'season': meta.get('season'),
                     'season_calendar': sk,
+                    'scenario_id': meta.get('scenario_id'),
+                    'scenario_year': meta.get('scenario_year'),
                     'method': method, 'replicate': idx + 1, 'seed': seed,
                     'energy_kwh': meta['total_energy_kwh'],
                     'gross_energy_kwh': em['gross_energy_kwh'],
@@ -374,8 +416,16 @@ def main():
                     'net_energy_kwh': em['net_energy_kwh'],
                     'reward': meta['total_reward'],
                     'weather': meta.get('weather_condition'),
+                    'diffuse_fraction': diffuse,
+                    'dni_fraction': dni_frac,
                 })
                 aligned_by_method[method].append(path)
+        sun_by_seed = {
+            r['seed']: r['net_energy_kwh']
+            for r in records if r['method'] == 'sun_tracking'}
+        for r in records:
+            if r['method'] == 'learned_policy' and r['seed'] in sun_by_seed:
+                r['mbpo_minus_sun_kwh'] = r['net_energy_kwh'] - sun_by_seed[r['seed']]
         rep_records = records
     else:
         if not dates:
@@ -465,26 +515,39 @@ def main():
                 os.path.join(args.outdir, 'baseline_rollouts', bmethod),
                 aligned_by_method[bmethod], prefix='aligned')
 
-    write_mc_report(args.outdir, args, dates or ['annual'], records)
-    if args.date_set == 'annual':
-        write_eval_statistics_readme(args.outdir, args.num_rollouts, args.eval_seed_base)
-    with open(os.path.join(args.outdir, 'mc_records.json'), 'w') as f:
-        json.dump(records, f, indent=2)
-
     paths_by_name = {
         'learned_policy': aligned_by_method['learned_policy'],
         'sun_tracking': aligned_by_method['sun_tracking'],
         'fixed_no_motion': aligned_by_method['fixed_no_motion'],
     }
+
+    report_dates = dates or [args.date_set]
+    write_mc_report(args.outdir, args, report_dates, records, paths_by_name=paths_by_name)
+    if args.date_set in ('annual', 'nsrdb_multiyear'):
+        write_eval_statistics_readme(args.outdir, args.num_rollouts, args.eval_seed_base)
+    with open(os.path.join(args.outdir, 'mc_records.json'), 'w') as f:
+        json.dump(records, f, indent=2)
     write_eval_scenario_confirmation(
         args.outdir, eval_env_params, paths_by_name, path_length)
 
+    from eval_utils import write_paired_mc_comparison_report
+    eval_mode = 'nsrdb' if args.date_set == 'nsrdb_multiyear' else 'mc'
+    write_paired_mc_comparison_report(
+        args.outdir, paths_by_name, eval_mode=eval_mode,
+        error='std' if args.date_set in ('annual', 'nsrdb_multiyear') else args.error_bars)
+
     is_stress = args.date_set in ('stress_test', 'holdout', 'final_test', 'custom')
+    protocol_note = (
+        'NSRDB multi-year scenario MC: e~Uniform(manifest); matched seeds; '
+        'pvlib deterministic; 5-min weather resampled to 7min30s control.'
+        if args.date_set == 'nsrdb_multiyear' else
+        'TMY annual day MC; matched seeds; pvlib deterministic physics.')
     generate_paper_figures(
         args.outdir,
         paths_by_name,
         eval_env_params,
-        error='std' if args.date_set == 'annual' else args.error_bars,
+        protocol_note=protocol_note,
+        error='std' if args.date_set in ('annual', 'nsrdb_multiyear') else args.error_bars,
         trial_dir=experiment_root,
         is_stress=is_stress,
     )
