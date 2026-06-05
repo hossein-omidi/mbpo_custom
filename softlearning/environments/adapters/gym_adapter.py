@@ -152,6 +152,13 @@ class GymAdapter(SoftlearningEnv):
     def seed(self, *args, **kwargs):
         return self._env.seed(*args, **kwargs)
 
+    def begin_evaluation_rollouts(self, *args, **kwargs):
+        if hasattr(self._env, 'begin_evaluation_rollouts'):
+            return self._env.begin_evaluation_rollouts(*args, **kwargs)
+        unwrapped = getattr(self._env, 'unwrapped', None)
+        if unwrapped is not None and hasattr(unwrapped, 'begin_evaluation_rollouts'):
+            return unwrapped.begin_evaluation_rollouts(*args, **kwargs)
+
     @property
     def unwrapped(self):
         return self._env.unwrapped

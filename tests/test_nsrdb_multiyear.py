@@ -203,6 +203,46 @@ def test_state_not_from_tmy(manifest_available):
         env_tmy.close()
 
 
+def test_in_train_eval_cycles_validation_scenarios(manifest_available):
+    """MBPO in-train eval must visit each fixed_eval_scenario once per epoch."""
+    ids = [
+        '2018-02-15', '2019-05-15', '2020-08-15', '2021-11-15', '2024-06-21',
+    ]
+    env = PVTrackingEnv(**_env_kwargs(
+        randomize_scenario=False,
+        fixed_eval_scenarios=ids,
+    ))
+    try:
+        env.begin_evaluation_rollouts(len(ids))
+        seen = []
+        for _ in range(len(ids)):
+            env.reset()
+            seen.append(env._current_scenario['scenario_id'])
+        assert seen == ids
+    finally:
+        env.close()
+
+
+def test_seed_maps_fixed_scenario_when_not_cycling(manifest_available):
+    ids = [
+        '2018-02-15', '2019-05-15', '2020-08-15', '2021-11-15', '2024-06-21',
+    ]
+    env = PVTrackingEnv(**_env_kwargs(
+        randomize_scenario=False,
+        fixed_eval_scenarios=ids,
+    ))
+    try:
+        env.seed(7)
+        env.reset()
+        sid1 = env._current_scenario['scenario_id']
+        env.seed(7)
+        env.reset()
+        sid2 = env._current_scenario['scenario_id']
+        assert sid1 == sid2 == ids[7 % len(ids)]
+    finally:
+        env.close()
+
+
 def test_baselines_share_scenario_id(manifest_available):
     env = PVTrackingEnv(**_env_kwargs(fixed_eval_scenarios=['2020-06-21']))
     try:

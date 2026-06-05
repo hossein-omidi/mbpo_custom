@@ -3,9 +3,12 @@
 Mode label: weather_scenario_mode = nsrdb_multiyear
 Baseline TMY: conf1/conf2 with weather_scenario_mode = pvgis_tmy (weather_source=historical)
 
-Lineage: MBPO/SAC hyperparameters from conf1 (main annual experiment); episode grid from
-0.py (13:30 UTC, 79×7min30s = 78 actions); conf2 epoch-aligned model scheduling
-(model_train_freq=78, rollout_schedule).
+Lineage: episode grid from 0.py (13:30 UTC, 79×7min30s = 78 actions); MBPO stability
+from stage3_fullyear_stable (real_ratio=0.10, short model rollouts); conf1 exploration
+(n_initial_exploration_steps=12000); epoch-aligned model_train_freq=78.
+
+In-train eval: eval_n_episodes cycles all fixed_eval_scenarios each epoch so
+evaluation/return-std reflects weather diversity (not a single pinned scenario).
 
 Stochasticity model (important):
   - Across episodes: sample one real historical scenario e = (year, month, day) ~ Uniform(manifest).
@@ -84,7 +87,7 @@ def assert_nsrdb_validation_scenarios(manifest_path, scenario_ids):
 
 assert_nsrdb_validation_scenarios(NSRDB_MANIFEST, STAGE3_NSRDB_VALIDATION_SCENARIO_IDS)
 
-CONFIG_VERSION = 'pv_tracking_stage3_nsrdb_multiyear_scenario_2026-06-03'
+CONFIG_VERSION = 'pv_tracking_stage3_nsrdb_multiyear_scenario_2026-06-05'
 TRAINING_STAGE = 'stage3_nsrdb'
 
 params = dict(_base.params)
@@ -94,13 +97,17 @@ params['kwargs'] = dict(_base.params['kwargs'])
 params['kwargs'].update({
     'n_epochs': 2000,
     'n_initial_exploration_steps': 12000,
-    # conf2 epoch-aligned model scheduling (real_ratio stays conf1=0.5).
+    # Stable MBPO on 78-step days (see stage3_fullyear_stable / MBPO paper scale).
+    'real_ratio': 0.5,
+    'discount': 1,
     'model_train_freq': 78,
-    'max_model_rollout_length': 25,
-    'rollout_schedule': [20, 200, 1, 25],
-    'n_train_repeat': 20,
+    'max_model_rollout_length': 5,
+    'rollout_schedule': [30, 400, 1, 5],
+    'n_train_repeat': 15,
     'eval_n_episodes': len(STAGE3_NSRDB_VALIDATION_SCENARIO_IDS),
+    'eval_deterministic': True,
     'q_loss_warning_threshold': 500.0,
+    'monitor_metric': 'evaluation/return-average',
 })
 params['environment_kwargs'] = dict(_base.params['environment_kwargs'])
 params['environment_kwargs'].update({

@@ -255,6 +255,11 @@ class RLAlgorithm(tf.contrib.checkpoint.Checkpointable):
     def _evaluation_paths(self, policy, evaluation_env):
         if self._eval_n_episodes < 1: return ()
 
+        eval_env = evaluation_env
+        unwrapped = getattr(eval_env, 'unwrapped', eval_env)
+        if hasattr(unwrapped, 'begin_evaluation_rollouts'):
+            unwrapped.begin_evaluation_rollouts(self._eval_n_episodes)
+
         with policy.set_deterministic(self._eval_deterministic):
             paths = rollouts(
                 self._eval_n_episodes,

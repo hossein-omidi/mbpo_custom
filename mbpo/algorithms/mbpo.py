@@ -552,6 +552,12 @@ class MBPO(RLAlgorithm):
             act = np.clip(act, action_low, action_high)
 
             next_obs, rew, term, info = self.fake_env.step(obs, act, **kwargs)
+            # Physical obs has no clock in s; StaticFns.termination_fn cannot mark the
+            # real episode end. Use exact replay remaining_steps so imagined transitions
+            # at the final env step get terminal=True and SAC bootstrap Q(s',a')=0.
+            if current_remaining_steps is not None:
+                horizon_term = (current_remaining_steps <= 1).reshape(-1, 1)
+                term = np.logical_or(term, horizon_term)
             steps_added.append(len(obs))
 
             samples = {

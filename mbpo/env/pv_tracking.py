@@ -195,6 +195,7 @@ class PVTrackingEnv(gym.Env):
         self.excluded_dates = None
         self._fixed_eval_date_index = 0
         self._rollout_seed = None
+        self._eval_cycle_fixed_ids = False
         self._current_scenario = None
         self._nsrdb_year_cache = None
         self._nsrdb_scenarios = []
@@ -315,7 +316,21 @@ class PVTrackingEnv(gym.Env):
         except Exception:
             self.np_random = np.random.RandomState(seed)
         self._rollout_seed = seed
+        # Explicit seeding is for matched-scenario eval (seed % len(fixed list)).
+        # In-train MBPO eval uses begin_evaluation_rollouts() to cycle all ids.
+        self._eval_cycle_fixed_ids = False
         return [seed]
+
+    def begin_evaluation_rollouts(self, n_episodes=None):
+        """Reset counters so in-train eval visits each fixed id once per epoch.
+
+        MBPO calls this before rollouts(n_episodes). Without it, env.seed() from
+        __init__ pins one scenario via rollout_seed % len(fixed_eval_scenarios),
+        making evaluation/return-std == 0 incorrectly.
+        """
+        self._fixed_eval_scenario_index = 0
+        self._fixed_eval_date_index = 0
+        self._eval_cycle_fixed_ids = True
 
     def _build_times(self, date):
         return pd.date_range(
@@ -382,7 +397,10 @@ class PVTrackingEnv(gym.Env):
         (see _build_weather_profile); it is not re-sampled at each control step.
         """
         if self.fixed_eval_scenarios is not None:
-            if self._rollout_seed is not None:
+            if self._eval_cycle_fixed_ids:
+                index = self._fixed_eval_scenario_index % len(self.fixed_eval_scenarios)
+                self._fixed_eval_scenario_index += 1
+            elif self._rollout_seed is not None:
                 index = int(self._rollout_seed) % len(self.fixed_eval_scenarios)
             else:
                 index = self._fixed_eval_scenario_index % len(self.fixed_eval_scenarios)
@@ -586,7 +604,10 @@ class PVTrackingEnv(gym.Env):
         elif self.fixed_eval_dates is not None:
             if len(self.fixed_eval_dates) == 0:
                 raise ValueError('fixed_eval_dates must contain at least one date.')
-            if self._rollout_seed is not None:
+            if self._eval_cycle_fixed_ids:
+                index = self._fixed_eval_date_index % len(self.fixed_eval_dates)
+                self._fixed_eval_date_index += 1
+            elif self._rollout_seed is not None:
                 index = int(self._rollout_seed) % len(self.fixed_eval_dates)
             else:
                 index = self._fixed_eval_date_index % len(self.fixed_eval_dates)

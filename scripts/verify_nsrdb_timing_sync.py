@@ -320,6 +320,39 @@ def check_within_episode_trajectory(config, errors):
         env.close()
 
 
+def check_in_train_eval_scenario_coverage(config, errors):
+    """In-train eval must cycle all fixed_eval_scenarios (nonzero return-std)."""
+    print('\n=== In-train eval: fixed scenario coverage per epoch ===')
+    ev_kw = dict(config['evaluation_environment_kwargs'])
+    fixed = ev_kw.get('fixed_eval_scenarios') or []
+    if not fixed:
+        print('  (skip: no fixed_eval_scenarios)')
+        return
+
+    env = PVTrackingEnv(**ev_kw)
+    try:
+        env.begin_evaluation_rollouts(len(fixed))
+        sids = []
+        rets = []
+        for _ in range(len(fixed)):
+            env.reset()
+            total = 0.0
+            done = False
+            while not done:
+                _, r, done, info = env.step(np.zeros(2, dtype=np.float32))
+                total += float(r)
+            sids.append(info.get('scenario_id'))
+            rets.append(total)
+        if len(set(sids)) != len(fixed):
+            _fail(errors, 'eval rollouts repeated scenarios: %s' % sids)
+        elif float(np.std(rets)) <= 1e-6:
+            _fail(errors, 'eval returns identical across scenarios: %s' % rets)
+        else:
+            _ok('%d scenarios, return std=%.3f kWh' % (len(set(sids)), np.std(rets)))
+    finally:
+        env.close()
+
+
 def check_stochastic_exploration(config, manifest, errors):
     print('\n=== Stochasticity across episodes: scenario sampling only ===')
     env_kw = dict(config['environment_kwargs'])
@@ -367,6 +400,7 @@ def main():
     check_replay_remaining_steps(errors)
     check_mc_eval_protocol(config, errors)
     check_within_episode_trajectory(config, errors)
+    check_in_train_eval_scenario_coverage(config, errors)
     check_stochastic_exploration(config, manifest, errors)
 
     outdir = os.path.join(_REPO, 'verification', 'nsrdb_timing_sync')
