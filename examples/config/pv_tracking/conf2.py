@@ -27,7 +27,7 @@ params['kwargs'].update({
     'target_entropy': 'auto',
     'min_alpha': 0.01,
     'n_train_repeat': 20,
-    'model_train_freq': 78,
+    'model_train_freq': 117,
     'max_model_rollout_length': 25,
     'rollout_schedule': [20, 200, 1, 25],
     'eval_n_episodes': len(STAGE3_VALIDATION_DATES),

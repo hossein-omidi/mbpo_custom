@@ -651,10 +651,11 @@ def describe_eval_config(eval_env_params):
         'movement_penalty: %s' % kwargs.get('movement_penalty', '(from env default)'),
         'observation_mode: %s' % kwargs.get('observation_mode', 'legacy (default)'),
         'fixed_eval_dates: %s' % kwargs.get('fixed_eval_dates', None),
-        'control_grid: %s UTC, %d periods, %s (78 actions)' % (
+        'control_grid: %s UTC, %d periods, %s (%d actions)' % (
             kwargs.get('start_time', PV_EPISODE_START_TIME),
             int(kwargs.get('periods', PV_EPISODE_PERIODS)),
-            kwargs.get('freq', PV_EPISODE_FREQ)),
+            kwargs.get('freq', PV_EPISODE_FREQ),
+            PV_EPISODE_MAX_STEPS),
     ]
     return lines
 
@@ -709,8 +710,8 @@ def make_baseline_rollout(env, baseline_type, path_length, seed=None):
     """Run a baseline policy with correct PV observation decoding.
 
     Baselines only set target tilt/azimuth each step; power and energy_kwh in
-    info come from env.step → PVTrackingEnv._power_from_orientation (pvlib
-    get_total_irradiance), identical to the learned policy path.
+    info come from env.step → PVTrackingEnv._power_from_orientation (mbpo.env.pvlib_physics),
+    identical to the learned policy path.
     """
     underlying = _extract_underlying_env(env)
     if seed is not None and hasattr(env, 'seed'):
@@ -1036,7 +1037,7 @@ def summarize_paired_mc(paths_by_name, reference='learned_policy'):
 
 def verify_rollout_pvlib_power(path, area=1.0, efficiency=0.18, atol=0.5, max_steps=10):
     """Spot-check env.step power matches pvlib POA × area × efficiency."""
-    from pvlib.irradiance import get_total_irradiance
+    from mbpo.env.pvlib_physics import compute_panel_power_w
     infos = path.get('infos', [])
     if not infos:
         return True, 0.0, []
@@ -1049,13 +1050,11 @@ def verify_rollout_pvlib_power(path, area=1.0, efficiency=0.18, atol=0.5, max_st
         az = float(info.get('azimuth', 0.0))
         zen = float(info.get('solar_zenith_deg', 0.0))
         saz = float(info.get('solar_azimuth_deg', 0.0))
-        poa = get_total_irradiance(
-            surface_tilt=tilt, surface_azimuth=az,
-            solar_zenith=zen, solar_azimuth=saz,
-            dni=dni, ghi=ghi, dhi=dhi, model='isotropic')
-        expected = max(float(poa['poa_global']), 0.0) * area * efficiency
+        expected = compute_panel_power_w(
+            tilt, az, zen, saz, dni, ghi, dhi,
+            area=area, efficiency=efficiency)
         reported = float(info.get('power', 0.0))
-        if float(poa['poa_global']) < 1.0 and abs(reported) < 1.0:
+        if expected < 1.0 and abs(reported) < 1.0:
             continue
         errors.append(abs(reported - expected))
     if not errors:
@@ -1071,7 +1070,7 @@ def write_paired_mc_comparison_report(outdir, paths_by_name, eval_mode='mc', err
     pairs = align_paired_rollouts(paths_by_name)
 
     with open(path, 'w', encoding='utf-8') as f:
-        f.write('Paired Monte Carlo comparison (pvlib env, T=78)\n')
+        f.write('Paired Monte Carlo comparison (pvlib env, T=%d)\n' % PV_EPISODE_MAX_STEPS)
         f.write('=' * 48 + '\n\n')
         if eval_mode == 'nsrdb':
             f.write('Distribution: e = (year, month, day) ~ Uniform(manifest)\n')
@@ -1144,6 +1143,7 @@ def get_rollout_metadata(path):
         'weather_source': info0.get('weather_source', 'unknown'),
         'scenario_id': info0.get('scenario_id'),
         'scenario_year': info0.get('scenario_year'),
+        'seed': info0.get('rollout_seed'),
         'episode_length': len(path.get('rewards', [])),
         'total_reward': float(np.sum(path.get('rewards', []))),
         'total_energy_kwh': compute_total_energy_kwh(path),
@@ -1218,7 +1218,8 @@ def write_eval_statistics_readme(outdir, num_rollouts, eval_seed_base):
         f.write('  sun_tracking: slew toward solar zenith/azimuth each step.\n')
         f.write('  fixed_no_motion: action=0 (panel frozen at reset pose; movement_cost=0).\n')
         f.write('  fixed_tilt_south: optional slew to 30/180 (not default in Stage 3).\n\n')
-        f.write('Episode clock (UTC): 13:30 start, 7min30s steps, 78 transitions.\n')
+        f.write('Episode clock (UTC): 13:30 start, 5min steps, %d transitions.\n' % (
+            PV_EPISODE_MAX_STEPS))
         f.write('  Same grid as training; see eval_config episode_preset in summary.\n')
     return path
 

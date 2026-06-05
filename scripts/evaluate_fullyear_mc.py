@@ -162,9 +162,17 @@ def plot_ensemble_actions(outpath, paths, date):
 
 def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_tag=''):
     """Grouped bar chart: mean daily energy by calendar season and method."""
+    if not records:
+        print('[mc] skip season_energy_yield%s: no records' % (
+            ('_%s' % file_tag) if file_tag else ''))
+        return None
     seasons = [s for s in SEASON_CALENDAR_ORDER if any(
         r.get('season_calendar', r.get('season')) == s for r in records)]
     methods = [m for m in METHODS if any(r['method'] == m for r in records)]
+    if not seasons or not methods:
+        print('[mc] skip season_energy_yield%s: no season/method data' % (
+            ('_%s' % file_tag) if file_tag else ''))
+        return None
     x = np.arange(len(seasons))
     width = 0.8 / max(len(methods), 1)
 
@@ -200,8 +208,66 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
     return path
 
 
+def validate_mc_rollout_paths(paths_by_method, path_length, label='mc'):
+    """Fail loudly if rollouts are empty or wrong horizon (avoids blank plots)."""
+    for method, paths in paths_by_method.items():
+        if not paths:
+            raise SystemExit('[mc] ERROR: %s has no %s rollouts' % (label, method))
+        for idx, path in enumerate(paths):
+            n = len(path.get('rewards', []))
+            if n == 0:
+                raise SystemExit(
+                    '[mc] ERROR: %s %s rollout %d is empty' % (label, method, idx + 1))
+            if path_length and n != path_length:
+                raise SystemExit(
+                    '[mc] ERROR: %s %s rollout %d length %d != max_path_length %d' % (
+                        label, method, idx + 1, n, path_length))
+            if not path.get('infos'):
+                raise SystemExit(
+                    '[mc] ERROR: %s %s rollout %d missing infos' % (label, method, idx + 1))
+            info0 = path['infos'][0]
+            if info0.get('weather_source') == 'nsrdb_multiyear':
+                if info0.get('weather_resampling') != 'none_native_5min':
+                    raise SystemExit(
+                        '[mc] ERROR: NSRDB rollout uses weather_resampling=%r '
+                        '(expected none_native_5min)' % info0.get('weather_resampling'))
+                if abs(float(info0.get('control_interval_minutes', 0)) - 5.0) > 1e-3:
+                    raise SystemExit(
+                        '[mc] ERROR: NSRDB control_interval_minutes=%r (expected 5.0)' % (
+                            info0.get('control_interval_minutes')))
+
+
+def write_nsrdb_mc_rollout_plots(args, aligned_by_method, methods, path_length):
+    """Representative rollout + aligned baseline plots for NSRDB scenario MC."""
+    paths_by_name = {
+        m: aligned_by_method.get(m, []) for m in methods if aligned_by_method.get(m)}
+    validate_mc_rollout_paths(paths_by_name, path_length, label='nsrdb_mc')
+
+    max_rp = min(int(getattr(args, 'max_rollout_plots', 4)),
+                 len(aligned_by_method['learned_policy']))
+    rollout_dir = os.path.join(args.outdir, 'rollout_plots')
+    os.makedirs(rollout_dir, exist_ok=True)
+    for i in range(max_rp):
+        plot_rollout_combined(args.outdir, aligned_by_method['learned_policy'][i], i + 1)
+    print('[mc] rollout_plots: %d combined trajectory figure(s) → %s' % (max_rp, rollout_dir))
+
+    first_paths = {m: aligned_by_method[m][0] for m in methods if aligned_by_method.get(m)}
+    if len(first_paths) >= 2:
+        meta = get_rollout_metadata(first_paths['learned_policy'])
+        sid = meta.get('scenario_id') or meta.get('date') or 'rollout_1'
+        seed = meta.get('seed', args.eval_seed_base)
+        aligned_dir = os.path.join(args.outdir, 'aligned')
+        os.makedirs(aligned_dir, exist_ok=True)
+        out = os.path.join(aligned_dir, 'aligned_%s.png' % sid)
+        plot_aligned_comparison(out, first_paths, sid, seed)
+        print('[mc] aligned comparison (seed-matched): %s' % out)
+
+
 def plot_season_ratio_bars(outdir, records, baseline='sun_tracking', error='sem'):
     """Learned / baseline energy ratio by calendar season (paired by seed/replicate)."""
+    if not records:
+        print('[mc] skip season ratio plot: no records')
+        return None
     seasons = [s for s in SEASON_CALENDAR_ORDER if any(
         r.get('season_calendar', r.get('season')) == s for r in records)]
     ratios_by_season = {s: [] for s in seasons}
@@ -288,7 +354,7 @@ def write_mc_report(outdir, args, dates, records, paths_by_name=None):
                     label, stats['mean'], stats['std'], stats['count']))
         f.write('\nSeason bars use season_calendar (month buckets), not env equinox labels.\n')
         f.write('Paired methods share seed; E[energy] and std use sample statistics (ddof=1).\n')
-        f.write('\nAll rollouts: real PVTrackingEnv, pvlib power path, T=78.\n')
+        f.write('\nAll rollouts: real PVTrackingEnv, pvlib power path, T=117 (5min native).\n')
         if is_nsrdb:
             learned = [r for r in records if r['method'] == 'learned_policy']
             if learned and learned[0].get('diffuse_fraction') is not None:
@@ -300,6 +366,28 @@ def write_mc_report(outdir, args, dates, records, paths_by_name=None):
                 if gains:
                     f.write('  MBPO-SAC minus sun_tracker (kWh): mean=%.4f std=%.4f\n' % (
                         np.mean(gains), np.std(gains, ddof=1) if len(gains) > 1 else 0.0))
+                learned_sorted = sorted(
+                    [r for r in learned if r.get('diffuse_fraction') is not None],
+                    key=lambda r: r['diffuse_fraction'], reverse=True)
+                if learned_sorted:
+                    f.write('\n  Top diffuse/cloudy scenarios (learned policy, by sum(DHI)/sum(GHI)):\n')
+                    for r in learned_sorted[:5]:
+                        f.write('    %s: diffuse=%.3f dni_frac=%.3f net=%.4f kWh gain_vs_sun=%+.4f\n' % (
+                            r.get('scenario_id', r.get('date')),
+                            r.get('diffuse_fraction', 0.0),
+                            r.get('dni_fraction', 0.0),
+                            r.get('net_energy_kwh', 0.0),
+                            r.get('mbpo_minus_sun_kwh', 0.0)))
+                learned_sorted_gain = sorted(
+                    [r for r in learned if r.get('mbpo_minus_sun_kwh') is not None],
+                    key=lambda r: r['mbpo_minus_sun_kwh'], reverse=True)
+                if learned_sorted_gain:
+                    f.write('\n  Top MBPO-SAC gains vs sun_tracker (kWh):\n')
+                    for r in learned_sorted_gain[:5]:
+                        f.write('    %s: gain=%+.4f diffuse=%.3f\n' % (
+                            r.get('scenario_id', r.get('date')),
+                            r['mbpo_minus_sun_kwh'],
+                            r.get('diffuse_fraction', 0.0)))
     return path
 
 
@@ -336,6 +424,8 @@ def parse_args():
                    help='Also write standard evaluate_agent summaries/plots')
     p.add_argument('--include-poa-oracle', action='store_true',
                    help='Also run greedy POA oracle baseline (NSRDB eval only)')
+    p.add_argument('--max-rollout-plots', type=int, default=4,
+                   help='Combined rollout time-series plots for NSRDB/TMY MC eval')
     return p.parse_args()
 
 
@@ -349,8 +439,10 @@ def main():
     dates = resolve_date_set(args.date_set, custom)
 
     os.makedirs(args.outdir, exist_ok=True)
-    for sub in ('aligned', 'ensemble', 'ensemble_actions', 'rollout_plots'):
-        os.makedirs(os.path.join(args.outdir, sub), exist_ok=True)
+    is_mc_mode = args.date_set in ('annual', 'nsrdb_multiyear')
+    if not is_mc_mode:
+        for sub in ('aligned', 'ensemble', 'ensemble_actions'):
+            os.makedirs(os.path.join(args.outdir, sub), exist_ok=True)
 
     checkpoint_path = resolve_checkpoint_path(args.checkpoint)
     if os.path.isfile(checkpoint_path):
@@ -427,6 +519,9 @@ def main():
             if r['method'] == 'learned_policy' and r['seed'] in sun_by_seed:
                 r['mbpo_minus_sun_kwh'] = r['net_energy_kwh'] - sun_by_seed[r['seed']]
         rep_records = records
+        validate_mc_rollout_paths(
+            {m: aligned_by_method[m] for m in methods}, path_length, label=args.date_set)
+        write_nsrdb_mc_rollout_plots(args, aligned_by_method, methods, path_length)
     else:
         if not dates:
             raise SystemExit('No evaluation dates resolved.')
@@ -499,10 +594,12 @@ def main():
     # Season summary plots (use replicate-level records for uncertainty)
     plot_season_energy_bars(args.outdir, rep_records, error=args.error_bars,
                             title_suffix=' (MC replicates)', file_tag='mc_%s' % args.error_bars)
-    plot_season_energy_bars(
-        args.outdir,
-        [r for r in records if r.get('replicate', 0) == 0],
-        error='std', title_suffix=' (aligned single run)', file_tag='aligned')
+    if not is_mc_mode:
+        # Fixed-date stress tests: replicate 0 = aligned single run per date.
+        plot_season_energy_bars(
+            args.outdir,
+            [r for r in records if r.get('replicate', 0) == 0],
+            error='std', title_suffix=' (aligned single run)', file_tag='aligned')
     plot_season_ratio_bars(args.outdir, rep_records, baseline='sun_tracking',
                            error=args.error_bars)
 
@@ -539,7 +636,7 @@ def main():
     is_stress = args.date_set in ('stress_test', 'holdout', 'final_test', 'custom')
     protocol_note = (
         'NSRDB multi-year scenario MC: e~Uniform(manifest); matched seeds; '
-        'pvlib deterministic; 5-min weather resampled to 7min30s control.'
+        'pvlib deterministic; native 5-min NSRDB control (hard sync).'
         if args.date_set == 'nsrdb_multiyear' else
         'TMY annual day MC; matched seeds; pvlib deterministic physics.')
     generate_paper_figures(

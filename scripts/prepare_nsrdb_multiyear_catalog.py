@@ -90,7 +90,7 @@ def main():
         '--weather-dataset-dir', default=None,
         help='Offline SAM CSV directory (one file per year, 5-min UTC)')
     p.add_argument('--interval', type=int, default=5,
-                   help='Native CSV interval (minutes); episode grid still 7min30s')
+                   help='Native CSV interval (minutes); episode grid is native 5min')
     p.add_argument('--dry-run', action='store_true')
     p.add_argument('--skip-download', action='store_true',
                    help='Only rebuild manifest from existing year CSVs')

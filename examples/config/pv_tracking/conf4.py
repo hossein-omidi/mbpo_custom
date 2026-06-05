@@ -61,7 +61,7 @@ params['kwargs'].update({
     'target_entropy': 'auto',
     'min_alpha': 0.1,
     'n_train_repeat': 20,
-    'model_train_freq': 78,
+    'model_train_freq': 117,
     'max_model_rollout_length': 1,       # almost no model rollouts
     'rollout_schedule': [20, 200, 1, 1], # constant rollout length 1
     'q_loss_warning_threshold': 500.0,

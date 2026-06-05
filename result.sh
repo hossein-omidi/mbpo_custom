@@ -101,7 +101,7 @@ do_eval_tmy() {
   python scripts/evaluate_agent.py "$CKPT" \
     --outdir "$EVAL_OUT" \
     --eval-protocol inherit \
-    --max-path-length 78 \
+    --max-path-length 117 \
     --compare-baselines \
     --num-rollouts "$NUM_ROLLOUTS" \
     --max-rollout-plots 4 \
@@ -110,7 +110,7 @@ do_eval_tmy() {
 
 do_eval_nsrdb() {
   echo "=== NSRDB scenario MC eval → $EVAL_OUT (checkpoint: $CKPT) ==="
-  echo "    Protocol: e~p(e) per episode; fixed NSRDB trajectory within episode; 7min30s control"
+  echo "    Protocol: e~p(e) per episode; fixed NSRDB trajectory; native 5min control"
   rm -rf "$EVAL_OUT"
   mkdir -p "$EVAL_OUT"
   python scripts/evaluate_fullyear_mc.py "$CKPT" \
@@ -118,7 +118,8 @@ do_eval_nsrdb() {
     --date-set nsrdb_multiyear \
     --num-rollouts "$NUM_ROLLOUTS" \
     --eval-seed-base 100000 \
-    --max-path-length 78 \
+    --max-path-length 117 \
+    --max-rollout-plots 4 \
     --eval-protocol inherit \
     --policy-mode deterministic
 }
@@ -156,7 +157,7 @@ echo ""
 echo "Results folder: $RESULTS"
 echo "  training/     learning curves (E[R] ± σ from progress.csv)"
 if [[ "${IS_NSRDB:-0}" -eq 1 ]]; then
-  echo "  evaluation/   NSRDB scenario MC: PAIRED_MC_COMPARISON.txt, paper_figures/, mc_records.json"
+  echo "  evaluation/   NSRDB scenario MC: paper_figures/, rollout_plots/, mc_records.json"
 else
   echo "  evaluation/   TMY annual MC: PAIRED_MC_COMPARISON.txt, paper_figures/, evaluation_summary.txt"
 fi

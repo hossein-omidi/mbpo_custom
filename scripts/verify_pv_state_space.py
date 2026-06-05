@@ -128,7 +128,7 @@ def make_nsrdb_env(manifest=None, observation_mode='physical'):
     )
 
 
-def run_nsrdb_mc_baselines(n_rollouts, seed_base=42, path_length=78):
+def run_nsrdb_mc_baselines(n_rollouts, seed_base=42, path_length=117):
     """Paired MC: sun tracker vs fixed on same NSRDB scenarios (pvlib via env.step)."""
     paths = {'sun_tracking': [], 'fixed_no_motion': []}
     for i in range(int(n_rollouts)):
@@ -357,7 +357,7 @@ def compute_full_year_weather_distribution(
         times = _episode_times_for_date(
             day, start_time=start_time, periods=periods, freq=freq, tz=tz)
         profile = build_weather_profile_from_catalog(location, times, catalog)
-        # Env steps align with profile rows 0 .. len(times)-2 (78 steps).
+        # Env steps align with profile rows 0 .. len(times)-2 (117 steps).
         n_steps = max(len(times) - 1, 1)
         cond = profile['condition'].values[:n_steps]
         for c in cond:
@@ -674,19 +674,10 @@ def plot_power_timeseries(outdir, results_by_key):
 
 def _power_from_physics(inner, solar_zenith, solar_azimuth, tilt, azimuth, dni, dhi, ghi):
     """Same pvlib path as PVTrackingEnv._power_from_orientation (explicit irradiance)."""
-    from pvlib.irradiance import get_total_irradiance
-    irradiance = get_total_irradiance(
-        surface_tilt=tilt,
-        surface_azimuth=azimuth,
-        solar_zenith=solar_zenith,
-        solar_azimuth=solar_azimuth,
-        dni=dni,
-        ghi=ghi,
-        dhi=dhi,
-        model='isotropic',
-    )
-    poa_global = float(irradiance['poa_global'])
-    return max(poa_global, 0.0) * inner.area * inner.efficiency
+    from mbpo.env.pvlib_physics import compute_panel_power_w
+    return compute_panel_power_w(
+        tilt, azimuth, solar_zenith, solar_azimuth,
+        dni, ghi, dhi, area=inner.area, efficiency=inner.efficiency)
 
 
 def _oat_delta_power(inner, info, factor, eps_frac=0.1):

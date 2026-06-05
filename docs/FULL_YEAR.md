@@ -92,7 +92,7 @@ rm -rf runs/run1
 
 ## What is being trained / evaluated
 
-- **Env:** real `PVTrackingEnv`, pvlib power, UTC grid 13:30–23:15, 78 steps.
+- **Env:** real `PVTrackingEnv`, pvlib power, UTC grid 13:30–23:15, 117 steps (5min native).
 - **MBPO:** BNN on real replay; short imagined rollouts; SAC on mixed batches (`real_ratio` in config).
 - **Eval:** frozen policy, real env only (not the BNN). Matched seeds for learned / sun / fixed.
 - **fixed_no_motion:** `action=0` → zero movement cost.

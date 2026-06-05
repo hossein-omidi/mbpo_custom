@@ -170,7 +170,7 @@ def build_weather_profile_from_catalog(location, times, weather_catalog):
 
     weather = weather_catalog.reindex(canonical_times)
     if weather.isnull().any().any():
-        # Finer-than-source grids (e.g. 7min30s) may need nearest catalog row.
+        # Finer-than-source grids (e.g. native 5min) may need nearest catalog row.
         weather = weather_catalog.reindex(
             canonical_times, method='nearest',
             tolerance=pd.Timedelta('8min'))

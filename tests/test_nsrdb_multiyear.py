@@ -13,11 +13,14 @@ if _REPO not in sys.path:
 from mbpo.env.pv_tracking import PVTrackingEnv
 from mbpo.env.nsrdb_weather import (
     default_manifest_path,
+    load_nsrdb_year_csv,
     load_scenario_manifest,
     resample_weather_to_episode_times,
     scenario_episode_date,
 )
-from scripts.eval_utils import make_baseline_rollout
+from mbpo.env.nsrdb_iotools import read_nsrdb_csv_to_env_weather
+from mbpo.env.pvlib_physics import compute_panel_power_w
+from scripts.eval_utils import make_baseline_rollout, verify_rollout_pvlib_power
 
 MANIFEST = default_manifest_path()
 PYTHON = sys.executable
@@ -139,8 +142,8 @@ def pd_date_range_from_scenario(s, manifest):
     import pandas as pd
     ep = manifest.get('episode', {})
     start_time = ep.get('start_time', '13:30')
-    periods = ep.get('periods', 79)
-    freq = ep.get('freq', '7min30s')
+    periods = ep.get('periods', 118)
+    freq = ep.get('freq', '5min')
     date = scenario_episode_date(s, tz='UTC')
     return pd.date_range(
         start='{} {}'.format(date.date(), start_time),
@@ -249,7 +252,7 @@ def test_baselines_share_scenario_id(manifest_available):
         paths = {}
         for method in ('sun_tracking', 'fixed_no_motion'):
             env.seed(7)
-            paths[method] = make_baseline_rollout(env, method, path_length=78, seed=7)
+            paths[method] = make_baseline_rollout(env, method, path_length=117, seed=7)
         sid0 = paths['sun_tracking']['infos'][0].get('scenario_id')
         sid1 = paths['fixed_no_motion']['infos'][0].get('scenario_id')
         assert sid0 == sid1 == '2020-06-21'
@@ -257,15 +260,50 @@ def test_baselines_share_scenario_id(manifest_available):
         env.close()
 
 
-def test_control_interval_matches_7min30s(manifest_available):
+def test_control_interval_matches_native_5min(manifest_available):
     env = PVTrackingEnv(**_env_kwargs())
     try:
         env.reset()
+        assert env.num_action_steps == 117
+        assert len(env.times) == 118
         _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
-        assert abs(info['control_interval_minutes'] - 7.5) < 1e-6
+        assert abs(info['control_interval_minutes'] - 5.0) < 1e-6
         assert info.get('weather_native_interval_minutes') == 5
-        assert info.get('weather_resampling') == 'time_interpolate_to_episode_grid'
-        assert info['interval_hours'] == pytest.approx(7.5 / 60.0)
+        assert info.get('weather_resampling') == 'none_native_5min'
+        assert info['interval_hours'] == pytest.approx(5.0 / 60.0)
+        assert info['num_action_steps'] == 117
+    finally:
+        env.close()
+
+
+def test_episode_terminates_after_117_transitions(manifest_available):
+    env = PVTrackingEnv(**_env_kwargs())
+    try:
+        env.reset()
+        steps = 0
+        done = False
+        while not done:
+            _, _, done, _ = env.step(np.zeros(2, dtype=np.float32))
+            steps += 1
+        assert steps == 117
+    finally:
+        env.close()
+
+
+def test_nsrdb_weather_exact_timestamp_alignment(manifest_available):
+    """Episode weather rows must match NSRDB index exactly (no interpolation)."""
+    from mbpo.env.nsrdb_weather import NsrdbYearCache
+
+    env = PVTrackingEnv(**_env_kwargs())
+    try:
+        env.seed(3)
+        env.reset()
+        year = int(env._current_scenario['source_year'])
+        raw = NsrdbYearCache(env._nsrdb_manifest).get_year(year)
+        for i, t in enumerate(env.times):
+            assert t in raw.index
+            assert env.weather_profile.index[i] == t
+            assert float(env.weather_profile.iloc[i]['ghi']) == float(raw.loc[t, 'ghi'])
     finally:
         env.close()
 
@@ -289,6 +327,75 @@ def test_within_episode_weather_follows_fixed_trajectory(manifest_available):
         assert np.allclose(
             env.weather_profile[['ghi', 'dni', 'dhi']].values,
             profile_at_reset[['ghi', 'dni', 'dhi']].values)
+    finally:
+        env.close()
+
+
+def test_all_years_2018_2024_load(manifest_available):
+    """Each NSRDB year CSV loads via pvlib reader with 5-min UTC spacing."""
+    from mbpo.env.nsrdb_weather import discover_year_csv_files, validate_nsrdb_year_weather
+
+    data_dir = manifest_available.get('_data_dir', os.path.dirname(MANIFEST))
+    year_map = discover_year_csv_files(data_dir, years=range(2018, 2025))
+    assert set(year_map.keys()) == set(range(2018, 2025)), sorted(year_map)
+    for year, path in sorted(year_map.items()):
+        weather, meta = read_nsrdb_csv_to_env_weather(path)
+        assert meta.get('_reader') in ('read_nsrdb_psm4', 'read_psm3')
+        validate_nsrdb_year_weather(weather, path=path)
+        assert 'nsrdb_{}_utc_5min'.format(year) in os.path.basename(path)
+
+
+def test_nsrdb_path_does_not_load_historical_catalog(manifest_available):
+    """NSRDB env must not touch PVGIS-TMY historical_weather catalog."""
+    env = PVTrackingEnv(**_env_kwargs())
+    try:
+        assert env.weather_source == 'nsrdb_multiyear'
+        assert env._historical_weather_catalog is None
+        assert env._nsrdb_year_cache is not None
+        env.reset()
+        assert env.weather_profile is not None
+        assert 'ghi' in env.weather_profile.columns
+    finally:
+        env.close()
+
+
+def test_nsrdb_csv_read_via_pvlib_iotools(manifest_available):
+    """Local SAM CSVs load through pvlib read_nsrdb_psm4 / read_psm3 (tests/test1.py path)."""
+    sample = manifest_available['scenarios'][0]
+    year_path = sample.get('file_path') or sample.get('year_file')
+    if not year_path or not os.path.isfile(year_path):
+        year_path = os.path.join(
+            os.path.dirname(MANIFEST),
+            'nsrdb_{}_utc_5min.csv'.format(int(sample.get('source_year', sample['year']))))
+    assert os.path.isfile(year_path), year_path
+    weather, meta = read_nsrdb_csv_to_env_weather(year_path)
+    assert meta.get('_reader') in ('read_nsrdb_psm4', 'read_psm3')
+    assert weather.index.tz is not None
+    for col in ('ghi', 'dni', 'dhi', 'temperature', 'wind_speed'):
+        assert col in weather.columns
+    via_loader = load_nsrdb_year_csv(year_path)
+    assert np.allclose(
+        via_loader[['ghi', 'dni', 'dhi']].values,
+        weather[['ghi', 'dni', 'dhi']].values)
+
+
+def test_env_power_matches_pvlib_physics(manifest_available):
+    """env.step power uses shared pvlib_physics (POA × area × efficiency)."""
+    env = PVTrackingEnv(**_env_kwargs())
+    try:
+        env.seed(42)
+        env.reset()
+        path = make_baseline_rollout(env, 'fixed_no_motion', path_length=20, seed=42)
+        ok, max_err, _ = verify_rollout_pvlib_power(
+            path, area=env.area, efficiency=env.efficiency, atol=0.5, max_steps=20)
+        assert ok, 'pvlib power mismatch max_err={}'.format(max_err)
+        _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+        expected = compute_panel_power_w(
+            info['tilt'], info['azimuth'],
+            info['solar_zenith_deg'], info['solar_azimuth_deg'],
+            info['dni_wm2'], info['ghi_wm2'], info['dhi_wm2'],
+            area=env.area, efficiency=env.efficiency)
+        assert abs(float(info['power']) - expected) < 0.5
     finally:
         env.close()
 

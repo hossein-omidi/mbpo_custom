@@ -67,10 +67,10 @@ params['kwargs'].update({
     'train_every_n_steps': 1,
 
     # Train model roughly once per episode.
-    'model_train_freq': 78,
+    'model_train_freq': 117,
 
     # Safer MBPO trust region.
-    # Do not use 25 here: too long for 78-step PV days.
+    # Do not use 25 here: too long for 117-step PV days.
     'max_model_rollout_length': 10,
     'rollout_schedule': [60, 600, 1, 10],
 

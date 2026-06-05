@@ -1212,7 +1212,7 @@ def _run_diagnosis(args):
         '',
         'RC2 [100%%] Small deterministic deploy action magnitude: rho_A=%s (need ~0.3+ to track zenith swing).'
         % _fmt(ratio_action, '%.3f'),
-        '     Necessary |a| bound ~D/(5T) with D=zenith swing, T=78: see docs/PV_TRACKING_ROOT_CAUSES.md.',
+        '     Necessary |a| bound ~D/(5T) with D=zenith swing, T=117: see docs/PV_TRACKING_ROOT_CAUSES.md.',
         '     rho_G=%s gross energy; rho_net=%s net return (learned/sun).'
         % (_fmt(ratio_energy, '%.3f'),
            _fmt(_mean('total_net_reward_kwh', learned_summaries) / max(

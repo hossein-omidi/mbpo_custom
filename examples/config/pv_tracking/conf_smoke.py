@@ -27,7 +27,7 @@ params['kwargs'].update({
     'max_model_rollout_length': 5,
     'rollout_schedule': [0, 3, 2, 5],
     'save_every_epochs': 0,
-    'n_initial_exploration_steps': 78,
+    'n_initial_exploration_steps': 117,
 })
 params['environment_kwargs'] = dict(_base.params['environment_kwargs'])
 params['environment_kwargs'].update({

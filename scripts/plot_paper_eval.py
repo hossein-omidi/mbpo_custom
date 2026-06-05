@@ -130,7 +130,7 @@ def plot_annual_performance_bars(outdir, paths_by_name, error='std'):
             ylabel, error, max(ns) if ns else 0))
 
     fig.suptitle(
-        'Annual-scenario evaluation — matched seeds, real pvlib env (T=78)',
+        'Annual-scenario evaluation — matched seeds, real pvlib env (T=117)',
         fontsize=12, y=1.02)
     fig.tight_layout()
     path = os.path.join(outdir, 'annual_performance_bars.png')
@@ -275,7 +275,7 @@ def plot_return_process_evaluation(outdir, paths_by_name):
     ax.grid(True, linestyle='--', alpha=0.35)
 
     fig.suptitle(
-        'Frozen-policy MC evaluation: R = Σ_t (energy − movement), T=78',
+        'Frozen-policy MC evaluation: R = Σ_t (energy − movement), T=117',
         fontsize=11, y=1.02)
     fig.tight_layout()
     path = os.path.join(outdir, 'return_process_evaluation.png')
@@ -658,7 +658,7 @@ def write_protocol_readme(outdir, eval_env_params, protocol_note, is_stress=Fals
         f.write('  gross_energy_kwh = sum step energy_kwh (pvlib)\n')
         f.write('  movement_cost = sum step movement penalty\n')
         f.write('  net_energy_kwh = total_reward = gross - movement\n')
-        f.write('Baselines use identical seeds, horizon T=78, and env contract.\n')
+        f.write('Baselines use identical seeds, horizon T=117, and env contract.\n')
     return path
 
 

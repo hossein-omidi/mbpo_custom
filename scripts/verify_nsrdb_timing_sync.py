@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""End-to-end timing sync: NSRDB 5-min data ↔ 7min30s control ↔ pvlib ↔ MBPO/SAC.
+"""End-to-end timing sync: native NSRDB 5-min control ↔ pvlib ↔ MBPO/SAC.
 
-Verifies the Option-A contract:
-  - Native weather recorded at 5-min UTC in SAM CSVs
-  - Agent acts every 7min30s (78 steps); energy integrates with dt=7.5min
-  - Weather W_e(t) = time-interpolated NSRDB onto the fixed episode UTC grid
-    (one scenario per episode; NOT independent random weather each step)
-  - pvlib solar geometry uses the same episode timestamps as weather rows
-  - MBPO epoch_length / remaining_steps / model_train_freq align with T=78
+Verifies the native 5-minute contract:
+  - NSRDB SAM CSVs at 5-min UTC; RL control grid at 5-min (hard sync, no interpolation)
+  - Agent acts every 5 min (117 steps); energy integrates with dt=5min
+  - Weather W_e(t) = exact NSRDB row at episode timestamp t
+  - pvlib solar geometry uses the same timestamp as weather and panel orientation
+  - MBPO epoch_length / remaining_steps / model_train_freq align with T=117
 
 Run:
   python scripts/verify_nsrdb_timing_sync.py
@@ -37,17 +36,18 @@ from mbpo.env.pv_tracking import (
 )
 from mbpo.env.nsrdb_weather import (
     NsrdbYearCache,
-    load_nsrdb_year_csv,
     load_scenario_manifest,
     resample_weather_to_episode_times,
     scenario_episode_date,
 )
+from mbpo.env.nsrdb_iotools import read_nsrdb_csv_to_env_weather
+from mbpo.env.pvlib_physics import compute_panel_power_w
 from softlearning.environments.utils import get_environment_from_params
 from softlearning.replay_pools.simple_replay_pool import SimpleReplayPool
 
 
 DEFAULT_MODULE = 'examples.config.pv_tracking.stage3_multiyear_nsrdb_scenario'
-CONTROL_STEP_MIN = 7.5
+CONTROL_STEP_MIN = 5.0
 NATIVE_INTERVAL_MIN = 5.0
 
 
@@ -113,8 +113,32 @@ def check_manifest_episode_grid(manifest, errors):
         env.close()
 
 
+def check_pvlib_csv_reader(manifest, errors):
+    print('\n=== pvlib NSRDB CSV reader (read_nsrdb_psm4 / read_psm3) ===')
+    scenario = manifest['scenarios'][0]
+    year_path = scenario.get('file_path') or scenario.get('year_file')
+    if not year_path or not os.path.isfile(year_path):
+        year_path = os.path.join(
+            os.path.dirname(manifest['_manifest_path']),
+            'nsrdb_{}_utc_5min.csv'.format(int(scenario.get('source_year', scenario['year']))))
+    if not os.path.isfile(year_path):
+        _fail(errors, 'year CSV not found for reader check: %s' % year_path)
+        return
+    weather, meta = read_nsrdb_csv_to_env_weather(year_path)
+    reader = meta.get('_reader')
+    if reader not in ('read_nsrdb_psm4', 'read_psm3'):
+        _fail(errors, 'unexpected NSRDB reader: %r' % reader)
+    else:
+        _ok('CSV loaded via pvlib.%s (%d rows)' % (reader, len(weather)))
+    native_dt = detect_native_interval_minutes(weather)
+    if native_dt is None or abs(native_dt - NATIVE_INTERVAL_MIN) > 0.6:
+        _fail(errors, 'reader output spacing=%.2f min (expected ~5)' % (native_dt or -1))
+    else:
+        _ok('reader index spacing = %.2f min UTC' % native_dt)
+
+
 def check_resampling_and_pvlib(manifest, errors):
-    print('\n=== 5-min NSRDB → 7min30s weather + pvlib alignment ===')
+    print('\n=== Native 5-min NSRDB weather + pvlib alignment (no interpolation) ===')
     cache = NsrdbYearCache(manifest)
     scenario = manifest['scenarios'][100]
     year = int(scenario['source_year'])
@@ -136,19 +160,16 @@ def check_resampling_and_pvlib(manifest, errors):
     if prof[['ghi', 'dni', 'dhi']].isnull().any().any():
         _fail(errors, 'resampled profile has NaNs for %s' % scenario['scenario_id'])
     else:
-        _ok('resampled weather complete for %s' % scenario['scenario_id'])
+        _ok('aligned weather complete for %s' % scenario['scenario_id'])
 
-    # Nearest 5-min anchor lag (max) — should be <= 2.5 min with tolerance 8min
-    lags = []
+    # Hard sync: episode timestamps must exist exactly in NSRDB index
+    max_lag = 0.0
     for t in times:
-        idx = raw.index.get_indexer([t], method='nearest')[0]
-        lag_min = abs((raw.index[idx] - t).total_seconds()) / 60.0
-        lags.append(lag_min)
-    max_lag = max(lags)
-    if max_lag > 4.0:
-        _fail(errors, 'max nearest-neighbor lag %.2f min > 4 min' % max_lag)
+        if t not in raw.index:
+            _fail(errors, 'episode timestamp %s missing from NSRDB index' % t.isoformat())
+            break
     else:
-        _ok('max weather timestamp lag = %.2f min (5-min source → 7.5-min grid)' % max_lag)
+        _ok('all %d episode timestamps exist in NSRDB index (lag=0)' % len(times))
 
     env = PVTrackingEnv(
         weather_source='nsrdb_multiyear',
@@ -184,10 +205,32 @@ def check_resampling_and_pvlib(manifest, errors):
 
         expected_dt_h = CONTROL_STEP_MIN / 60.0
         if abs(env.interval_hours - expected_dt_h) > 1e-9:
-            _fail(errors, 'interval_hours=%.6f (expected %.6f for 7min30s)' % (
+            _fail(errors, 'interval_hours=%.6f (expected %.6f for 5min)' % (
                 env.interval_hours, expected_dt_h))
         else:
-            _ok('energy integration dt = interval_hours = %.4f h (7min30s)' % env.interval_hours)
+            _ok('energy integration dt = interval_hours = %.4f h (5min)' % env.interval_hours)
+
+        _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+        if info.get('weather_resampling') != 'none_native_5min':
+            _fail(errors, 'weather_resampling=%r (expected none_native_5min)' % (
+                info.get('weather_resampling')))
+        else:
+            _ok('weather_resampling=none_native_5min')
+
+        env.step_index = 10
+        env.current_time = env.times[10]
+        sp = env._solar_position(env.current_time)
+        w = env._current_weather()
+        p_env = env._power_from_orientation(
+            sp['zenith'], sp['azimuth'], env.tilt, env.azimuth)
+        p_ref = compute_panel_power_w(
+            env.tilt, env.azimuth, sp['zenith'], sp['azimuth'],
+            w['dni'], w['ghi'], w['dhi'],
+            area=env.area, efficiency=env.efficiency)
+        if abs(p_env - p_ref) > 0.01:
+            _fail(errors, 'env power %.3f != pvlib_physics %.3f at step 10' % (p_env, p_ref))
+        else:
+            _ok('panel power via shared pvlib_physics at step 10')
     finally:
         env.close()
 
@@ -232,7 +275,7 @@ def check_replay_remaining_steps(errors):
     if not np.array_equal(rem, expected):
         _fail(errors, 'remaining_steps mismatch')
     else:
-        _ok('remaining_steps 78..1 for T=78 path')
+        _ok('remaining_steps %d..1 for T=%d path' % (DEFAULT_EPISODE_STEPS, DEFAULT_EPISODE_STEPS))
     rollout_length = 25
     valid = rem > rollout_length
     n_valid = int(np.sum(valid))
@@ -309,7 +352,8 @@ def check_within_episode_trajectory(config, errors):
         elif len({round(g, 1) for g in ghi_trace}) < 2:
             _fail(errors, 'GHI constant over episode (missing temporal structure)')
         else:
-            _ok('scenario_id=%s fixed; GHI evolves along pre-built 78-step profile' % sid0)
+            _ok('scenario_id=%s fixed; GHI evolves along pre-built %d-step profile' % (
+                sid0, DEFAULT_EPISODE_STEPS))
         if not np.allclose(
                 env.weather_profile[['ghi', 'dni', 'dhi']].values,
                 profile_at_reset[['ghi', 'dni', 'dhi']].values):
@@ -395,6 +439,7 @@ def main():
 
     manifest = load_scenario_manifest(manifest_path)
     check_manifest_episode_grid(manifest, errors)
+    check_pvlib_csv_reader(manifest, errors)
     check_resampling_and_pvlib(manifest, errors)
     check_training_algo_alignment(config, errors)
     check_replay_remaining_steps(errors)
@@ -407,9 +452,9 @@ def main():
     os.makedirs(outdir, exist_ok=True)
     report = os.path.join(outdir, 'timing_sync_report.txt')
     with open(report, 'w', encoding='utf-8') as f:
-        f.write('NSRDB 5-min → 7min30s control (Option A)\n')
+        f.write('NSRDB native 5-min control (hard sync)\n')
         f.write('Native weather: 5-min UTC SAM CSV\n')
-        f.write('Control/energy: 7min30s (dt=%.4f h), T=%d\n' % (
+        f.write('Control/energy: 5min (dt=%.4f h), T=%d\n' % (
             CONTROL_STEP_MIN / 60.0, DEFAULT_EPISODE_STEPS))
         f.write('pvlib: solar position at episode timestamps\n')
         f.write('Stochasticity: scenario e~p(e) only\n\n')
@@ -426,7 +471,7 @@ def main():
             print('FAIL:', e)
         print('Report:', report)
         return 1
-    print('PASS — NSRDB 5-min data, 7min30s control, pvlib, MBPO/SAC aligned.')
+    print('PASS — NSRDB native 5-min control, pvlib, MBPO/SAC aligned.')
     print('Report:', report)
     return 0
 

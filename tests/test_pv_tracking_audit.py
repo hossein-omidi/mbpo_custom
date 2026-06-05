@@ -213,7 +213,7 @@ def test_replay_remaining_steps_excludes_near_terminal_states_for_rollout_length
 
 
 def test_model_rollout_marks_terminal_when_remaining_steps_reaches_one():
-    """MBPO imagined rollouts must match finite-horizon MDP (T=78) for SAC targets."""
+    """MBPO imagined rollouts must match finite-horizon MDP (T=117) for SAC targets."""
     current_remaining = np.array([6, 3, 2, 1], dtype=np.int32)
     term = np.zeros((len(current_remaining), 1), dtype=bool)
     horizon_term = (current_remaining <= 1).reshape(-1, 1)

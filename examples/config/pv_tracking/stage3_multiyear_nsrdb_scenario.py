@@ -1,31 +1,20 @@
-"""Stage 3 — NSRDB multi-year empirical weather scenarios (separate from PVGIS-TMY baseline).
+"""Stage 3 — NSRDB multi-year empirical weather (main recommended config).
 
-Mode label: weather_scenario_mode = nsrdb_multiyear
-Baseline TMY: conf1/conf2 with weather_scenario_mode = pvgis_tmy (weather_source=historical)
+weather_scenario_mode = nsrdb_multiyear
+  e = (year, month, day) ~ Uniform(manifest), fixed W_e per episode.
 
-Lineage: episode grid from 0.py (13:30 UTC, 79×7min30s = 78 actions); MBPO stability
-from stage3_fullyear_stable (real_ratio=0.10, short model rollouts); conf1 exploration
-(n_initial_exploration_steps=12000); epoch-aligned model_train_freq=78.
+Legacy PVGIS-TMY baseline: conf1 / conf2 (weather_scenario_mode = pvgis_tmy).
 
-In-train eval: eval_n_episodes cycles all fixed_eval_scenarios each epoch so
-evaluation/return-std reflects weather diversity (not a single pinned scenario).
+Data: local SAM CSVs data/pv_weather/nsrdb/nsrdb_{2018..2024}_utc_5min.csv
+Reader: pvlib.iotools.read_psm3 (see tests/test1.py, mbpo.env.nsrdb_iotools)
 
-Stochasticity model (important):
-  - Across episodes: sample one real historical scenario e = (year, month, day) ~ Uniform(manifest).
-  - Within an episode: weather W_e(t) follows that scenario's NSRDB trajectory (5-min UTC
-    time-interpolated onto the 7min30s control grid). It is NOT independently random at
-    each 5-min or 7min30s step — temporal cloud/irradiance structure is preserved.
-  - pvlib is deterministic given W_e and panel pose.
-
-Requires catalog from offline SAM CSVs:
-  python scripts/prepare_nsrdb_multiyear_catalog.py \\
-    --weather-dataset-dir /home/user01/weather_dataset/weather_dataset \\
-    --years 2018-2024 --copy-to-outdir
+Timing: native 5-min control grid synchronized with NSRDB (no interpolation).
+  13:30–23:15 UTC → 118 timestamps, 117 transitions, interval_hours = 5/60.
 
 Train:
   ./train.sh run_nsrdb stage3_nsrdb --verify
 
-Eval (frozen policy, scenario MC — result.sh auto-detects stage3_nsrdb):
+Eval:
   ./result.sh run_nsrdb --full
 """
 
@@ -34,17 +23,16 @@ import os
 
 from examples.config.pv_tracking._paths import default_log_dir
 
-_base = importlib.import_module('examples.config.pv_tracking.conf1')
+_base = importlib.import_module('examples.config.pv_tracking.0')
 
 NSRDB_MANIFEST = 'data/pv_weather/nsrdb/albuquerque_multiyear_manifest.json'
 
-# Episode grid (must match 0.py / manifest episode block / MBPO epoch_length=78).
 EPISODE_TZ = 'UTC'
 EPISODE_START_TIME = '13:30'
-EPISODE_PERIODS = 79
-EPISODE_FREQ = '7min30s'
+EPISODE_PERIODS = 118
+EPISODE_FREQ = '5min'
+EPISODE_ACTION_STEPS = EPISODE_PERIODS - 1  # 117
 
-# Seasonally spaced scenario IDs — must exist in manifest after prepare script.
 STAGE3_NSRDB_VALIDATION_SCENARIO_IDS = [
     '2018-02-15',
     '2019-05-15',
@@ -55,14 +43,11 @@ STAGE3_NSRDB_VALIDATION_SCENARIO_IDS = [
 
 
 def assert_nsrdb_validation_scenarios(manifest_path, scenario_ids):
-    """Fail fast if manifest or validation scenario IDs are missing."""
     from mbpo.env.nsrdb_weather import load_scenario_manifest
 
     repo_root = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    path = manifest_path
-    if not os.path.isabs(path):
-        path = os.path.join(repo_root, manifest_path)
+    path = manifest_path if os.path.isabs(manifest_path) else os.path.join(repo_root, manifest_path)
     manifest = load_scenario_manifest(path)
     ids = {s['scenario_id'] for s in manifest['scenarios']}
     missing = [sid for sid in scenario_ids if sid not in ids]
@@ -76,10 +61,9 @@ def assert_nsrdb_validation_scenarios(manifest_path, scenario_ids):
         ('periods', EPISODE_PERIODS),
         ('freq', EPISODE_FREQ),
     ):
-        actual = episode.get(key)
-        if actual != expected:
+        if episode.get(key) != expected:
             raise ValueError(
-                'manifest episode.%s=%r != expected %r' % (key, actual, expected))
+                'manifest episode.%s=%r != expected %r' % (key, episode.get(key), expected))
     site = manifest.get('site', {})
     if site.get('latitude') != 35.08 or site.get('longitude') != -106.65:
         raise ValueError('manifest site lat/lon mismatch: %s' % site)
@@ -87,7 +71,7 @@ def assert_nsrdb_validation_scenarios(manifest_path, scenario_ids):
 
 assert_nsrdb_validation_scenarios(NSRDB_MANIFEST, STAGE3_NSRDB_VALIDATION_SCENARIO_IDS)
 
-CONFIG_VERSION = 'pv_tracking_stage3_nsrdb_multiyear_scenario_2026-06-05'
+CONFIG_VERSION = 'pv_tracking_stage3_nsrdb_multiyear_scenario_2026-06-06_5min'
 TRAINING_STAGE = 'stage3_nsrdb'
 
 params = dict(_base.params)
@@ -96,23 +80,23 @@ params['log_dir'] = default_log_dir()
 params['kwargs'] = dict(_base.params['kwargs'])
 params['kwargs'].update({
     'n_epochs': 2000,
-    'n_initial_exploration_steps': 12000,
-    # Stable MBPO on 78-step days (see stage3_fullyear_stable / MBPO paper scale).
-    'real_ratio': 0.5,
+    'epoch_length': EPISODE_ACTION_STEPS,
+    'n_initial_exploration_steps': 8000,
+    'real_ratio': 0.75,
     'discount': 1,
-    'model_train_freq': 78,
-    'max_model_rollout_length': 5,
-    'rollout_schedule': [30, 400, 1, 5],
-    'n_train_repeat': 15,
+    'model_train_freq': EPISODE_ACTION_STEPS,
+    'max_model_rollout_length': 1,
+    'rollout_schedule': [30, 400, 1, 1],
+    'n_train_repeat': 2,
     'eval_n_episodes': len(STAGE3_NSRDB_VALIDATION_SCENARIO_IDS),
     'eval_deterministic': True,
     'q_loss_warning_threshold': 500.0,
     'monitor_metric': 'evaluation/return-average',
 })
-params['environment_kwargs'] = dict(_base.params['environment_kwargs'])
-params['environment_kwargs'].update({
+params['environment_kwargs'] = {
     'latitude': 35.08,
     'longitude': -106.65,
+    'altitude': 1600.0,
     'tz': EPISODE_TZ,
     'start_time': EPISODE_START_TIME,
     'periods': EPISODE_PERIODS,
@@ -129,28 +113,11 @@ params['environment_kwargs'].update({
     'observation_noise_std': 0.0,
     'movement_penalty': 0.0,
     'observation_mode': 'physical',
-})
-params['evaluation_environment_kwargs'] = dict(
-    _base.params['evaluation_environment_kwargs'])
+}
+params['evaluation_environment_kwargs'] = dict(params['environment_kwargs'])
 params['evaluation_environment_kwargs'].update({
-    'latitude': 35.08,
-    'longitude': -106.65,
-    'tz': EPISODE_TZ,
-    'start_time': EPISODE_START_TIME,
-    'periods': EPISODE_PERIODS,
-    'freq': EPISODE_FREQ,
-    'start_date': '2018-01-01',
-    'end_date': '2024-12-31',
-    'randomize_day': False,
     'randomize_scenario': False,
     'randomize_initial_orientation': False,
-    'weather_scenario_mode': 'nsrdb_multiyear',
-    'weather_source': 'nsrdb_multiyear',
-    'scenario_manifest': NSRDB_MANIFEST,
     'fixed_eval_scenarios': list(STAGE3_NSRDB_VALIDATION_SCENARIO_IDS),
-    'irradiance_perturbation_std': 0.0,
-    'observation_noise_std': 0.0,
-    'movement_penalty': 0.0,
-    'observation_mode': 'physical',
 })
 params['evaluation_environment_kwargs'].pop('fixed_eval_dates', None)

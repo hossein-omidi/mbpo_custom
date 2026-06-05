@@ -5,7 +5,9 @@ from gym import spaces
 import pandas as pd
 
 from pvlib.location import Location
-from pvlib.irradiance import aoi, get_total_irradiance
+from pvlib.irradiance import aoi
+
+from mbpo.env.pvlib_physics import compute_panel_power_w
 
 from .historical_weather import (
     available_month_days,
@@ -74,12 +76,14 @@ PV_TIMEZONE = 'UTC'
 
 # Episode grid: periods timestamps at freq; env.step() count == periods - 1.
 # Wall-clock labels use Location.tz (UTC) only — no civil-time conversion.
-# Daylight-focused window at 35N/106W: ~13:30–23:15 UTC (same wall-clock span as
-# the legacy 40×15min grid; finer control via 79×7min30s = 78 steps).
+# Daylight window 13:30–23:15 UTC: 585 min / 5 min = 117 transitions (118 timestamps).
+# Step convention: action updates panel pose, then env advances to times[step_index];
+# reward uses NSRDB weather + pvlib geometry at that same timestamp (post-action pose).
 DEFAULT_START_TIME = '13:30'
-DEFAULT_PERIODS = 79
-DEFAULT_FREQ = '7min30s'
-DEFAULT_EPISODE_STEPS = DEFAULT_PERIODS - 1  # 78 transitions per day
+DEFAULT_PERIODS = 118
+DEFAULT_FREQ = '5min'
+DEFAULT_EPISODE_STEPS = DEFAULT_PERIODS - 1  # 117 transitions per day
+DEFAULT_CONTROL_INTERVAL_MINUTES = 5.0
 
 
 def episode_clock_hour(time_str):
@@ -525,18 +529,13 @@ class PVTrackingEnv(gym.Env):
 
     def _power_from_orientation(self, solar_zenith, solar_azimuth, tilt, azimuth):
         weather = self._current_weather()
-        irradiance = get_total_irradiance(
-            surface_tilt=tilt,
-            surface_azimuth=azimuth,
-            solar_zenith=solar_zenith,
-            solar_azimuth=solar_azimuth,
-            dni=weather['dni'],
-            ghi=weather['ghi'],
-            dhi=weather['dhi'],
-            model='isotropic',
+        return compute_panel_power_w(
+            tilt, azimuth,
+            solar_zenith, solar_azimuth,
+            weather['dni'], weather['ghi'], weather['dhi'],
+            area=self.area,
+            efficiency=self.efficiency,
         )
-        poa_global = float(irradiance['poa_global'])
-        return max(poa_global, 0.0) * self.area * self.efficiency
 
     def _build_observation(self, solar_zenith, solar_azimuth, weather, power):
         solar_azimuth_rad = np.deg2rad(solar_azimuth)
@@ -751,7 +750,7 @@ class PVTrackingEnv(gym.Env):
                 and getattr(self, '_nsrdb_manifest', None) is not None
                 else None),
             'weather_resampling': (
-                'time_interpolate_to_episode_grid'
+                'none_native_5min'
                 if self.weather_source == 'nsrdb_multiyear' else None),
             'num_action_steps': int(self.num_action_steps),
             'rollout_seed': (

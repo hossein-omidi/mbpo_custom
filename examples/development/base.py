@@ -41,7 +41,7 @@ DEFAULT_MAX_PATH_LENGTH = 1000
 MAX_PATH_LENGTH_PER_DOMAIN = {
     'Point2DEnv': 50,
     'Pendulum': 200,
-    'PVTracking': 78,
+    'PVTracking': 117,
 }
 
 ALGORITHM_PARAMS_ADDITIONAL = {

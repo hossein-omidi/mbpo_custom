@@ -1,7 +1,7 @@
 """NSRDB PSM3 multi-year weather scenarios for PVTracking.
 
 Each scenario e = (data_year, calendar month, day) maps to one fixed irradiance
-trajectory W_e on the project UTC episode grid (13:30–23:15, 7min30s).
+trajectory W_e on the project UTC episode grid (13:30–23:15, native 5min).
 
 Data flow:
   - Offline SAM CSV (5-min UTC) from NSRDB Viewer or API download
@@ -21,9 +21,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pvlib.iotools import get_psm3, read_psm3
+from pvlib.iotools import get_psm3
 
-from .historical_weather import classify_weather_conditions
+from .nsrdb_iotools import read_nsrdb_csv_to_env_weather, to_env_weather_frame
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_NSRDB_DATA_DIR = REPO_ROOT / 'data' / 'pv_weather' / 'nsrdb'
@@ -54,12 +54,10 @@ PSM3_ATTRIBUTES = (
 NSRDB_API_HOST = 'developer.nrel.gov'
 NSRDB_API_BASE = 'https://developer.nrel.gov'
 
+# Canonical offline SAM files (5-min UTC). Legacy 15-min names are ignored when 5-min exists.
 YEAR_FILE_PATTERNS = (
-    'albuquerque_{year}_utc_15min.csv',
-    'albuquerque_{year}_utc_5min.csv',
     'nsrdb_{year}_utc_5min.csv',
-    '*_{year}.csv',
-    '*_{year}_*.csv',
+    'albuquerque_{year}_utc_5min.csv',
 )
 
 
@@ -191,9 +189,7 @@ def fetch_nsrdb_year_utc(
                 leap_day=leap_day,
                 timeout=timeout,
             )
-            data = normalize_psm3_dataframe(data, map_variables=False)
-            data.index = psm3_index_to_utc(data.index, meta)
-            data = data[~data.index.duplicated(keep='first')].sort_index()
+            data = to_env_weather_frame(data, meta)
             return data, meta
         except (requests.ConnectionError, requests.Timeout) as exc:
             last_err = exc
@@ -209,98 +205,121 @@ def fetch_nsrdb_year_utc(
 
 
 def import_psm3_csv_to_year_utc(csv_path):
-    """Load a local NSRDB SAM CSV (Viewer export or saved API file) as UTC yearly data."""
+    """Load a local NSRDB SAM CSV via pvlib.iotools (read_nsrdb_psm4 / read_psm3)."""
     path = _repo_relative(csv_path)
     if not path.is_file():
         raise FileNotFoundError('NSRDB CSV not found: {}'.format(path))
-    data, meta = read_psm3(str(path), map_variables=True)
-    data = normalize_psm3_dataframe(data, map_variables=False)
-    data.index = psm3_index_to_utc(data.index, meta)
-    drop_cols = [c for c in ('Year', 'Month', 'Day', 'Hour', 'Minute') if c in data.columns]
-    if drop_cols:
-        data = data.drop(columns=drop_cols)
-    data = data[~data.index.duplicated(keep='first')].sort_index()
-    return data, meta
+    return read_nsrdb_csv_to_env_weather(str(path))
 
 
 def discover_year_csv_files(data_dir, years=None):
-    """Find per-year NSRDB CSV files in a directory (SAM export naming)."""
+    """Find per-year NSRDB 5-min SAM CSV files (prefers nsrdb_{year}_utc_5min.csv)."""
     data_dir = _repo_relative(data_dir)
     if not data_dir.is_dir():
         return {}
     found = {}
-    all_csv = sorted(data_dir.glob('*.csv'))
-    for csv_path in all_csv:
-        year_match = re.search(r'(?:^|_)(\d{4})(?:_|\.csv)', csv_path.name)
-        if not year_match:
-            continue
-        year = int(year_match.group(1))
-        if years is not None and year not in years:
-            continue
-        if year not in found:
-            found[year] = str(csv_path)
+    if years is not None:
+        year_list = [int(y) for y in years]
+    else:
+        year_list = None
+        year_set = set()
+        for csv_path in data_dir.glob('*.csv'):
+            m = re.search(r'(?:^|_)(\d{4})(?:_|\.csv)', csv_path.name)
+            if m:
+                year_set.add(int(m.group(1)))
+        year_list = sorted(year_set)
+    for year in year_list:
+        for pattern in YEAR_FILE_PATTERNS:
+            matches = sorted(glob.glob(str(data_dir / pattern.format(year=year))))
+            if matches:
+                found[int(year)] = str(Path(matches[0]).resolve())
+                break
     return found
 
 
 def load_nsrdb_year_csv(path):
-    """Load a prepared yearly UTC CSV (SAM export or catalog-prepared file)."""
+    """Load a prepared yearly UTC CSV via pvlib NSRDB readers (standard path)."""
     path = _repo_relative(path)
     if not path.is_file():
         raise FileNotFoundError('NSRDB year file not found: {}'.format(path))
-    if path.suffix.lower() == '.csv':
-        try:
-            data, meta = read_psm3(str(path), map_variables=True)
-            data = normalize_psm3_dataframe(data, map_variables=False)
-            data.index = psm3_index_to_utc(data.index, meta)
-            drop_cols = [c for c in ('Year', 'Month', 'Day', 'Hour', 'Minute') if c in data.columns]
-            if drop_cols:
-                data = data.drop(columns=drop_cols)
-            return data[~data.index.duplicated(keep='first')].sort_index()
-        except Exception as exc:
-            last_err = exc
-        else:
-            last_err = None
-        if last_err is not None:
-            data = pd.read_csv(path, index_col=0, parse_dates=True, low_memory=False)
-    else:
+    if path.suffix.lower() != '.csv':
         raise ValueError('Unsupported NSRDB year file: {}'.format(path))
-    if not isinstance(data.index, pd.DatetimeIndex):
-        raise ValueError('NSRDB year file must have DatetimeIndex: {}'.format(path))
-    if data.index.tz is None:
-        data.index = data.index.tz_localize('UTC')
-    else:
-        data.index = data.index.tz_convert('UTC')
-    return normalize_psm3_dataframe(data, map_variables=False)
+    weather, _meta = read_nsrdb_csv_to_env_weather(str(path))
+    validate_nsrdb_year_weather(weather, path=str(path))
+    return weather
+
+
+def validate_nsrdb_year_weather(weather, path=''):
+    """Validate UTC 5-min NSRDB frame after pvlib reader (raises on failure)."""
+    if not isinstance(weather.index, pd.DatetimeIndex):
+        raise ValueError('NSRDB weather must have DatetimeIndex: {}'.format(path))
+    if weather.index.tz is None:
+        raise ValueError('NSRDB weather index must be timezone-aware UTC: {}'.format(path))
+    if str(weather.index.tz) != 'UTC':
+        raise ValueError('NSRDB weather index must be UTC: {}'.format(path))
+    missing = [c for c in REQUIRED_COLUMNS if c not in weather.columns]
+    if missing:
+        raise ValueError('NSRDB missing columns {} in {}'.format(missing, path))
+    if len(weather) < 2:
+        raise ValueError('NSRDB year file too short: {}'.format(path))
+    deltas = weather.index.to_series().diff().dropna()
+    med_min = deltas.median().total_seconds() / 60.0
+    if abs(med_min - 5.0) > 0.6:
+        raise ValueError(
+            'NSRDB native spacing {:.2f} min (expected ~5) in {}'.format(med_min, path))
+    for col in ('ghi', 'dni', 'dhi'):
+        vals = weather[col].astype(float)
+        if vals.isnull().any():
+            raise ValueError('NSRDB {} has NaNs in {}'.format(path, col))
+        if (vals < 0).any():
+            raise ValueError('NSRDB {} has negative {}'.format(path, col))
+    return True
+
+
+def diagnostic_weather_label(location, times, weather_frame):
+    """Optional clear/partly_cloudy/overcast label for diagnostics only (not used in power)."""
+    clearsky = location.get_clearsky(times)
+    ghi_clear = clearsky['ghi'].clip(lower=1.0).values
+    dni_clear = clearsky['dni'].clip(lower=1.0).values
+    ghi_ratio = np.clip(weather_frame['ghi'].values / ghi_clear, 0.0, 1.5)
+    dni_ratio = np.clip(weather_frame['dni'].values / dni_clear, 0.0, 1.5)
+    conditions = np.full(len(times), 'overcast', dtype=object)
+    clear_mask = (ghi_ratio >= 0.75) & (dni_ratio >= 0.6)
+    partial_mask = (~clear_mask) & (ghi_ratio >= 0.35)
+    conditions[clear_mask] = 'clear'
+    conditions[partial_mask] = 'partly_cloudy'
+    return conditions
 
 
 def resample_weather_to_episode_times(weather_utc, times):
-    """Map native-interval NSRDB (e.g. 5-min UTC) onto the control episode grid (7min30s).
+    """Align NSRDB 5-min UTC rows to episode timestamps (hard sync, no interpolation).
 
-    Principle: agent samples at times[t]; weather W_e(t) is interpolated from the
-    fixed scenario trajectory — not independent 5-min draws. pvlib uses the same
-    times[t] for solar geometry. Energy integrates with dt = 7min30s (env.interval_hours).
+    One RL action interval = one NSRDB weather row = one 5-minute timestamp.
+    Agent orientation at t uses weather and pvlib solar geometry at the same t.
     """
     times = pd.DatetimeIndex(times).tz_convert('UTC')
-    subset = weather_utc.loc[
-        (weather_utc.index >= times[0] - pd.Timedelta('1h'))
-        & (weather_utc.index <= times[-1] + pd.Timedelta('1h'))
-    ]
-    if subset.empty:
-        subset = weather_utc
-    reindexed = subset.reindex(times, method='nearest', tolerance=pd.Timedelta('8min'))
+    if len(times) >= 2:
+        step_min = times.to_series().diff().dropna().median().total_seconds() / 60.0
+        if abs(step_min - 5.0) > 0.01:
+            raise ValueError(
+                'NSRDB native path requires 5-min episode grid; got {:.2f} min spacing'.format(
+                    step_min))
+    missing = times.difference(weather_utc.index)
+    if len(missing):
+        raise ValueError(
+            'NSRDB episode missing exact 5-min rows at {}'.format(
+                [ts.isoformat() for ts in missing[:5]]))
+    aligned = weather_utc.loc[times].copy()
     numeric_cols = [
         c for c in list(REQUIRED_COLUMNS) + list(OPTIONAL_COLUMNS)
-        if c in subset.columns
+        if c in aligned.columns
     ]
-    if reindexed[numeric_cols].isnull().any().any():
-        reindexed[numeric_cols] = subset[numeric_cols].astype(float).interpolate(
-            method='time', limit_direction='both').reindex(times)
-    if reindexed[numeric_cols].isnull().any().any():
-        missing_ts = reindexed[reindexed[numeric_cols].isnull().any(axis=1)].index[:3]
+    if aligned[numeric_cols].isnull().any().any():
+        bad = aligned[aligned[numeric_cols].isnull().any(axis=1)].index[:3]
         raise ValueError(
-            'NSRDB episode window has missing weather at {}'.format(
-                [ts.isoformat() for ts in missing_ts]))
-    return reindexed
+            'NSRDB episode has NaN weather at {}'.format(
+                [ts.isoformat() for ts in bad]))
+    return aligned
 
 
 def build_weather_profile_from_scenario(location, times, year_weather, scenario):
@@ -309,7 +328,7 @@ def build_weather_profile_from_scenario(location, times, year_weather, scenario)
     weather = resample_weather_to_episode_times(year_weather, times)
     weather = weather.copy()
     weather.index = times
-    weather['condition'] = classify_weather_conditions(location, times, weather)
+    weather['condition'] = diagnostic_weather_label(location, times, weather)
     return weather
 
 
@@ -368,7 +387,7 @@ def load_scenario_manifest(manifest_path=None):
         elif yf:
             row['_year_path'] = str(Path(yf).resolve())
         else:
-            yf = 'albuquerque_{year}_utc_15min.csv'.format(year=int(row['source_year']))
+            yf = 'nsrdb_{year}_utc_5min.csv'.format(year=int(row['source_year']))
             row['_year_path'] = str(data_dir / yf)
     manifest['_data_dir'] = str(data_dir)
     manifest['_manifest_path'] = str(manifest_path)
@@ -444,8 +463,8 @@ def build_manifest_from_year_files(
         latitude=DEFAULT_LATITUDE,
         longitude=DEFAULT_LONGITUDE,
         start_time='13:30',
-        periods=79,
-        freq='7min30s',
+        periods=118,
+        freq='5min',
         episode_validate=True,
         location=None,
         year_file_map=None):
@@ -491,10 +510,13 @@ def build_manifest_from_year_files(
                     'year': year,
                     'month': month,
                     'day': day,
+                    'date': anchor.date().isoformat(),
+                    'start_time': start_time,
+                    'end_time': times[-1].strftime('%H:%M'),
                     'timestamps': episode_timestamps_iso(
                         anchor, start_time, periods, freq, tz='UTC'),
                     'valid_step_count': int(periods),
-                    'file_path': year_path,
+                    'file_path': os.path.basename(year_path),
                     'year_file': os.path.basename(year_path),
                 }
                 if episode_validate:
@@ -544,8 +566,8 @@ def write_manifest(
         latitude=DEFAULT_LATITUDE,
         longitude=DEFAULT_LONGITUDE,
         start_time='13:30',
-        periods=79,
-        freq='7min30s',
+        periods=118,
+        freq='5min',
         source='NSRDB_PSM3',
         extra_meta=None):
     """Write manifest JSON."""
