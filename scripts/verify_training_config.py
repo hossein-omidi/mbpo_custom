@@ -7,7 +7,7 @@ critical hyperparameters or environment kwargs differ from the config module.
 Usage:
   python scripts/verify_training_config.py
   python scripts/verify_training_config.py --config examples.config.pv_tracking.1
-  python scripts/verify_training_config.py --config examples.config.pv_tracking.stage0_single_day
+  python scripts/verify_training_config.py --config examples.config.pv_tracking.stage3_multiyear_nsrdb_scenario
 """
 
 from __future__ import print_function

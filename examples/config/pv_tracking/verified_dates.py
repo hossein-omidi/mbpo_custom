@@ -56,7 +56,7 @@ STAGE3_FINAL_TEST_DATES = [
 ]
 
 # Stage 3 full-year (RL annual support — NOT training exclusions)
-STAGE3_CONFIG_MODULE = 'examples.config.pv_tracking.stage3_fullyear_stable_mbpo'
+STAGE3_CONFIG_MODULE = 'examples.config.pv_tracking.stage3_multiyear_nsrdb_scenario'
 
 # Optional fixed-calendar stress tests (reporting / diagnostics only; not train exclusions).
 STAGE3_STRESS_TEST_DATES = sorted(set(STAGE3_VALIDATION_DATES + STAGE3_FINAL_TEST_DATES))

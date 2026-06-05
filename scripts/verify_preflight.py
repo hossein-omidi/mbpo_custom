@@ -12,9 +12,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-DEFAULT_MODULE = 'examples.config.pv_tracking.conf1'
+DEFAULT_MODULE = 'examples.config.pv_tracking.stage3_multiyear_nsrdb_scenario'
 DEFAULT_PATH = os.path.join(
-    _REPO_ROOT, 'examples/config/pv_tracking/conf1.py')
+    _REPO_ROOT, 'examples/config/pv_tracking/stage3_multiyear_nsrdb_scenario.py')
 
 
 def main():

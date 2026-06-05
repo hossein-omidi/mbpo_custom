@@ -1,52 +1,35 @@
-"""conf1 — full-year annual-scenario MBPO-SAC (main experiment)."""
+"""conf1 — NSRDB fast training (shorter run, lighter MBPO updates).
 
-import importlib
+Parallel NSRDB profile for quick iteration / hyperparameter search.
+Same env and eval protocol as stage3_multiyear_nsrdb_scenario.
+"""
 
-from examples.config.pv_tracking._paths import default_log_dir
-from examples.config.pv_tracking.verified_dates import assert_dates_in_historical_catalog
+from examples.config.pv_tracking._nsrdb_base import (
+    NSRDB_MANIFEST,
+    NSRDB_VALIDATION_SCENARIO_IDS,
+    assert_nsrdb_validation_scenarios,
+    build_nsrdb_params,
+)
 
-_stage2 = importlib.import_module('examples.config.pv_tracking.stage2_random_weather')
+assert_nsrdb_validation_scenarios(NSRDB_MANIFEST, NSRDB_VALIDATION_SCENARIO_IDS)
 
-IRRADIANCE_PERTURBATION_STD = 0.0
-OBSERVATION_NOISE_STD = 0.0
-
-assert_dates_in_historical_catalog(['2020-06-21', '2020-12-07'])
-
-CONFIG_VERSION = 'pv_tracking_conf1_fullyear_annual_2026-06'
+CONFIG_VERSION = 'pv_tracking_conf1_nsrdb_fast_2026-06-06'
 TRAINING_STAGE = 'conf1'
 
-params = dict(_stage2.params)
-params['config_version'] = CONFIG_VERSION
-params['log_dir'] = default_log_dir()
-params['kwargs'] = dict(_stage2.params['kwargs'])
-params['kwargs'].update({
-    'n_epochs': 500,
-    'real_ratio': 0.5,
-    'n_initial_exploration_steps': 12000,
-})
-params['environment_kwargs'] = dict(_stage2.params['environment_kwargs'])
-params['environment_kwargs'].update({
-    'start_date': '2020-01-01',
-    'end_date': '2020-12-31',
-    'randomize_day': True,
-    'randomize_initial_orientation': True,
-    'weather_source': 'historical',
-    'irradiance_perturbation_std': IRRADIANCE_PERTURBATION_STD,
-    'observation_noise_std': OBSERVATION_NOISE_STD,
-    'movement_penalty': 0.0,
-    'observation_mode': 'physical',
-})
-params['environment_kwargs'].pop('excluded_dates', None)
-params['evaluation_environment_kwargs'] = dict(
-    _stage2.params['evaluation_environment_kwargs'])
-params['evaluation_environment_kwargs'].update({
-    'start_date': '2020-01-01',
-    'end_date': '2020-12-31',
-    'randomize_day': True,
-    'randomize_initial_orientation': True,
-    'weather_source': 'historical',
-    'irradiance_perturbation_std': IRRADIANCE_PERTURBATION_STD,
-    'observation_noise_std': OBSERVATION_NOISE_STD,
-    'movement_penalty': 0.00,
-})
-params['evaluation_environment_kwargs'].pop('fixed_eval_dates', None)
+params = build_nsrdb_params(
+    CONFIG_VERSION,
+    TRAINING_STAGE,
+    algo_kwargs={
+        'n_epochs': 400,
+        'n_initial_exploration_steps': 4000,
+        'real_ratio': 0.50,
+        'discount': 1.0,
+        'max_model_rollout_length': 1,
+        'rollout_schedule': [20, 200, 1, 1],
+        'n_train_repeat': 2,
+        'rollout_batch_size': 200,
+        'num_networks': 5,
+        'num_elites': 3,
+        'save_every_epochs': 10,
+    },
+)

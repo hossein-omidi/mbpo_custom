@@ -202,7 +202,7 @@ def check_eval_dir(eval_dir):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--config-path', default='examples/config/pv_tracking/stage0_single_day_mbpo_paper.py')
+    p.add_argument('--config-path', default='examples/config/pv_tracking/stage3_multiyear_nsrdb_scenario.py')
     p.add_argument('--eval-dir', default=None, help='Optional post-eval check')
     args = p.parse_args()
 

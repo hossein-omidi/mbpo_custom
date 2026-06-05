@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Results for a named run: ./result.sh <run_name> [--plot-only | --eval-only | --full | --status]
 #
-# TMY baseline (conf1/conf2): evaluate_agent.py — annual day MC
-# NSRDB (stage3_nsrdb):       evaluate_fullyear_mc.py --date-set nsrdb_multiyear — scenario MC
+# All NSRDB configs: evaluate_fullyear_mc.py --date-set nsrdb_multiyear — scenario MC
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -11,7 +10,7 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 usage() {
   echo "Usage: $0 <run_name> [--status | --plot-only | --eval-only | --full]"
-  echo "  NSRDB runs (stage3_nsrdb): eval uses --date-set nsrdb_multiyear automatically"
+  echo "  NSRDB runs (stage3_nsrdb, conf1–conf4): eval uses --date-set nsrdb_multiyear automatically"
   exit 1
 }
 
@@ -56,7 +55,8 @@ conf = meta.get('conf', '')
 print('TRIAL=%s' % trial)
 print('CKPT=%s' % ckpt)
 print('CONF=%s' % conf)
-is_nsrdb = 1 if conf == 'stage3_nsrdb' else 0
+from examples.config.pv_tracking.conf_registry import is_nsrdb_conf
+is_nsrdb = 1 if is_nsrdb_conf(conf) else 0
 print('IS_NSRDB=%s' % is_nsrdb)
 if warn:
     import sys as _s

@@ -6,7 +6,7 @@ Does not train a policy — writes a compressed .npz replay for optional BC pret
 Example (Stage 0 single day):
 
   python scripts/collect_sun_demonstrations.py \\
-    --config examples.config.pv_tracking.stage0_single_day \\
+    --config examples.config.pv_tracking.stage3_multiyear_nsrdb_scenario \\
     --out demonstration/pv_stage0_sun.npz \\
     --num-episodes 200
 
@@ -53,7 +53,7 @@ def build_training_env(params):
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--config', default='examples.config.pv_tracking.stage0_single_day',
+    p.add_argument('--config', default='examples.config.pv_tracking.stage3_multiyear_nsrdb_scenario',
                    help='Config module (environment_kwargs used)')
     p.add_argument('--out', required=True, help='Output .npz path')
     p.add_argument('--num-episodes', type=int, default=100)

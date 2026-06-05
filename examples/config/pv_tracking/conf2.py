@@ -1,43 +1,36 @@
-"""conf2 — full-year with conservative MBPO/SAC hyperparameters."""
+"""conf2 — NSRDB slow training (long horizon, conservative MBPO).
 
-import importlib
+Low real_ratio, longer exploration, longer model rollouts — stable but slow.
+Inspired by conservative MBPO schedules (cf. examples/config/ant/0.py).
+"""
 
-from examples.config.pv_tracking._paths import default_log_dir
-from examples.config.pv_tracking.verified_dates import (
-    STAGE3_VALIDATION_DATES,
-    assert_dates_in_historical_catalog,
+from examples.config.pv_tracking._nsrdb_base import (
+    NSRDB_MANIFEST,
+    NSRDB_VALIDATION_SCENARIO_IDS,
+    assert_nsrdb_validation_scenarios,
+    build_nsrdb_params,
 )
 
-_base = importlib.import_module('examples.config.pv_tracking.conf1')
+assert_nsrdb_validation_scenarios(NSRDB_MANIFEST, NSRDB_VALIDATION_SCENARIO_IDS)
 
-assert_dates_in_historical_catalog(STAGE3_VALIDATION_DATES)
-
-CONFIG_VERSION = 'pv_tracking_conf2_fullyear_stable_2026-06'
+CONFIG_VERSION = 'pv_tracking_conf2_nsrdb_slow_2026-06-06'
 TRAINING_STAGE = 'conf2'
 
-params = dict(_base.params)
-params['config_version'] = CONFIG_VERSION
-params['log_dir'] = default_log_dir()
-params['kwargs'] = dict(_base.params['kwargs'])
-params['kwargs'].update({
-    'n_epochs': 200,
-    'n_initial_exploration_steps': 3000,
-    'real_ratio': 0.80,
-    'discount': 1,
-    'target_entropy': 'auto',
-    'min_alpha': 0.01,
-    'n_train_repeat': 20,
-    'model_train_freq': 117,
-    'max_model_rollout_length': 25,
-    'rollout_schedule': [20, 200, 1, 25],
-    'eval_n_episodes': len(STAGE3_VALIDATION_DATES),
-    'q_loss_warning_threshold': 500.0,
-})
-params['environment_kwargs'] = dict(_base.params['environment_kwargs'])
-params['evaluation_environment_kwargs'] = dict(
-    _base.params['evaluation_environment_kwargs'])
-params['evaluation_environment_kwargs'].update({
-    'fixed_eval_dates': list(STAGE3_VALIDATION_DATES),
-    'randomize_day': False,
-    'randomize_initial_orientation': False,
-})
+params = build_nsrdb_params(
+    CONFIG_VERSION,
+    TRAINING_STAGE,
+    algo_kwargs={
+        'n_epochs': 3000,
+        'n_initial_exploration_steps': 15000,
+        'real_ratio': 0.10,
+        'discount': 0.995,
+        'max_model_rollout_length': 5,
+        'rollout_schedule': [30, 400, 1, 5],
+        'n_train_repeat': 15,
+        'rollout_batch_size': 400,
+        'num_networks': 7,
+        'num_elites': 5,
+        'model_retain_epochs': 5,
+        'save_every_epochs': 20,
+    },
+)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Train MBPO-SAC: ./train.sh <run_name> <conf> [--cpus N] [--trial-cpus M] [--verify]
-# Example: ./train.sh run1 conf1 --cpus 4 --trial-cpus 2
-#          ./train.sh smoke1 conf_smoke --cpus 2 --trial-cpus 1
+# Example: ./train.sh run1 conf3 --cpus 4 --trial-cpus 2
+#          ./train.sh run_nsrdb stage3_nsrdb --verify
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -10,8 +10,8 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 usage() {
   echo "Usage: $0 <run_name> <conf> [--cpus N] [--trial-cpus M] [--verify]"
-  echo "  conf: stage3_nsrdb | conf1 | conf2 | conf3 | conf_smoke"
-  echo "        stage3_nsrdb = NSRDB multi-year (main)   conf1/conf2 = legacy PVGIS-TMY"
+  echo "  conf: stage3_nsrdb | conf1 | conf2 | conf3 | conf4"
+  echo "        stage3_nsrdb = main reference   conf1=fast conf2=slow conf3=strong conf4=noisy"
   echo "  list: python -c \"from examples.config.pv_tracking.conf_registry import list_configs; list_configs()\""
   exit 1
 }

@@ -2,39 +2,40 @@
 
 from __future__ import print_function
 
+from examples.config.pv_tracking._nsrdb_base import NSRDB_CONF_NAMES
+
 # name -> (python module, config file basename, one-line description)
 CONFIGS = {
     'stage3_nsrdb': (
         'examples.config.pv_tracking.stage3_multiyear_nsrdb_scenario',
         'stage3_multiyear_nsrdb_scenario.py',
-        'NSRDB multi-year e=(year,day)~p(e), pvlib physics (main recommended)',
+        'NSRDB main reference (stage3_multiyear_nsrdb_scenario)',
     ),
     'conf1': (
         'examples.config.pv_tracking.conf1',
         'conf1.py',
-        'LEGACY: PVGIS-TMY annual day sampling (historical weather)',
+        'NSRDB fast — shorter epochs, light MBPO (parallel run)',
     ),
     'conf2': (
         'examples.config.pv_tracking.conf2',
         'conf2.py',
-        'Full-year with conservative MBPO hyperparameters (stable training)',
+        'NSRDB slow — long run, conservative MBPO (parallel run)',
     ),
     'conf3': (
         'examples.config.pv_tracking.conf3',
         'conf3.py',
-        'Summer historical weather (shorter curriculum / debug)',
-    ),
-    'conf_smoke': (
-        'examples.config.pv_tracking.conf_smoke',
-        'conf_smoke.py',
-        'Short smoke run (model rollouts + remaining_steps audit)',
+        'NSRDB strong — stable MBPO, recommended production (parallel run)',
     ),
     'conf4': (
         'examples.config.pv_tracking.conf4',
         'conf4.py',
-        'Full-year random environment + alternative hyperparams (parallel to conf3)',
+        'NSRDB noisy — irradiance/obs augmentation (parallel run)',
     ),
 }
+
+
+def is_nsrdb_conf(name):
+    return (name or '').strip() in NSRDB_CONF_NAMES
 
 
 def resolve_conf(name):
@@ -48,5 +49,5 @@ def resolve_conf(name):
 
 def list_configs():
     for name, (module, path, desc) in sorted(CONFIGS.items()):
-        print('  %-10s  %s' % (name, desc))
-        print('             module=%s' % module)
+        print('  %-12s  %s' % (name, desc))
+        print('               module=%s' % module)
