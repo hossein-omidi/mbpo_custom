@@ -1,7 +1,7 @@
-"""conf2 — NSRDB slow training (long horizon, conservative MBPO).
+"""conf2 — NSRDB slow (stage3 base + longer run and exploration).
 
-Low real_ratio, longer exploration, longer model rollouts — stable but slow.
-Inspired by conservative MBPO schedules (cf. examples/config/ant/0.py).
+Anchored to stage3_multiyear_nsrdb_scenario: real_ratio=0.75, rollout length 1.
+Variant: more epochs, longer initial exploration, longer model retention.
 """
 
 from examples.config.pv_tracking._nsrdb_base import (
@@ -13,24 +13,20 @@ from examples.config.pv_tracking._nsrdb_base import (
 
 assert_nsrdb_validation_scenarios(NSRDB_MANIFEST, NSRDB_VALIDATION_SCENARIO_IDS)
 
-CONFIG_VERSION = 'pv_tracking_conf2_nsrdb_slow_2026-06-06'
+CONFIG_VERSION = 'pv_tracking_conf2_nsrdb_slow_2026-06-07'
 TRAINING_STAGE = 'conf2'
 
 params = build_nsrdb_params(
     CONFIG_VERSION,
     TRAINING_STAGE,
     algo_kwargs={
-        'n_epochs': 3000,
-        'n_initial_exploration_steps': 15000,
-        'real_ratio': 0.10,
-        'discount': 0.995,
-        'max_model_rollout_length': 5,
-        'rollout_schedule': [30, 400, 1, 5],
-        'n_train_repeat': 15,
-        'rollout_batch_size': 400,
-        'num_networks': 7,
-        'num_elites': 5,
-        'model_retain_epochs': 5,
-        'save_every_epochs': 20,
+        'n_epochs': 4000,
+        'n_initial_exploration_steps': 12000,
+        'real_ratio': 0.75,
+        'discount': 1.0,
+        'max_model_rollout_length': 1,
+        'rollout_schedule': [30, 400, 1, 1],
+        'n_train_repeat': 2,
+        'model_retain_epochs': 7,
     },
 )
