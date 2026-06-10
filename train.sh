@@ -10,8 +10,8 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 usage() {
   echo "Usage: $0 <run_name> <conf> [--cpus N] [--trial-cpus M] [--verify]"
-  echo "  conf: stage3_nsrdb | conf1 | conf2 | conf3 | conf4"
-  echo "        stage3_nsrdb = main reference   conf1=fast conf2=slow conf3=strong conf4=noisy"
+  echo "  conf: stage3_nsrdb | conf1 | conf2 | conf3 | conf4 | conf5"
+  echo "        stage3_nsrdb = main reference   conf1=fast conf2=slow conf3=strong conf4=noisy conf5=advanced"
   echo "  list: python -c \"from examples.config.pv_tracking.conf_registry import list_configs; list_configs()\""
   exit 1
 }

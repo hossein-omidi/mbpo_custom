@@ -31,6 +31,11 @@ CONFIGS = {
         'conf4.py',
         'NSRDB noisy — irradiance/obs augmentation (parallel run)',
     ),
+    'conf5': (
+        'examples.config.pv_tracking.conf5',
+        'conf5.py',
+        'NSRDB advanced — deep SAC + wide BNN, high real_ratio (A/B vs conf3)',
+    ),
 }
 
 

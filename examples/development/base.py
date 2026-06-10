@@ -177,6 +177,9 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
             ['training']
         ))
 
+    config_policy_params = getattr(env_params, 'policy_params', None)
+    config_q_params = getattr(env_params, 'Q_params', None)
+
     variant_spec = {
         'git_sha': get_git_rev(),
 
@@ -237,6 +240,17 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
             'checkpoint_replay_pool': False,
         },
     }
+
+    if config_policy_params:
+        variant_spec['policy_params'] = deep_update(
+            variant_spec['policy_params'],
+            dict(config_policy_params),
+        )
+    if config_q_params:
+        variant_spec['Q_params'] = deep_update(
+            variant_spec['Q_params'],
+            dict(config_q_params),
+        )
 
     return variant_spec
 

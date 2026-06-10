@@ -10,7 +10,7 @@ CONDA_ENV_NAME="${CONDA_ENV_NAME:-mbpo}"
 
 usage() {
   echo "Usage: $0 <run_name> [--status | --plot-only | --eval-only | --full]"
-  echo "  NSRDB runs (stage3_nsrdb, conf1–conf4): eval uses --date-set nsrdb_multiyear automatically"
+  echo "  NSRDB runs (stage3_nsrdb, conf1–conf5): eval uses --date-set nsrdb_multiyear automatically"
   exit 1
 }
 

@@ -24,7 +24,7 @@ NSRDB_VALIDATION_SCENARIO_IDS = [
 ]
 
 NSRDB_CONF_NAMES = frozenset({
-    'stage3_nsrdb', 'conf1', 'conf2', 'conf3', 'conf4',
+    'stage3_nsrdb', 'conf1', 'conf2', 'conf3', 'conf4', 'conf5',
 })
 
 
@@ -123,7 +123,9 @@ def build_nsrdb_params(
         training_stage,
         algo_kwargs=None,
         train_env_kwargs=None,
-        eval_env_kwargs=None):
+        eval_env_kwargs=None,
+        policy_params_kwargs=None,
+        q_params_kwargs=None):
     """Assemble full params dict for NSRDB training."""
     params = dict(_base.params)
     params['config_version'] = config_version
@@ -133,4 +135,8 @@ def build_nsrdb_params(
     params['environment_kwargs'] = nsrdb_environment_kwargs(**(train_env_kwargs or {}))
     params['evaluation_environment_kwargs'] = nsrdb_evaluation_environment_kwargs(
         **(eval_env_kwargs or {}))
+    if policy_params_kwargs:
+        params['policy_params'] = {'kwargs': dict(policy_params_kwargs)}
+    if q_params_kwargs:
+        params['Q_params'] = {'kwargs': dict(q_params_kwargs)}
     return params
