@@ -343,9 +343,14 @@ def scenario_episode_date(scenario, tz=DEFAULT_TZ):
     )
 
 
+def scenario_source_year(scenario):
+    """NSRDB data-file year for a manifest row (may differ from label year)."""
+    return int(scenario.get('source_year', scenario['year']))
+
+
 def scenario_id(scenario):
     return scenario.get('scenario_id') or scenario.get('id') or '{year}-{month:02d}-{day:02d}'.format(
-        year=int(scenario.get('source_year', scenario['year'])),
+        year=scenario_source_year(scenario),
         month=int(scenario['month']),
         day=int(scenario['day']),
     )
@@ -432,6 +437,34 @@ def index_scenarios(manifest):
         key = (int(s['month']), int(s['day']))
         by_mday.setdefault(key, []).append(s)
     return scenarios, by_id, by_mday
+
+
+def scenario_row_weight(scenario):
+    """Per-scenario sampling weight from manifest row, if present."""
+    for key in ('probability', 'weight', 'sample_weight'):
+        if key in scenario and scenario[key] is not None:
+            try:
+                value = float(scenario[key])
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value) and value >= 0.0:
+                return value
+    return 1.0
+
+
+def normalized_scenario_probabilities(scenarios):
+    """Empirical scenario distribution p(e_i) = w_i / sum_j w_j; uniform if no weights."""
+    if not scenarios:
+        return np.array([], dtype=np.float64)
+    weights = np.array(
+        [scenario_row_weight(s) for s in scenarios], dtype=np.float64)
+    weights = np.maximum(weights, 0.0)
+    total = float(weights.sum())
+    if not np.isfinite(total) or total <= 0.0:
+        weights = np.ones(len(scenarios), dtype=np.float64)
+        total = float(len(scenarios))
+    probs = weights / total
+    return probs / probs.sum()
 
 
 def allowed_month_days(start_date, end_date, tz=DEFAULT_TZ):

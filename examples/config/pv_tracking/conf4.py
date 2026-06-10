@@ -16,8 +16,8 @@ assert_nsrdb_validation_scenarios(NSRDB_MANIFEST, NSRDB_VALIDATION_SCENARIO_IDS)
 CONFIG_VERSION = 'pv_tracking_conf4_nsrdb_noisy_2026-06-07'
 TRAINING_STAGE = 'conf4'
 
-IRRADIANCE_PERTURBATION_STD = 0.03
-OBSERVATION_NOISE_STD = 0.01
+IRRADIANCE_PERTURBATION_STD = 0
+OBSERVATION_NOISE_STD = 0
 
 params = build_nsrdb_params(
     CONFIG_VERSION,
@@ -27,9 +27,10 @@ params = build_nsrdb_params(
         'n_initial_exploration_steps': 10000,
         'real_ratio': 0.75,
         'discount': 1.0,
+        'rollout_batch_size': 700,
         'max_model_rollout_length': 1,
         'rollout_schedule': [30, 400, 1, 1],
-        'n_train_repeat': 3,
+        'n_train_repeat': 20,
     },
     train_env_kwargs={
         'irradiance_perturbation_std': IRRADIANCE_PERTURBATION_STD,

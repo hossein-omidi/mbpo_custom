@@ -157,25 +157,38 @@ def load_csv(path):
     return rows
 
 
+def _rollout_csv_sort_key(path):
+    import re
+    base = os.path.basename(path)
+    m = re.search(r'_(\d+)\.csv$', base)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'(\d+)\.csv$', base)
+    return int(m.group(1)) if m else base
+
+
 def find_rollouts(root, subpath):
     pattern = os.path.join(root, subpath, '*.csv')
-    return sorted(glob.glob(pattern))
+    return sorted(glob.glob(pattern), key=_rollout_csv_sort_key)
 
 
 def pair_rollouts_by_date(learned_paths, baseline_paths):
-    """Pair rollouts by (date, rollout_seed) when available, else by date."""
+    """Pair rollouts by (scenario_id or date, rollout_seed) when available."""
     def key_of(path):
         rows = load_csv(path)
         if not rows:
             return None
-        date = rows[0].get('date')
-        seed = rows[0].get('rollout_seed')
+        row0 = rows[0]
+        sid = row0.get('scenario_id')
+        date = row0.get('date')
+        seed = row0.get('rollout_seed')
+        episode_key = sid if sid not in (None, '') else date
         try:
             if seed not in (None, '') and np.isfinite(float(seed)):
-                return (date, int(float(seed)))
+                return (episode_key, int(float(seed)))
         except (TypeError, ValueError):
             pass
-        return (date, None)
+        return (episode_key, None)
 
     baseline_by_key = {}
     for p in baseline_paths:
@@ -422,13 +435,23 @@ def verify_paired_fairness(learned_rows, baseline_rows, movement_penalty=None):
 
     mismatches = 0
     for i, (l, b) in enumerate(zip(learned_rows, baseline_rows)):
-        if l.get('date') != b.get('date') or l.get('weather_condition') != b.get('weather_condition'):
+        if l.get('date') != b.get('date'):
+            mismatches += 1
+            continue
+        if (l.get('scenario_id') and b.get('scenario_id')
+                and l.get('scenario_id') != b.get('scenario_id')):
+            mismatches += 1
+            continue
+        if l.get('weather_condition') != b.get('weather_condition'):
             mismatches += 1
     if mismatches:
         ok = False
-        lines.append('FAIL: date/weather mismatch on %d / %d steps' % (mismatches, len(learned_rows)))
+        lines.append('FAIL: date/scenario/weather mismatch on %d / %d steps' % (
+            mismatches, len(learned_rows)))
     else:
-        lines.append('OK: identical date and weather_condition at every step (matched seed + env kwargs).')
+        lines.append(
+            'OK: identical date, scenario_id (when present), and weather_condition '
+            'at every step (matched seed + env kwargs).')
 
     for label, rows in (('learned', learned_rows), ('baseline', baseline_rows)):
         bad_rew = 0
@@ -965,6 +988,10 @@ def _run_diagnosis(args):
 
     eval_summary = load_evaluation_summary(args.eval_dir)
     movement_penalty = load_eval_movement_penalty(args.eval_dir)
+    if movement_penalty is None and args.trial_dir:
+        train_penalty = load_training_params(trial_dir=args.trial_dir).get('movement_penalty')
+        if train_penalty is not None:
+            movement_penalty = float(train_penalty)
     eval_deterministic = load_eval_deterministic(args.eval_dir)
 
     if pairs:
@@ -999,9 +1026,12 @@ def _run_diagnosis(args):
 
     max_plot_days = max(0, int(getattr(args, 'max_paired_plot_days', 6)))
     if max_plot_days > 0 and len(pairs) > max_plot_days:
-        plot_pair_indices = set(
-            int(round(i * (len(pairs) - 1) / float(max_plot_days - 1)))
-            for i in range(max_plot_days))
+        if max_plot_days == 1:
+            plot_pair_indices = {0}
+        else:
+            plot_pair_indices = set(
+                int(round(i * (len(pairs) - 1) / float(max_plot_days - 1)))
+                for i in range(max_plot_days))
     else:
         plot_pair_indices = set(range(len(pairs)))
 
@@ -1016,7 +1046,7 @@ def _run_diagnosis(args):
         if lrows and lrows[0].get('weather_condition') == 'clear':
             clear_day_pairs.append((lrows, srows, tag))
 
-        if plot_pair_index < len(plot_pair_indices):
+        if plot_pair_index in plot_pair_indices:
             plot_all_tracking_diagnostics(
                 lrows, srows, tag, plot_dir, movement_penalty=movement_penalty)
 
@@ -1080,16 +1110,24 @@ def _run_diagnosis(args):
     sections.append(('Aligned learned vs sun_tracking', agg_lines))
 
     if fixed_paths:
-        for fp in fixed_paths[:len(learned_paths)]:
-            fixed_summaries.append(summarize_trajectory(load_csv(fp), 'fixed'))
+        fixed_pairs = pair_rollouts_by_date(learned_paths, fixed_paths)
+        if fixed_pairs:
+            for _lp, fp, _tag in fixed_pairs:
+                fixed_summaries.append(summarize_trajectory(load_csv(fp), 'fixed'))
+        else:
+            n = min(len(learned_paths), len(fixed_paths))
+            for i in range(n):
+                fixed_summaries.append(
+                    summarize_trajectory(load_csv(fixed_paths[i]), 'fixed'))
         fixed_move = _mean('total_movement_cost', fixed_summaries)
+        learned_net = _mean('total_net_reward_kwh', learned_summaries)
+        fixed_gross = _mean('total_energy_kwh', fixed_summaries)
         sections.append(('Learned vs fixed_no_motion (energy)', [
-            'mean energy learned: %.4f kWh' % _mean('total_energy_kwh', learned_summaries),
-            'mean energy fixed:   %.4f kWh' % _mean('total_energy_kwh', fixed_summaries),
+            'mean net return learned: %.4f kWh (sum rewards)' % learned_net,
+            'mean gross energy fixed: %.4f kWh (movement_cost≈0)' % fixed_gross,
             'mean movement fixed: %.6f (expect ~0: action=0, frozen at reset pose)' % fixed_move,
-            'PASS beats fixed' if _mean('total_energy_kwh', learned_summaries) > _mean(
-                'total_energy_kwh', fixed_summaries) else
-            'FAIL: learned below fixed — wrong tracking, not just vs sun tracker',
+            'PASS beats fixed (net vs gross)' if learned_net > fixed_gross else
+            'FAIL: learned net below fixed gross — wrong tracking, not just vs sun tracker',
         ]))
 
     if clear_day_pairs:
@@ -1104,23 +1142,31 @@ def _run_diagnosis(args):
             'On clear days, learned should approach sun tracker if action magnitude were sufficient.',
         ]))
 
-    # Season comparison from available dates
-    summer_dates = [d.strip() for d in args.summer_dates.split(',') if d.strip()]
-    dec_energy = []
-    summer_energy = []
-    for s in learned_summaries:
-        d = s.get('date', '')
-        if d.startswith('2020-12'):
-            dec_energy.append(s['total_energy_kwh'])
-        elif any(d == sd for sd in summer_dates):
-            summer_energy.append(s['total_energy_kwh'])
-    if dec_energy:
-        sections.append(('Season check (learned rollouts in this eval dir)', [
-            'December mean energy: %.4f kWh (n=%d)' % (np.mean(dec_energy), len(dec_energy)),
-            'Summer mean energy:   %s' % (
-                '%.4f kWh (n=%d)' % (np.mean(summer_energy), len(summer_energy))
-                if summer_energy else 'no summer-date rollouts in this eval dir — re-run eval with June dates'),
+    sample_rows = load_csv(learned_paths[0])
+    is_nsrdb_eval = bool(
+        sample_rows and sample_rows[0].get('weather_source') == 'nsrdb_multiyear')
+    if is_nsrdb_eval:
+        sections.append(('Season check (NSRDB multiyear MC)', [
+            'Skipped fixed 2020 calendar spot-check (not applicable to scenario MC).',
+            'Use evaluation/season_energy_yield_mc_*.png and mc_records.json for season stats.',
         ]))
+    else:
+        summer_dates = [d.strip() for d in args.summer_dates.split(',') if d.strip()]
+        dec_energy = []
+        summer_energy = []
+        for s in learned_summaries:
+            d = s.get('date', '')
+            if d.startswith('2020-12'):
+                dec_energy.append(s['total_energy_kwh'])
+            elif any(d == sd for sd in summer_dates):
+                summer_energy.append(s['total_energy_kwh'])
+        if dec_energy:
+            sections.append(('Season check (learned rollouts in this eval dir)', [
+                'December mean energy: %.4f kWh (n=%d)' % (np.mean(dec_energy), len(dec_energy)),
+                'Summer mean energy:   %s' % (
+                    '%.4f kWh (n=%d)' % (np.mean(summer_energy), len(summer_energy))
+                    if summer_energy else 'no summer-date rollouts in this eval dir — re-run eval with June dates'),
+            ]))
 
     training_params = load_training_params(trial_dir=args.trial_dir)
     eval_config = eval_summary.get('eval_config') or {}

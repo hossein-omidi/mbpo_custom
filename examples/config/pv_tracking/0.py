@@ -43,7 +43,10 @@ params = {
         'max_model_rollout_length': 5,
         'target_entropy': 'auto',
         'rollout_schedule': [30, 400, 1, 5],
-        'save_every_epochs': 5,
+        # latest_checkpoint cadence (Ray Tune also writes checkpoint_* every
+        # checkpoint_frequency epochs). TF saves omit the meta graph so long
+        # runs are not limited by the ~2GiB GraphDef protobuf cap.
+        'save_every_epochs': 30,
         'early_stop_patience': None,
         'monitor_metric': 'evaluation/return-average',
         'q_loss_warning_threshold': 500.0,

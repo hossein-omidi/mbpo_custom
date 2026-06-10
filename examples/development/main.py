@@ -153,10 +153,45 @@ class ExperimentRunner(tune.Trainable):
         return os.path.join(checkpoint_dir, 'replay_pool.pkl')
 
     def _tf_checkpoint_prefix(self, checkpoint_dir):
-        return os.path.join(checkpoint_dir, 'checkpoint')
+        return os.path.join(checkpoint_dir, 'tf_checkpoint')
 
     def _get_tf_saver(self):
         return tf.train.Saver()
+
+    def _latest_tf_checkpoint(self, checkpoint_dir):
+        """Return the newest tf_checkpoint-* prefix under checkpoint_dir."""
+        return tf.train.latest_checkpoint(checkpoint_dir)
+
+    def _save_tf_session_checkpoint(self, checkpoint_dir):
+        """Save TF variable values without exporting the full GraphDef.
+
+        MBPO/SAC graphs accumulate many static ops over training. Serializing
+        the meta graph (``write_meta_graph=True``) can exceed TensorFlow's ~2GiB
+        protobuf limit and crash Ray Tune around epoch ~600. Restore always
+        rebuilds the graph from the variant and only needs .index/.data files.
+        """
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        tf_save_path = self._tf_checkpoint_prefix(checkpoint_dir)
+        saver = self._get_tf_saver()
+        saver.save(
+            self._session,
+            tf_save_path,
+            write_meta_graph=False,
+            write_state=True,
+        )
+        return tf_save_path
+
+    def _restore_tf_session_checkpoint(self, checkpoint_dir):
+        tf_ckpt = self._latest_tf_checkpoint(checkpoint_dir)
+        if not tf_ckpt:
+            print(
+                '[ ExperimentRunner ] Warning: no tf_checkpoint weights in {}. '
+                'Policy weights in checkpoint.pkl may still be usable for eval.'.format(
+                    checkpoint_dir))
+            return False
+        saver = self._get_tf_saver()
+        saver.restore(self._session, tf_ckpt)
+        return True
 
     @property
     def picklables(self):
@@ -201,10 +236,7 @@ class ExperimentRunner(tune.Trainable):
             except Exception as e:
                 print('[ ExperimentRunner ] Warning: failed to save algorithm model: {}'.format(e))
 
-        saver = self._get_tf_saver()
-        # Use a distinct prefix for tf saver files to avoid name collisions
-        tf_save_path = os.path.join(checkpoint_dir, 'tf_checkpoint')
-        saver.save(self._session, tf_save_path)
+        self._save_tf_session_checkpoint(checkpoint_dir)
 
         return os.path.join(checkpoint_dir, '')
 
@@ -279,9 +311,7 @@ class ExperimentRunner(tune.Trainable):
             session=self._session)
         self.algorithm.__setstate__(picklable['algorithm'].__getstate__())
 
-        saver = self._get_tf_saver()
-        saver.restore(self._session, tf.train.latest_checkpoint(
-            os.path.split(self._tf_checkpoint_prefix(checkpoint_dir))[0]))
+        self._restore_tf_session_checkpoint(checkpoint_dir)
         initialize_tf_variables(self._session, only_uninitialized=True)
 
         # TODO(hartikainen): target Qs should either be checkpointed or pickled.

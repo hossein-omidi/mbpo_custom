@@ -121,7 +121,8 @@ do_eval_nsrdb() {
     --max-path-length 117 \
     --max-rollout-plots 4 \
     --eval-protocol inherit \
-    --policy-mode deterministic
+    --policy-mode deterministic \
+    --vary-init-orientation
 }
 
 do_eval() {
@@ -157,7 +158,7 @@ echo ""
 echo "Results folder: $RESULTS"
 echo "  training/     learning curves (E[R] ± σ from progress.csv)"
 if [[ "${IS_NSRDB:-0}" -eq 1 ]]; then
-  echo "  evaluation/   NSRDB scenario MC: paper_figures/, rollout_plots/, mc_records.json"
+  echo "  evaluation/   NSRDB scenario MC: PAIRED_MC_COMPARISON.txt, paper_figures/, rollout_plots/, mc_records.json"
 else
   echo "  evaluation/   TMY annual MC: PAIRED_MC_COMPARISON.txt, paper_figures/, evaluation_summary.txt"
 fi

@@ -1107,7 +1107,9 @@ def write_paired_mc_comparison_report(outdir, paths_by_name, eval_mode='mc', err
             for method in sorted(paths_by_name.keys()):
                 if method in row:
                     meta = get_rollout_metadata(row[method])
-                    parts.append('%s=%.4f' % (method, meta['total_energy_kwh']))
+                    net_kwh = float(np.sum(row[method].get('rewards', [])))
+                    parts.append('%s_net=%.4f gross=%.4f' % (
+                        method, net_kwh, meta['total_energy_kwh']))
             f.write('  %s\n' % ' | '.join(parts))
 
         f.write('\npvlib consistency (spot-check first 10 steps per method):\n')
@@ -1455,6 +1457,7 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
             'tilt_deg', 'azimuth_deg',
             'solar_zenith_deg', 'solar_azimuth_deg', 'solar_altitude_deg',
             'date', 'season', 'weather_condition', 'weather_source',
+            'scenario_id', 'scenario_year',
             'action_tilt', 'action_azimuth',
         ]
         obs_labels = pv_obs_labels_for_vector(
@@ -1489,6 +1492,8 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
                 info.get('season', ''),
                 info.get('weather_condition', ''),
                 info.get('weather_source', ''),
+                info.get('scenario_id', ''),
+                info.get('scenario_year', ''),
                 float(actions[t][0]) if actions.ndim == 2 else actions[t],
                 float(actions[t][1]) if actions.ndim == 2 else '',
             ]

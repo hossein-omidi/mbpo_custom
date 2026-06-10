@@ -80,6 +80,24 @@ NSRDB_METHODS = METHODS + ('poa_greedy_oracle',)
 BASELINE_METHODS = ('sun_tracking', 'fixed_no_motion')
 
 
+def _record_net_energy_kwh(record):
+    """Net episode return (kWh) for method comparison plots and ratios."""
+    if record.get('net_energy_kwh') is not None:
+        return float(record['net_energy_kwh'])
+    if record.get('reward') is not None:
+        return float(record['reward'])
+    return float(record.get('energy_kwh', 0.0))
+
+
+def _record_pair_key(record):
+    """Pair learned vs baseline on the same MC episode."""
+    return (
+        record.get('scenario_id') or record.get('date'),
+        record.get('seed'),
+        record.get('replicate', 0),
+    )
+
+
 def parse_dates_arg(date_str):
     return [d.strip() for d in date_str.split(',') if d.strip()]
 
@@ -90,7 +108,7 @@ def resolve_date_set(name, custom_dates):
     if name in ('final_test', 'stress_test'):
         return list(STAGE3_FINAL_TEST_DATES)
     if name in ('holdout',):
-        return list(STAGE3_STRESS_TEST_DATES)
+        return list(STAGE3_HOLDOUT_DATES)
     if name in ('annual', 'nsrdb_multiyear'):
         return None
     raise ValueError('Unknown date-set %r' % name)
@@ -183,7 +201,7 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
         means = []
         errs = []
         for season in seasons:
-            vals = [r['energy_kwh'] for r in records
+            vals = [_record_net_energy_kwh(r) for r in records
                     if r.get('season_calendar', r.get('season')) == season
                     and r['method'] == method]
             means.append(float(np.mean(vals)) if vals else np.nan)
@@ -195,8 +213,8 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
 
     ax.set_xticks(x)
     ax.set_xticklabels(seasons)
-    ax.set_ylabel('Daily energy yield (kWh)')
-    ax.set_title('Energy yield by calendar season and tracker%s\n(error bars = %s across MC episodes)' % (
+    ax.set_ylabel('Net daily energy (kWh, sum of rewards)')
+    ax.set_title('Net energy yield by calendar season and tracker%s\n(error bars = %s across MC episodes)' % (
         title_suffix, error))
     ax.legend(loc='best')
     ax.grid(axis='y', linestyle='--', alpha=0.35)
@@ -280,11 +298,11 @@ def plot_season_ratio_bars(outdir, records, baseline='sun_tracking', error='sem'
                 continue
             b = [x for x in records
                  if x['method'] == baseline
-                 and x.get('date') == r.get('date')
-                 and x.get('replicate', 0) == r.get('replicate', 0)
-                 and x.get('seed') == r.get('seed')]
-            if b and b[0]['energy_kwh'] > 0:
-                ratios_by_season[season].append(r['energy_kwh'] / b[0]['energy_kwh'])
+                 and _record_pair_key(x) == _record_pair_key(r)]
+            b_net = _record_net_energy_kwh(b[0]) if b else 0.0
+            r_net = _record_net_energy_kwh(r)
+            if b and b_net > 0:
+                ratios_by_season[season].append(r_net / b_net)
 
     x = np.arange(len(seasons))
     means = [float(np.mean(ratios_by_season[s])) if ratios_by_season[s] else np.nan
@@ -296,7 +314,7 @@ def plot_season_ratio_bars(outdir, records, baseline='sun_tracking', error='sem'
     ax.axhline(1.0, color='#2ca02c', linestyle='--', lw=1.5, label='sun tracker parity')
     ax.set_xticks(x)
     ax.set_xticklabels(seasons)
-    ax.set_ylabel('Energy ratio (learned / %s)' % baseline.replace('_', ' '))
+    ax.set_ylabel('Net energy ratio (learned / %s)' % baseline.replace('_', ' '))
     ax.set_title('Relative yield vs %s by season' % baseline.replace('_', ' '))
     ax.legend()
     ax.grid(axis='y', linestyle='--', alpha=0.35)
@@ -649,18 +667,17 @@ def main():
         is_stress=is_stress,
     )
 
-    if args.run_standard_eval:
-        save_summary(
-            args.outdir, checkpoint_path,
-            aligned_by_method['learned_policy'],
-            deterministic=not policy_stochastic,
-            max_path_length=path_length,
-            eval_env_params=eval_env_params,
-            baseline_paths_by_name={
-                'sun_tracking': aligned_by_method['sun_tracking'],
-                'fixed_no_motion': aligned_by_method['fixed_no_motion'],
-            },
-            report_by_season=True)
+    save_summary(
+        args.outdir, checkpoint_path,
+        aligned_by_method['learned_policy'],
+        deterministic=not policy_stochastic,
+        max_path_length=path_length,
+        eval_env_params=eval_env_params,
+        baseline_paths_by_name={
+            'sun_tracking': aligned_by_method['sun_tracking'],
+            'fixed_no_motion': aligned_by_method['fixed_no_motion'],
+        },
+        report_by_season=True)
 
     if not args.no_pdf:
         pdf_path = os.path.join(args.outdir, 'mc_dashboard.pdf')

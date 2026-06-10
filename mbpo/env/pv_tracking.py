@@ -24,8 +24,10 @@ from .nsrdb_weather import (
     filter_scenarios_by_date_range,
     index_scenarios,
     load_scenario_manifest,
+    normalized_scenario_probabilities,
     scenario_episode_date,
     scenario_id,
+    scenario_source_year,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,6 +101,14 @@ DEFAULT_END_HOUR = DEFAULT_START_HOUR + (DEFAULT_PERIODS - 1) * DEFAULT_STEP_HOU
 
 
 class PVTrackingEnv(gym.Env):
+    """RL scenario-sampling environment for single-day PV tracking episodes.
+
+    Stochasticity is confined to ``reset()``: one historical day/scenario is drawn
+    from the dataset (uniformly or via manifest weights). Within an episode the
+    exogenous weather trajectory is fixed and deterministic conditional on that draw.
+    Optional ``irradiance_perturbation_std`` / ``observation_noise_std`` apply
+    episode-level augmentation at reset only (not per control step).
+    """
     metadata = {'render.modes': ['human']}
 
     def __init__(
@@ -205,6 +215,8 @@ class PVTrackingEnv(gym.Env):
         self._nsrdb_scenarios = []
         self._nsrdb_by_id = {}
         self._nsrdb_by_mday = {}
+        self._nsrdb_scenario_probs = None
+        self._episode_obs_noise = None
         self.fixed_eval_scenarios = None
         self._fixed_eval_scenario_index = 0
         if fixed_eval_scenarios is not None:
@@ -267,9 +279,12 @@ class PVTrackingEnv(gym.Env):
             self._nsrdb_manifest = manifest
             self._nsrdb_year_cache = NsrdbYearCache(manifest)
             self._nsrdb_scenarios = scenarios
+            self._nsrdb_scenario_probs = normalized_scenario_probabilities(scenarios)
             self._nsrdb_by_id = by_id
             self._nsrdb_by_mday = {
-                k: [s for s in v if s in scenarios]
+                k: sorted(
+                    [s for s in v if s in scenarios],
+                    key=scenario_id)
                 for k, v in by_mday.items()
             }
             if self.fixed_eval_scenarios:
@@ -384,7 +399,7 @@ class PVTrackingEnv(gym.Env):
         elif self.weather_source == 'nsrdb_multiyear':
             if self._current_scenario is None:
                 raise RuntimeError('NSRDB scenario not set before _build_weather_profile')
-            year = int(self._current_scenario['year'])
+            year = scenario_source_year(self._current_scenario)
             year_weather = self._nsrdb_year_cache.get_year(year)
             weather = build_weather_profile_from_scenario(
                 self.location, times, year_weather, self._current_scenario)
@@ -412,40 +427,66 @@ class PVTrackingEnv(gym.Env):
             sid = self.fixed_eval_scenarios[index]
             return self._nsrdb_by_id[sid]
         if self.randomize_scenario or not self.randomize_day:
-            index = self.np_random.randint(len(self._nsrdb_scenarios))
+            index = int(self.np_random.choice(
+                len(self._nsrdb_scenarios), p=self._nsrdb_scenario_probs))
             return self._nsrdb_scenarios[index]
-        # randomize_day: pick calendar day then uniform over years with that month/day.
+        # randomize_day: pick calendar day, then uniform over years with that month/day.
         index = self.np_random.randint(len(self.start_dates))
         m = int(self.start_dates[index].month)
         d = int(self.start_dates[index].day)
         pool = self._nsrdb_by_mday.get((m, d), [])
         if not pool:
-            index = self.np_random.randint(len(self._nsrdb_scenarios))
+            index = int(self.np_random.choice(
+                len(self._nsrdb_scenarios), p=self._nsrdb_scenario_probs))
             return self._nsrdb_scenarios[index]
         return pool[self.np_random.randint(len(pool))]
 
-    def _apply_episode_weather_stochasticity(self):
-        """Optional bounded irradiance augmentation (not intra-day cloud dynamics).
+    def _resolve_nsrdb_scenario_for_date(self, date):
+        """Deterministic scenario for a calendar date (no pool resampling at reset)."""
+        ts = pd.Timestamp(date, tz=self.location.tz)
+        pool = self._nsrdb_by_mday.get(
+            (int(ts.month), int(ts.day)), self._nsrdb_scenarios)
+        pool = sorted(pool, key=scenario_id)
+        manifest_years = {scenario_source_year(s) for s in self._nsrdb_scenarios}
+        if int(ts.year) in manifest_years:
+            by_year = [s for s in pool if scenario_source_year(s) == int(ts.year)]
+            if by_year:
+                return by_year[0]
+        return pool[0]
 
-        When irradiance_perturbation_std > 0, applies one episode-level lognormal scale
-        to the catalog dni/dhi/ghi series. Default 0.0: weather(d) is fixed for the day;
-        pvlib remains the deterministic physics map from that trajectory.
+    def _apply_episode_weather_stochasticity(self):
+        """Optional episode-level irradiance scale (one draw at reset, not per step).
+
+        Default 0.0: weather(d) is fixed for the day; pvlib maps that trajectory
+        deterministically. When > 0, a single lognormal scale is applied to the
+        whole day's dni/dhi/ghi series.
         """
         if self.irradiance_perturbation_std <= 0.0:
             return
+        scale = float(self.np_random.lognormal(
+            mean=0.0, sigma=self.irradiance_perturbation_std))
         for col in ('dni', 'dhi', 'ghi'):
-            scale = self.np_random.lognormal(
-                mean=0.0,
-                sigma=self.irradiance_perturbation_std,
-                size=len(self.weather_profile))
             self.weather_profile[col] = np.maximum(
                 self.weather_profile[col].values * scale, 0.0)
 
-    def _maybe_noise_observation(self, obs):
+    def _prepare_episode_observation_noise(self):
+        """Pre-sample observation noise for every timestep at reset (not each step)."""
         if self.observation_noise_std <= 0.0:
+            self._episode_obs_noise = None
+            return
+        obs_dim = int(self.observation_space.shape[0])
+        self._episode_obs_noise = self.np_random.normal(
+            0.0,
+            self.observation_noise_std,
+            size=(len(self.times), obs_dim),
+        ).astype(np.float32)
+
+    def _maybe_noise_observation(self, obs, step_index=None):
+        if self.observation_noise_std <= 0.0 or self._episode_obs_noise is None:
             return obs
-        noise = self.np_random.normal(
-            0.0, self.observation_noise_std, size=obs.shape).astype(np.float32)
+        idx = int(self.step_index if step_index is None else step_index)
+        idx = min(max(idx, 0), len(self._episode_obs_noise) - 1)
+        noise = self._episode_obs_noise[idx]
         return np.clip(
             obs + noise,
             self.observation_space.low,
@@ -580,20 +621,17 @@ class PVTrackingEnv(gym.Env):
             )
         return obs
 
-    def reset(self, date=None):
+    def reset(self, date=None, scenario_id=None):
         self.step_index = 0
+        self._episode_obs_noise = None
         if self.weather_source == 'nsrdb_multiyear':
-            if date is not None:
-                ts = pd.Timestamp(date, tz=self.location.tz)
-                pool = self._nsrdb_by_mday.get(
-                    (int(ts.month), int(ts.day)), self._nsrdb_scenarios)
-                manifest_years = {int(s['year']) for s in self._nsrdb_scenarios}
-                if int(ts.year) in manifest_years:
-                    by_year = [s for s in pool if int(s['year']) == int(ts.year)]
-                    pool = by_year or pool
-                self._current_scenario = (
-                    pool[0] if len(pool) == 1
-                    else pool[self.np_random.randint(len(pool))])
+            if scenario_id is not None:
+                if scenario_id not in self._nsrdb_by_id:
+                    raise ValueError(
+                        'Unknown scenario_id {!r} for NSRDB manifest'.format(scenario_id))
+                self._current_scenario = self._nsrdb_by_id[scenario_id]
+            elif date is not None:
+                self._current_scenario = self._resolve_nsrdb_scenario_for_date(date)
             else:
                 self._current_scenario = self._select_nsrdb_scenario()
             self.current_date = scenario_episode_date(
@@ -621,6 +659,7 @@ class PVTrackingEnv(gym.Env):
         self.times = self._build_times(self.current_date)
         self.weather_profile = self._build_weather_profile(self.times)
         self._apply_episode_weather_stochasticity()
+        self._prepare_episode_observation_noise()
         self._episode_weather_diagnostics = episode_weather_diagnostics(
             self.weather_profile)
 
@@ -718,7 +757,7 @@ class PVTrackingEnv(gym.Env):
                 scenario_id(self._current_scenario)
                 if self._current_scenario is not None else None),
             'scenario_year': (
-                int(self._current_scenario['year'])
+                scenario_source_year(self._current_scenario)
                 if self._current_scenario is not None else None),
             'weather_condition': self.weather_profile['condition'].iloc[self.step_index],
             'episode_diffuse_fraction': float(

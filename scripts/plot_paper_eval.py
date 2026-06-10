@@ -572,7 +572,12 @@ def plot_training_diagnostics(trial_dir, outdir):
     if not os.path.isfile(progress):
         return []
     import pandas as pd
-    df = pd.read_csv(progress)
+    from plot_training_progress import prepare_progress_dataframe
+
+    df, meta = prepare_progress_dataframe(pd.read_csv(progress))
+    x = df['global_step'] if 'global_step' in df.columns else None
+    if x is None:
+        return []
     metrics = [
         ('evaluation/return-average', 'Evaluation return (avg)'),
         ('model/val_loss', 'BNN validation loss'),
@@ -581,17 +586,15 @@ def plot_training_diagnostics(trial_dir, outdir):
         ('alpha', 'SAC temperature α'),
         ('Q_loss', 'Q loss'),
     ]
-    xcol = 'training_iteration' if 'training_iteration' in df.columns else None
-    if xcol is None:
-        return []
+    xlabel = meta.get('x_label', 'Training step')
     saved = []
     for col, title in metrics:
         if col not in df.columns:
             continue
         fig, ax = plt.subplots(figsize=(8, 3.5))
-        ax.plot(df[xcol], df[col], marker='o', ms=3, lw=1.5)
+        ax.plot(x, df[col], marker='o', ms=3, lw=1.5)
         ax.set_title(title)
-        ax.set_xlabel('Epoch')
+        ax.set_xlabel(xlabel)
         ax.grid(True, linestyle='--', alpha=0.35)
         fname = os.path.join(outdir, 'training_%s.png' % col.replace('/', '_'))
         fig.tight_layout()
@@ -686,13 +689,6 @@ def generate_paper_figures(
 
     write_protocol_readme(paper_dir, eval_env_params, protocol_note, is_stress=is_stress)
     write_paper_metrics_json(paper_dir, paths_by_name, eval_env_params, protocol_note)
-    try:
-        from eval_utils import write_paired_mc_comparison_report
-        eval_mode = 'nsrdb' if 'nsrdb' in str(protocol_note).lower() else 'mc'
-        write_paired_mc_comparison_report(paper_dir, paths_by_name, eval_mode=eval_mode, error=error)
-    except Exception as exc:
-        print('[plot_paper_eval] paired MC report failed: %s' % exc)
-
     outputs = []
 
     def _safe(name, fn, *a, **kw):

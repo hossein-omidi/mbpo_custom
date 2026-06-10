@@ -308,6 +308,47 @@ def test_nsrdb_weather_exact_timestamp_alignment(manifest_available):
         env.close()
 
 
+def test_same_scenario_reset_is_deterministic(manifest_available):
+    """Re-sampling the same scenario_id yields an identical weather trajectory."""
+    env = PVTrackingEnv(**_env_kwargs())
+    try:
+        sid = '2020-08-15'
+        env.reset(scenario_id=sid)
+        profile1 = env.weather_profile.copy()
+        env.reset(scenario_id=sid)
+        profile2 = env.weather_profile.copy()
+        assert env._current_scenario['scenario_id'] == sid
+        assert np.allclose(
+            profile1[['ghi', 'dni', 'dhi']].values,
+            profile2[['ghi', 'dni', 'dhi']].values)
+    finally:
+        env.close()
+
+
+def test_weighted_scenario_sampling_uses_manifest_probabilities():
+    from mbpo.env.nsrdb_weather import normalized_scenario_probabilities
+
+    scenarios = [
+        {'scenario_id': 'a', 'weight': 1.0},
+        {'scenario_id': 'b', 'weight': 3.0},
+    ]
+    probs = normalized_scenario_probabilities(scenarios)
+    assert probs.shape == (2,)
+    assert probs[1] == pytest.approx(0.75)
+    assert probs.sum() == pytest.approx(1.0)
+
+    uniform = normalized_scenario_probabilities([
+        {'scenario_id': 'x'}, {'scenario_id': 'y'}])
+    assert uniform.tolist() == pytest.approx([0.5, 0.5])
+
+    bad = normalized_scenario_probabilities([
+        {'scenario_id': 'a', 'weight': -1.0},
+        {'scenario_id': 'b', 'weight': float('nan')},
+        {'scenario_id': 'c'},
+    ])
+    assert bad.tolist() == pytest.approx([1 / 3.0, 1 / 3.0, 1 / 3.0])
+
+
 def test_within_episode_weather_follows_fixed_trajectory(manifest_available):
     """Stochasticity is across episodes only; within episode W_e is a fixed NSRDB trace."""
     env = PVTrackingEnv(**_env_kwargs())
