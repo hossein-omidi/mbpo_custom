@@ -18,7 +18,7 @@ CONFIG_VERSION = 'pv_tracking_conf5_nsrdb_advanced_2026-06-10'
 TRAINING_STAGE = 'conf5'
 
 # Deeper actor + twin Q (default base uses 2×256).
-_SAC_HIDDEN = (256, 256, 256)
+_SAC_HIDDEN = (256, 256)
 
 params = build_nsrdb_params(
     CONFIG_VERSION,
@@ -30,14 +30,9 @@ params = build_nsrdb_params(
         'discount': 1.0,
         'max_model_rollout_length': 1,
         'rollout_schedule': [30, 400, 1, 1],
-        'n_train_repeat': 5,
-        'rollout_batch_size': 500,
-        'model_retain_epochs': 8,
-        'max_model_t': 180,
-        'hidden_dim': 256,
-        'num_networks': 7,
-        'num_elites': 5,
-        'min_alpha': 0.05,
+        'n_train_repeat': 30,
+        'rollout_batch_size': 800,
+        'min_alpha': 0.001,
     },
     policy_params_kwargs={
         'hidden_layer_sizes': _SAC_HIDDEN,
