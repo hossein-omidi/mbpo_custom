@@ -56,7 +56,7 @@ params = {
     },
     'environment_kwargs': {
         'tz': 'UTC',
-        'start_time': '13:30',
+        'start_time': '12:00',
         'periods': 118,
         'freq': '5min',
         'observation_mode': 'physical',

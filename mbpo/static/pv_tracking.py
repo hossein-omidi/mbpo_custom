@@ -19,8 +19,8 @@ PHYSICAL_CYCLIC_SLICES = (
 )
 
 # Match PVTrackingEnv defaults (used only for solar-time decoding in StaticFns).
-DEFAULT_LATITUDE = 35.0
-DEFAULT_LONGITUDE = -106.0
+DEFAULT_LATITUDE = 40.72
+DEFAULT_LONGITUDE = -74.01
 DEFAULT_TZ = 'UTC'
 DEFAULT_REFERENCE_DATE = '2020-06-21'
 

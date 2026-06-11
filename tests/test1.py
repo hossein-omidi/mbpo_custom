@@ -16,10 +16,10 @@ from mbpo.env.nsrdb_iotools import read_nsrdb_csv_to_env_weather
 from mbpo.env.pvlib_physics import compute_poa_global
 
 DATA_DIR = os.path.join(_REPO, 'data/pv_weather/nsrdb')
-FILE_PATTERN = os.path.join(DATA_DIR, 'nsrdb_*_utc_5min.csv')
+FILE_PATTERN = os.path.join(DATA_DIR, 'newyork_*_5min.csv')
 
-LATITUDE = 35.0844
-LONGITUDE = -106.6504
+LATITUDE = 40.72
+LONGITUDE = -74.01
 TZ = 'UTC'
 SURFACE_TILT = 30.0
 SURFACE_AZIMUTH = 180.0
@@ -27,9 +27,9 @@ SURFACE_AZIMUTH = 180.0
 
 def test_pvlib_power_path(df):
     location = pvlib.location.Location(
-        latitude=LATITUDE, longitude=LONGITUDE, tz=TZ, altitude=0, name='Albuquerque_test')
+        latitude=LATITUDE, longitude=LONGITUDE, tz=TZ, altitude=12, name='NewYork_test')
 
-    sample = df.between_time('13:30', '23:15').head(20).copy()
+    sample = df.between_time('12:00', '21:45').head(20).copy()
     if sample.empty:
         raise ValueError('No data found in the expected UTC daytime window.')
 

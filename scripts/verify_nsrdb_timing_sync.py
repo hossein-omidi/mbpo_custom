@@ -120,7 +120,7 @@ def check_pvlib_csv_reader(manifest, errors):
     if not year_path or not os.path.isfile(year_path):
         year_path = os.path.join(
             os.path.dirname(manifest['_manifest_path']),
-            'nsrdb_{}_utc_5min.csv'.format(int(scenario.get('source_year', scenario['year']))))
+            'newyork_{}_5min.csv'.format(int(scenario.get('source_year', scenario['year']))))
     if not os.path.isfile(year_path):
         _fail(errors, 'year CSV not found for reader check: %s' % year_path)
         return

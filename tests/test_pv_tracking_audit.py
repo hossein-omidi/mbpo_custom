@@ -29,7 +29,11 @@ def make_physical_env():
 
 
 def make_historical_env(start_date='2020-06-21', end_date='2020-06-21'):
+    # Bundled PVGIS-TMY catalog is the legacy Albuquerque site fixture.
     return PVTrackingEnv(
+        latitude=35.0,
+        longitude=-106.0,
+        altitude=1600.0,
         randomize_day=False,
         start_date=start_date,
         end_date=end_date,
@@ -291,6 +295,9 @@ def test_excluded_dates_optional_mechanism():
 def test_different_days_differ_without_perturbation():
     """Annual scenario: variability from day d, not intra-day cloud noise."""
     kwargs = dict(
+        latitude=35.0,
+        longitude=-106.0,
+        altitude=1600.0,
         randomize_day=False,
         randomize_initial_orientation=False,
         weather_source='historical',
@@ -308,6 +315,7 @@ def test_different_days_differ_without_perturbation():
 def test_same_day_different_seeds_differ_with_irradiance_perturbation():
     d = '2020-06-21'
     kwargs = dict(
+        latitude=35.0, longitude=-106.0, altitude=1600.0,
         start_date=d, end_date=d, randomize_day=False,
         randomize_initial_orientation=False,
         weather_source='historical',
@@ -322,6 +330,7 @@ def test_same_day_different_seeds_differ_with_irradiance_perturbation():
 def test_same_day_same_seed_identical_without_perturbation():
     d = '2020-06-21'
     kwargs = dict(
+        latitude=35.0, longitude=-106.0, altitude=1600.0,
         start_date=d, end_date=d, randomize_day=False,
         randomize_initial_orientation=False,
         weather_source='historical',

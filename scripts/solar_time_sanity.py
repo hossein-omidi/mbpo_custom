@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check PVTracking time labels, solar position, and irradiance alignment.
 
-Project standard: tz='UTC', daylight episode grid 13:30-23:15 UTC, 39 steps.
+Project standard: tz='UTC', daylight episode grid 12:00-21:45 UTC (NYC), 117 steps.
 info['clock_hour_utc'] is the post-step wall-clock hour on that index.
 Optional Denver columns in output are for human comparison only — not used in training or plots.
 """
@@ -42,7 +42,7 @@ def print_fixed_hours(lat, lon, date, tz):
             h, 90.0 - sp.zenith, sp.zenith, cs.ghi, cs.dni))
 
 
-def analyze_episode_grid(lat, lon, date, tz, start_time='13:30', periods=40, freq='15min'):
+def analyze_episode_grid(lat, lon, date, tz, start_time='12:00', periods=118, freq='5min'):
     loc = Location(lat, lon, tz=tz)
     times = pd.date_range(
         start='{} {}'.format(date, start_time),
@@ -178,8 +178,8 @@ def run_env_rollout(lat, lon, tz, date, weather_source='clearsky'):
 
 def main():
     parser = argparse.ArgumentParser(description='PV time/solar/irradiance sanity check.')
-    parser.add_argument('--lat', type=float, default=35.0)
-    parser.add_argument('--lon', type=float, default=-106.0)
+    parser.add_argument('--lat', type=float, default=40.72)
+    parser.add_argument('--lon', type=float, default=-74.01)
     parser.add_argument('--date', type=str, default='2020-12-21')
     parser.add_argument('--tz', type=str, default='UTC',
                         help='Env timezone (default PVTrackingEnv tz).')

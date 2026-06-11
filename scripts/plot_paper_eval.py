@@ -223,6 +223,74 @@ def plot_seasonal_comparison(outdir, paths_by_name, error='std'):
     return paths_out
 
 
+# NSRDB cloud_type codes (PSM v4): 0/1 clear, 7 cirrus, 2-6/8/9 cloud classes.
+_NSRDB_CLOUD_GROUPS = (
+    ('clear', {0, 1}),
+    ('cirrus', {7}),
+    ('cloudy', {2, 3, 4, 5, 6, 8, 9}),
+)
+WEATHER_LABEL_ORDER = ['clear', 'cirrus', 'partly_cloudy', 'cloudy', 'overcast', 'other']
+
+
+def episode_weather_label(path):
+    """Weather label from NSRDB's own cloud_type (episode mode); falls back to
+    the clearsky-ratio condition label when the dataset lacks cloud_type."""
+    meta = get_rollout_metadata(path)
+    mode = meta.get('episode_cloud_type_mode')
+    if mode is not None and np.isfinite(mode):
+        code = int(round(float(mode)))
+        for label, codes in _NSRDB_CLOUD_GROUPS:
+            if code in codes:
+                return label
+        return 'other'
+    return meta.get('weather_condition', 'other') or 'other'
+
+
+def plot_weather_condition_comparison(outdir, paths_by_name, error='std'):
+    """Net energy per method grouped by NSRDB cloud label (data-native, not synthetic)."""
+    labels_present = []
+    label_by_path = {}
+    for method, paths in paths_by_name.items():
+        for idx, p in enumerate(paths):
+            label_by_path[(method, idx)] = episode_weather_label(p)
+    for label in WEATHER_LABEL_ORDER:
+        if any(v == label for v in label_by_path.values()):
+            labels_present.append(label)
+    if not labels_present:
+        return None
+
+    methods = [m for m in METHODS if m in paths_by_name]
+    x = np.arange(len(labels_present))
+    width = 0.8 / max(len(methods), 1)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    counts = {label: 0 for label in labels_present}
+    for i, method in enumerate(methods):
+        means, errs = [], []
+        for label in labels_present:
+            vals = [
+                episode_metrics(p)['net_energy_kwh']
+                for idx, p in enumerate(paths_by_name[method])
+                if label_by_path[(method, idx)] == label]
+            counts[label] = max(counts[label], len(vals))
+            means.append(float(np.mean(vals)) if vals else np.nan)
+            errs.append(_error_bar(vals, error)[0])
+        offset = (i - (len(methods) - 1) / 2.0) * width
+        ax.bar(x + offset, means, width, yerr=errs, capsize=4,
+               color=METHOD_COLORS[method], alpha=0.88,
+               label=METHOD_LABELS[method])
+    ax.set_xticks(x)
+    ax.set_xticklabels(['%s\n(n=%d)' % (l, counts[l]) for l in labels_present])
+    ax.set_ylabel('Net energy (kWh)')
+    ax.set_title('Net energy by NSRDB weather label (cloud_type; mean ± %s)' % error)
+    ax.legend(loc='best', fontsize=9)
+    ax.grid(axis='y', linestyle='--', alpha=0.35)
+    fig.tight_layout()
+    path = os.path.join(outdir, 'weather_condition_net_energy.png')
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def plot_return_process_evaluation(outdir, paths_by_name):
     """MC evaluation return R = sum_t r_t: report E[R] and σ across rollouts per method.
 
@@ -708,6 +776,8 @@ def generate_paper_figures(
             outputs.extend(plot_seasonal_comparison(paper_dir, paths_by_name, error=error) or [])
         except Exception as exc:
             print('[plot_paper_eval] seasonal_comparison failed: %s' % exc)
+        _safe('weather_condition_comparison', plot_weather_condition_comparison,
+              paper_dir, paths_by_name, error=error)
         _safe('daily_gain_distributions', plot_daily_gain_distributions, paper_dir, paths_by_name)
         _safe('baseline_sun_vs_fixed', plot_baseline_sun_vs_fixed, paper_dir, paths_by_name, error=error)
         _safe('movement_efficiency', plot_movement_efficiency, paper_dir, paths_by_name)

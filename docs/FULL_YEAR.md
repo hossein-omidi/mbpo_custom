@@ -14,7 +14,7 @@ pip install -e viskit
 pip install -e .
 ```
 
-NSRDB CSVs live under `data/pv_weather/nsrdb/` with manifest `data/pv_weather/nsrdb/albuquerque_multiyear_manifest.json`.
+NSRDB CSVs (New York City, 5-min, 2018–2024) live under `data/pv_weather/nsrdb/` with manifest `data/pv_weather/nsrdb/newyork_multiyear_manifest.json`. To rebuild from the official NSRDB API: `python NSRDB_test.py` then `python scripts/prepare_nsrdb_newyork_catalog.py` (see `data/pv_weather/nsrdb/README.md`).
 
 Optional env overrides (any machine):
 

@@ -78,10 +78,11 @@ PV_TIMEZONE = 'UTC'
 
 # Episode grid: periods timestamps at freq; env.step() count == periods - 1.
 # Wall-clock labels use Location.tz (UTC) only — no civil-time conversion.
-# Daylight window 13:30–23:15 UTC: 585 min / 5 min = 117 transitions (118 timestamps).
+# Daylight window 12:00–21:45 UTC (NYC solar noon ~16:56 UTC):
+# 585 min / 5 min = 117 transitions (118 timestamps).
 # Step convention: action updates panel pose, then env advances to times[step_index];
 # reward uses NSRDB weather + pvlib geometry at that same timestamp (post-action pose).
-DEFAULT_START_TIME = '13:30'
+DEFAULT_START_TIME = '12:00'
 DEFAULT_PERIODS = 118
 DEFAULT_FREQ = '5min'
 DEFAULT_EPISODE_STEPS = DEFAULT_PERIODS - 1  # 117 transitions per day
@@ -113,9 +114,9 @@ class PVTrackingEnv(gym.Env):
 
     def __init__(
         self,
-        latitude=35.0,
-        longitude=-106.0,
-        altitude=1600.0,
+        latitude=40.72,
+        longitude=-74.01,
+        altitude=12.0,
         tz=PV_TIMEZONE,
         start_date='2020-01-01',
         end_date='2020-12-31',
@@ -293,12 +294,18 @@ class PVTrackingEnv(gym.Env):
                         raise ValueError(
                             'fixed_eval_scenarios id {!r} not in manifest'.format(sid))
             # Calendar days that have at least one scenario (for randomize_day path).
+            # Feb 29 exists only in leap-year files; skip it when the anchor year
+            # (start_date.year) is non-leap. Leap-day scenarios remain selectable
+            # through randomize_scenario / scenario_id sampling.
             day_keys = sorted({(int(s['month']), int(s['day'])) for s in scenarios})
-            self.start_dates = pd.DatetimeIndex([
-                pd.Timestamp(
-                    year=self.start_date.year, month=m, day=d, tz=tz)
-                for m, d in day_keys
-            ])
+            anchor_dates = []
+            for m, d in day_keys:
+                try:
+                    anchor_dates.append(pd.Timestamp(
+                        year=self.start_date.year, month=m, day=d, tz=tz))
+                except ValueError:
+                    continue
+            self.start_dates = pd.DatetimeIndex(anchor_dates)
             if self.randomize_scenario and self.randomize_day:
                 logger.warning(
                     'nsrdb_multiyear: randomize_scenario=True takes precedence over '
@@ -764,6 +771,15 @@ class PVTrackingEnv(gym.Env):
                 self._episode_weather_diagnostics.get('diffuse_fraction', 0.0)),
             'episode_dni_fraction': float(
                 self._episode_weather_diagnostics.get('dni_fraction', 0.0)),
+            # NSRDB-native labels (only when cloud_type / clearsky_* columns
+            # exist in the dataset; pure measured data, no synthetic source).
+            'episode_cloud_type_mode': self._episode_weather_diagnostics.get(
+                'cloud_type_mode'),
+            'episode_clearsky_ratio': self._episode_weather_diagnostics.get(
+                'clearsky_ratio'),
+            'cloud_type': (
+                float(self.weather_profile['cloud_type'].iloc[self.step_index])
+                if 'cloud_type' in self.weather_profile.columns else None),
             'solar_zenith_deg': float(solar_position.zenith),
             'solar_azimuth_deg': float(solar_position.azimuth),
             'solar_altitude_deg': solar_alt,

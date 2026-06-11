@@ -3,7 +3,7 @@
 weather_scenario_mode = nsrdb_multiyear
   e = (year, month, day) ~ Uniform(manifest), fixed W_e per episode.
 
-Data: data/pv_weather/nsrdb/nsrdb_{2018..2024}_utc_5min.csv
+Data: data/pv_weather/nsrdb/newyork_{2018..2024}_5min.csv (NYC, 5-min, UTC-normalized)
 Timing: native 5-min control (118 timestamps, 117 transitions).
 
 Train:

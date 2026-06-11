@@ -112,8 +112,8 @@ def make_nsrdb_env(manifest=None, observation_mode='physical'):
     """
     return gym.make(
         'PVTracking-v0',
-        latitude=35.08,
-        longitude=-106.65,
+        latitude=40.72,
+        longitude=-74.01,
         start_date='2018-01-01',
         end_date='2024-12-31',
         randomize_day=False,

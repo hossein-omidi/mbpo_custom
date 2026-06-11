@@ -34,6 +34,9 @@ YEARS = [
 
 INTERVAL = "5"
 
+# Required for pvlib power: ghi, dhi, dni (+ air_temperature, wind_speed as
+# exogenous states). cloud_type / clearsky_* / fill_flag are NSRDB's own
+# physical weather labels used for diagnostics and plots (no synthetic data).
 ATTRIBUTES = (
     "ghi,dhi,dni,"
     "air_temperature,"
@@ -41,7 +44,10 @@ ATTRIBUTES = (
     "relative_humidity,"
     "solar_zenith_angle,"
     "surface_albedo,"
-    "surface_pressure"
+    "surface_pressure,"
+    "cloud_type,"
+    "clearsky_ghi,clearsky_dhi,clearsky_dni,"
+    "fill_flag"
 )
 
 DOMAIN = "developer.nlr.gov"
@@ -99,7 +105,9 @@ def submit_year_request(year):
         "attributes": ATTRIBUTES,
         "names": year,
         "interval": INTERVAL,
-        "utc": "false",
+        # NSRDB records in UTC; utc=true keeps timestamps in UTC so episode
+        # windows align exactly with the project time standard (no shifting).
+        "utc": "true",
         "leap_day": "true",
         "email": EMAIL,
         "api_key": API_KEY,
@@ -218,6 +226,11 @@ def read_zip_to_dataframe(zip_bytes, year):
 
     try:
         year_folder = os.path.join(OUTPUT_FOLDER, year)
+        # Remove any previous extraction so exactly one SAM CSV per year remains
+        # (the prepare script picks the SAM file from this folder).
+        if os.path.isdir(year_folder):
+            import shutil
+            shutil.rmtree(year_folder)
         os.makedirs(year_folder, exist_ok=True)
 
         z = zipfile.ZipFile(io.BytesIO(zip_bytes))

@@ -20,10 +20,10 @@ try:
     )
 except ImportError:
     _ENV_PV_TIMEZONE = 'UTC'
-    _ENV_START_TIME = '13:30'
-    _ENV_PERIODS = 40
-    _ENV_FREQ = '15min'
-    _ENV_EPISODE_STEPS = 39
+    _ENV_START_TIME = '12:00'
+    _ENV_PERIODS = 118
+    _ENV_FREQ = '5min'
+    _ENV_EPISODE_STEPS = 117
 
 
 # Matches mbpo/env/pv_tracking.py (legacy 15-D layout).
@@ -351,13 +351,13 @@ def decode_pv_observation(obs):
     return decoded
 
 
-# Clock-hour bins in UTC on the daylight episode grid (13:30–23:15 UTC).
+# Clock-hour bins in UTC on the daylight episode grid (12:00–21:45 UTC, NYC).
 # Use SOLAR_ALTITUDE_WINDOWS for sun-up / peak-sun physics.
 TIME_WINDOWS = OrderedDict([
-    ('morning', (13.5, 16.5)),
-    ('midday', (16.5, 19.0)),
-    ('afternoon', (19.0, 21.5)),
-    ('evening', (21.5, 23.5)),
+    ('morning', (12.0, 15.0)),
+    ('midday', (15.0, 17.5)),
+    ('afternoon', (17.5, 20.0)),
+    ('evening', (20.0, 22.0)),
 ])
 
 # Physics-based bins (degrees solar altitude); independent of clock labels.
@@ -1143,6 +1143,10 @@ def get_rollout_metadata(path):
         'season_calendar': season_calendar,
         'weather_condition': info0.get('weather_condition', 'unknown'),
         'weather_source': info0.get('weather_source', 'unknown'),
+        # NSRDB-native episode labels (None when dataset lacks the columns).
+        'episode_cloud_type_mode': info0.get('episode_cloud_type_mode'),
+        'episode_clearsky_ratio': info0.get('episode_clearsky_ratio'),
+        'episode_diffuse_fraction': info0.get('episode_diffuse_fraction'),
         'scenario_id': info0.get('scenario_id'),
         'scenario_year': info0.get('scenario_year'),
         'seed': info0.get('rollout_seed'),
@@ -1220,8 +1224,8 @@ def write_eval_statistics_readme(outdir, num_rollouts, eval_seed_base):
         f.write('  sun_tracking: slew toward solar zenith/azimuth each step.\n')
         f.write('  fixed_no_motion: action=0 (panel frozen at reset pose; movement_cost=0).\n')
         f.write('  fixed_tilt_south: optional slew to 30/180 (not default in Stage 3).\n\n')
-        f.write('Episode clock (UTC): 13:30 start, 5min steps, %d transitions.\n' % (
-            PV_EPISODE_MAX_STEPS))
+        f.write('Episode clock (UTC): %s start, 5min steps, %d transitions.\n' % (
+            _ENV_START_TIME, PV_EPISODE_MAX_STEPS))
         f.write('  Same grid as training; see eval_config episode_preset in summary.\n')
     return path
 
@@ -1457,6 +1461,7 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
             'tilt_deg', 'azimuth_deg',
             'solar_zenith_deg', 'solar_azimuth_deg', 'solar_altitude_deg',
             'date', 'season', 'weather_condition', 'weather_source',
+            'cloud_type', 'episode_cloud_type_mode', 'episode_clearsky_ratio',
             'scenario_id', 'scenario_year',
             'action_tilt', 'action_azimuth',
         ]
@@ -1492,6 +1497,9 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
                 info.get('season', ''),
                 info.get('weather_condition', ''),
                 info.get('weather_source', ''),
+                info.get('cloud_type', ''),
+                info.get('episode_cloud_type_mode', ''),
+                info.get('episode_clearsky_ratio', ''),
                 info.get('scenario_id', ''),
                 info.get('scenario_year', ''),
                 float(actions[t][0]) if actions.ndim == 2 else actions[t],

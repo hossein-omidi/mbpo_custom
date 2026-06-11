@@ -7,10 +7,16 @@ from examples.config.pv_tracking._paths import default_log_dir
 
 _base = importlib.import_module('examples.config.pv_tracking.0')
 
-NSRDB_MANIFEST = 'data/pv_weather/nsrdb/albuquerque_multiyear_manifest.json'
+NSRDB_MANIFEST = 'data/pv_weather/nsrdb/newyork_multiyear_manifest.json'
+
+# New York City NSRDB grid cell (SAM header: 40.72, -74.01, elevation 12 m).
+NSRDB_SITE_LATITUDE = 40.72
+NSRDB_SITE_LONGITUDE = -74.01
+NSRDB_SITE_ALTITUDE = 12.0
 
 EPISODE_TZ = 'UTC'
-EPISODE_START_TIME = '13:30'
+# Daylight window centred on NYC solar noon (~16:56 UTC): 12:00–21:45 UTC.
+EPISODE_START_TIME = '12:00'
 EPISODE_PERIODS = 118
 EPISODE_FREQ = '5min'
 EPISODE_ACTION_STEPS = EPISODE_PERIODS - 1  # 117
@@ -53,16 +59,17 @@ def assert_nsrdb_validation_scenarios(manifest_path=None, scenario_ids=None):
             raise ValueError(
                 'manifest episode.%s=%r != expected %r' % (key, episode.get(key), expected))
     site = manifest.get('site', {})
-    if site.get('latitude') != 35.08 or site.get('longitude') != -106.65:
+    if (site.get('latitude') != NSRDB_SITE_LATITUDE
+            or site.get('longitude') != NSRDB_SITE_LONGITUDE):
         raise ValueError('manifest site lat/lon mismatch: %s' % site)
 
 
 def nsrdb_environment_kwargs(**overrides):
     """Training env: NSRDB multi-year e~(year,day), native 5-min pvlib physics."""
     kw = {
-        'latitude': 35.08,
-        'longitude': -106.65,
-        'altitude': 1600.0,
+        'latitude': NSRDB_SITE_LATITUDE,
+        'longitude': NSRDB_SITE_LONGITUDE,
+        'altitude': NSRDB_SITE_ALTITUDE,
         'tz': EPISODE_TZ,
         'start_time': EPISODE_START_TIME,
         'periods': EPISODE_PERIODS,

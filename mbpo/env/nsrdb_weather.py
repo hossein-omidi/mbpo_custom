@@ -1,11 +1,14 @@
-"""NSRDB PSM3 multi-year weather scenarios for PVTracking.
+"""NSRDB PSM v4 multi-year weather scenarios for PVTracking (New York City).
 
 Each scenario e = (data_year, calendar month, day) maps to one fixed irradiance
-trajectory W_e on the project UTC episode grid (13:30–23:15, native 5min).
+trajectory W_e on the project UTC episode grid (12:00–21:45 UTC, native 5min).
 
 Data flow:
-  - Offline SAM CSV (5-min UTC) from NSRDB Viewer or API download
-  - Year cache + JSON manifest (scripts/prepare_nsrdb_multiyear_catalog.py)
+  - Official NSRDB API download (GOES CONUS v4, 5-min) → SAM CSV per year.
+    Files are stored in local standard time (header `Time Zone` = -5 for NYC);
+    the pvlib reader path converts the index to true UTC via that metadata,
+    so episode timestamps are exact UTC rows with no shifting/interpolation.
+  - Year cache + JSON manifest (scripts/prepare_nsrdb_newyork_catalog.py)
   - Env samples scenario at reset; pvlib computes sun geometry and POA from W_e
 
 Stochasticity across episodes: empirical scenario sampling e ~ p(e), not synthetic clouds.
@@ -27,12 +30,20 @@ from .nsrdb_iotools import read_nsrdb_csv_to_env_weather, to_env_weather_frame
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_NSRDB_DATA_DIR = REPO_ROOT / 'data' / 'pv_weather' / 'nsrdb'
-DEFAULT_MANIFEST_PATH = DEFAULT_NSRDB_DATA_DIR / 'albuquerque_multiyear_manifest.json'
-DEFAULT_WEATHER_DATASET_DIR = Path('/home/user01/weather_dataset/weather_dataset')
+DEFAULT_MANIFEST_PATH = DEFAULT_NSRDB_DATA_DIR / 'newyork_multiyear_manifest.json'
+# Raw API downloads (NSRDB_test.py output; SAM CSVs in local standard time).
+DEFAULT_WEATHER_DATASET_DIR = REPO_ROOT / 'nsrdb_newyork_5min'
 
-DEFAULT_LATITUDE = 35.08
-DEFAULT_LONGITUDE = -106.65
+# New York City NSRDB grid cell (from SAM file header: 40.72, -74.01, elev 12 m).
+DEFAULT_LATITUDE = 40.72
+DEFAULT_LONGITUDE = -74.01
+DEFAULT_ALTITUDE = 12.0
 DEFAULT_TZ = 'UTC'
+
+# Project episode window (UTC), centred on NYC solar noon (~16:56 UTC):
+# 12:00–21:45 UTC = 118 timestamps / 117 transitions at 5 min.
+DEFAULT_EPISODE_START_TIME = '12:00'
+DEFAULT_EPISODE_PERIODS = 118
 
 REQUIRED_COLUMNS = ('dni', 'ghi', 'dhi', 'temperature', 'wind_speed')
 OPTIONAL_COLUMNS = (
@@ -54,10 +65,11 @@ PSM3_ATTRIBUTES = (
 NSRDB_API_HOST = 'developer.nrel.gov'
 NSRDB_API_BASE = 'https://developer.nrel.gov'
 
-# Canonical offline SAM files (5-min UTC). Legacy 15-min names are ignored when 5-min exists.
+# Canonical per-year SAM files (5-min). Index is normalized to UTC on load via
+# the file's `Time Zone` header (NYC files are stored in local standard time).
 YEAR_FILE_PATTERNS = (
+    'newyork_{year}_5min.csv',
     'nsrdb_{year}_utc_5min.csv',
-    'albuquerque_{year}_utc_5min.csv',
 )
 
 
@@ -144,7 +156,7 @@ def check_nsrdb_api_reachable(timeout=10):
             'Cannot resolve {} ({!s}). This is a DNS/network issue on this machine, '
             'not an invalid API key. Fix outbound DNS or download SAM CSV files from '
             'the NSRDB Viewer on a networked machine and use '
-            'prepare_nsrdb_multiyear_catalog.py --import-csv YEAR:PATH'.format(
+            'prepare_nsrdb_newyork_catalog.py'.format(
                 NSRDB_API_HOST, exc))
     try:
         import requests
@@ -213,7 +225,7 @@ def import_psm3_csv_to_year_utc(csv_path):
 
 
 def discover_year_csv_files(data_dir, years=None):
-    """Find per-year NSRDB 5-min SAM CSV files (prefers nsrdb_{year}_utc_5min.csv)."""
+    """Find per-year NSRDB 5-min SAM CSV files (prefers newyork_{year}_5min.csv)."""
     data_dir = _repo_relative(data_dir)
     if not data_dir.is_dir():
         return {}
@@ -373,7 +385,7 @@ def load_scenario_manifest(manifest_path=None):
     if not manifest_path.is_file():
         raise FileNotFoundError(
             'NSRDB scenario manifest not found: {}. Run '
-            'scripts/prepare_nsrdb_multiyear_catalog.py'.format(manifest_path))
+            'scripts/prepare_nsrdb_newyork_catalog.py'.format(manifest_path))
     with open(manifest_path, encoding='utf-8') as f:
         manifest = json.load(f)
     if 'scenarios' not in manifest:
@@ -392,7 +404,7 @@ def load_scenario_manifest(manifest_path=None):
         elif yf:
             row['_year_path'] = str(Path(yf).resolve())
         else:
-            yf = 'nsrdb_{year}_utc_5min.csv'.format(year=int(row['source_year']))
+            yf = 'newyork_{year}_5min.csv'.format(year=int(row['source_year']))
             row['_year_path'] = str(data_dir / yf)
     manifest['_data_dir'] = str(data_dir)
     manifest['_manifest_path'] = str(manifest_path)
@@ -495,8 +507,8 @@ def build_manifest_from_year_files(
         years,
         latitude=DEFAULT_LATITUDE,
         longitude=DEFAULT_LONGITUDE,
-        start_time='13:30',
-        periods=118,
+        start_time=DEFAULT_EPISODE_START_TIME,
+        periods=DEFAULT_EPISODE_PERIODS,
         freq='5min',
         episode_validate=True,
         location=None,
@@ -598,10 +610,10 @@ def write_manifest(
         data_dir,
         latitude=DEFAULT_LATITUDE,
         longitude=DEFAULT_LONGITUDE,
-        start_time='13:30',
-        periods=118,
+        start_time=DEFAULT_EPISODE_START_TIME,
+        periods=DEFAULT_EPISODE_PERIODS,
         freq='5min',
-        source='NSRDB_PSM3',
+        source='NSRDB_PSM4_GOES_CONUS',
         extra_meta=None):
     """Write manifest JSON."""
     path = _repo_relative(path)

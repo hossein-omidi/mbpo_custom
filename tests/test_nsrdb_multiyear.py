@@ -29,14 +29,14 @@ PYTHON = sys.executable
 @pytest.fixture(scope='module')
 def manifest_available():
     if not os.path.isfile(MANIFEST):
-        pytest.skip('NSRDB manifest missing; run prepare_nsrdb_multiyear_catalog.py')
+        pytest.skip('NSRDB manifest missing; run prepare_nsrdb_newyork_catalog.py')
     return load_scenario_manifest(MANIFEST)
 
 
 def _env_kwargs(**overrides):
     base = dict(
-        latitude=35.08,
-        longitude=-106.65,
+        latitude=40.72,
+        longitude=-74.01,
         start_date='2018-01-01',
         end_date='2024-12-31',
         randomize_day=False,
@@ -141,7 +141,7 @@ def test_no_missing_episode_windows(manifest_available):
 def pd_date_range_from_scenario(s, manifest):
     import pandas as pd
     ep = manifest.get('episode', {})
-    start_time = ep.get('start_time', '13:30')
+    start_time = ep.get('start_time', '12:00')
     periods = ep.get('periods', 118)
     freq = ep.get('freq', '5min')
     date = scenario_episode_date(s, tz='UTC')
@@ -158,12 +158,17 @@ def test_pvlib_power_changes_with_orientation(manifest_available):
     try:
         env.seed(0)
         env.reset()
+        # Compare near solar noon: sun-pointing only beats fixed-south when
+        # direct beam is present (overcast/diffuse-only days are exempt).
+        midday = len(env.times) // 2
+        env.step_index = midday
+        env.current_time = env.times[midday]
         env.tilt, env.azimuth = 30.0, 180.0
         sp = env._solar_position(env.current_time)
         w = env._current_weather()
         p_south = env._power_from_orientation(sp.zenith, sp.azimuth, 30.0, 180.0)
         p_track = env._power_from_orientation(sp.zenith, sp.azimuth, sp.zenith, sp.azimuth)
-        assert p_track > p_south or w['ghi'] < 5.0
+        assert p_track > p_south or w['dni'] < 10.0
     finally:
         env.close()
 
@@ -383,7 +388,7 @@ def test_all_years_2018_2024_load(manifest_available):
         weather, meta = read_nsrdb_csv_to_env_weather(path)
         assert meta.get('_reader') in ('read_nsrdb_psm4', 'read_psm3')
         validate_nsrdb_year_weather(weather, path=path)
-        assert 'nsrdb_{}_utc_5min'.format(year) in os.path.basename(path)
+        assert 'newyork_{}_5min'.format(year) in os.path.basename(path)
 
 
 def test_nsrdb_path_does_not_load_historical_catalog(manifest_available):
@@ -407,7 +412,7 @@ def test_nsrdb_csv_read_via_pvlib_iotools(manifest_available):
     if not year_path or not os.path.isfile(year_path):
         year_path = os.path.join(
             os.path.dirname(MANIFEST),
-            'nsrdb_{}_utc_5min.csv'.format(int(sample.get('source_year', sample['year']))))
+            'newyork_{}_5min.csv'.format(int(sample.get('source_year', sample['year']))))
     assert os.path.isfile(year_path), year_path
     weather, meta = read_nsrdb_csv_to_env_weather(year_path)
     assert meta.get('_reader') in ('read_nsrdb_psm4', 'read_psm3')
