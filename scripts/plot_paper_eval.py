@@ -98,6 +98,32 @@ def _error_bar(values, error='std'):
     return float(np.std(v, ddof=1)) if len(v) > 1 else 0.0, len(v)
 
 
+def _asym_err(values, error='std'):
+    """(lower, upper) whiskers; lower is clipped at the sample minimum.
+
+    Net energy is >= 0 whenever movement_penalty=0 (POA is clipped at 0 in
+    pvlib_physics), so mean − std whiskers dipping below zero would misread
+    as negative energy. Clipping the lower whisker at the observed minimum
+    keeps the dispersion display inside the physically realized support.
+    """
+    v = np.asarray(values, dtype=np.float64)
+    if len(v) == 0:
+        return 0.0, 0.0
+    err, _ = _error_bar(values, error)
+    lower = min(err, float(np.mean(v)) - float(np.min(v)))
+    return max(lower, 0.0), err
+
+
+def _asym_yerr(per_group_values, error='std'):
+    """Build matplotlib yerr=[lowers, uppers] for a list of value groups."""
+    lowers, uppers = [], []
+    for vals in per_group_values:
+        lo, up = _asym_err(vals, error)
+        lowers.append(lo)
+        uppers.append(up)
+    return [lowers, uppers]
+
+
 def plot_annual_performance_bars(outdir, paths_by_name, error='std'):
     """Gross energy, movement cost, net energy, total reward — all methods."""
     metrics = [
@@ -112,15 +138,15 @@ def plot_annual_performance_bars(outdir, paths_by_name, error='std'):
 
     for ax, (key, ylabel) in zip(axes, metrics):
         x = np.arange(len(methods))
-        means, errs, ns = [], [], []
+        means, groups, ns = [], [], []
         for method in methods:
             vals = [episode_metrics(p)[key] for p in paths_by_name[method]]
             means.append(float(np.mean(vals)))
-            err, n = _error_bar(vals, error)
-            errs.append(err)
-            ns.append(n)
+            groups.append(vals)
+            ns.append(len(vals))
         ax.bar(
-            x, means, yerr=errs, capsize=5, color=[METHOD_COLORS[m] for m in methods],
+            x, means, yerr=_asym_yerr(groups, error), capsize=5,
+            color=[METHOD_COLORS[m] for m in methods],
             alpha=0.9, edgecolor='white')
         ax.set_xticks(x)
         ax.set_xticklabels([METHOD_LABELS[m] for m in methods], rotation=12, ha='right')
@@ -143,9 +169,9 @@ def plot_energy_decomposition(outdir, paths_by_name, error='std'):
     """Gross − movement = net (stacked validation + grouped bars)."""
     methods = [m for m in METHODS if m in paths_by_name]
     x = np.arange(len(methods))
-    gross_m, gross_e = [], []
-    move_m, move_e = [], []
-    net_m, net_e = [], []
+    gross_m, gross_g = [], []
+    move_m, move_g = [], []
+    net_m, net_g = [], []
 
     for method in methods:
         gross = [episode_metrics(p)['gross_energy_kwh'] for p in paths_by_name[method]]
@@ -154,18 +180,18 @@ def plot_energy_decomposition(outdir, paths_by_name, error='std'):
         gross_m.append(np.mean(gross))
         move_m.append(np.mean(move))
         net_m.append(np.mean(net))
-        gross_e.append(_error_bar(gross, error)[0])
-        move_e.append(_error_bar(move, error)[0])
-        net_e.append(_error_bar(net, error)[0])
+        gross_g.append(gross)
+        move_g.append(move)
+        net_g.append(net)
 
     fig, ax = plt.subplots(figsize=(9, 5))
     w = 0.35
-    ax.bar(x - w / 2, gross_m, w, yerr=gross_e, label='Gross energy', color='#9ecae1',
-           capsize=4, alpha=0.95)
-    ax.bar(x + w / 2, net_m, w, yerr=net_e, label='Net energy', color='#3182bd',
-           capsize=4, alpha=0.95)
-    ax.bar(x + w / 2, move_m, w, bottom=net_m, yerr=move_e, label='Movement cost (stacked)',
-           color='#bdbdbd', capsize=3, alpha=0.85)
+    ax.bar(x - w / 2, gross_m, w, yerr=_asym_yerr(gross_g, error),
+           label='Gross energy', color='#9ecae1', capsize=4, alpha=0.95)
+    ax.bar(x + w / 2, net_m, w, yerr=_asym_yerr(net_g, error),
+           label='Net energy', color='#3182bd', capsize=4, alpha=0.95)
+    ax.bar(x + w / 2, move_m, w, bottom=net_m, yerr=_asym_yerr(move_g, error),
+           label='Movement cost (stacked)', color='#bdbdbd', capsize=3, alpha=0.85)
     ax.set_xticks(x)
     ax.set_xticklabels([METHOD_LABELS[m] for m in methods])
     ax.set_ylabel('kWh / cost units')
@@ -195,7 +221,7 @@ def plot_seasonal_comparison(outdir, paths_by_name, error='std'):
         width = 0.8 / max(len(methods), 1)
         fig, ax = plt.subplots(figsize=(10, 5))
         for i, method in enumerate(methods):
-            means, errs = [], []
+            means, groups = [], []
             for season in seasons:
                 vals = [
                     episode_metrics(p)[metric]
@@ -203,10 +229,10 @@ def plot_seasonal_comparison(outdir, paths_by_name, error='std'):
                     if get_rollout_metadata(p).get(
                         'season_calendar', episode_metrics(p)['season']) == season]
                 means.append(float(np.mean(vals)) if vals else np.nan)
-                errs.append(_error_bar(vals, error)[0])
+                groups.append(vals)
             offset = (i - (len(methods) - 1) / 2.0) * width
-            ax.bar(x + offset, means, width, yerr=errs, capsize=4,
-                   color=METHOD_COLORS[method], alpha=0.88,
+            ax.bar(x + offset, means, width, yerr=_asym_yerr(groups, error),
+                   capsize=4, color=METHOD_COLORS[method], alpha=0.88,
                    label=METHOD_LABELS[method])
         ax.set_xticks(x)
         ax.set_xticklabels(seasons)
@@ -265,7 +291,7 @@ def plot_weather_condition_comparison(outdir, paths_by_name, error='std'):
     fig, ax = plt.subplots(figsize=(10, 5))
     counts = {label: 0 for label in labels_present}
     for i, method in enumerate(methods):
-        means, errs = [], []
+        means, groups = [], []
         for label in labels_present:
             vals = [
                 episode_metrics(p)['net_energy_kwh']
@@ -273,10 +299,10 @@ def plot_weather_condition_comparison(outdir, paths_by_name, error='std'):
                 if label_by_path[(method, idx)] == label]
             counts[label] = max(counts[label], len(vals))
             means.append(float(np.mean(vals)) if vals else np.nan)
-            errs.append(_error_bar(vals, error)[0])
+            groups.append(vals)
         offset = (i - (len(methods) - 1) / 2.0) * width
-        ax.bar(x + offset, means, width, yerr=errs, capsize=4,
-               color=METHOD_COLORS[method], alpha=0.88,
+        ax.bar(x + offset, means, width, yerr=_asym_yerr(groups, error),
+               capsize=4, color=METHOD_COLORS[method], alpha=0.88,
                label=METHOD_LABELS[method])
     ax.set_xticks(x)
     ax.set_xticklabels(['%s\n(n=%d)' % (l, counts[l]) for l in labels_present])
@@ -370,13 +396,16 @@ def plot_cumulative_return_intraday(outdir, paths_by_name, field='cumulative_net
         return None
     mean_y = np.array([np.mean(buckets[h]) for h in hours])
     std_y = np.array([np.std(buckets[h], ddof=1) if len(buckets[h]) > 1 else 0.0 for h in hours])
+    # Clip the lower band at the observed per-hour minimum (cumulative net
+    # energy never goes below the realized support; avoids fake negatives).
+    min_y = np.array([np.min(buckets[h]) for h in hours])
 
     fig, ax = plt.subplots(figsize=(11, 4))
     ax.plot(hours, mean_y, color=METHOD_COLORS['learned_policy'], lw=2,
             label='E[cumulative net energy]')
-    ax.fill_between(hours, mean_y - std_y, mean_y + std_y,
+    ax.fill_between(hours, np.maximum(mean_y - std_y, min_y), mean_y + std_y,
                     color=METHOD_COLORS['learned_policy'], alpha=0.25,
-                    label='±1σ across rollouts')
+                    label='±1σ across rollouts (clipped at observed min)')
     ax.set_xlabel('UTC clock hour (post-step)')
     ax.set_ylabel('Cumulative net energy (kWh)')
     ax.set_title('Intraday return accumulation — MBPO-SAC (MC mean ± σ)')
@@ -397,14 +426,13 @@ def plot_baseline_sun_vs_fixed(outdir, paths_by_name, error='std'):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
     x = np.arange(len(methods))
-    means, errs, ns = [], [], []
+    means, groups, ns = [], [], []
     for method in methods:
         vals = [episode_metrics(p)['net_energy_kwh'] for p in paths_by_name[method]]
         means.append(float(np.mean(vals)))
-        err, n = _error_bar(vals, error)
-        errs.append(err)
-        ns.append(n)
-    axes[0].bar(x, means, yerr=errs, capsize=5,
+        groups.append(vals)
+        ns.append(len(vals))
+    axes[0].bar(x, means, yerr=_asym_yerr(groups, error), capsize=5,
                 color=[METHOD_COLORS[m] for m in methods], alpha=0.9, edgecolor='white')
     axes[0].set_xticks(x)
     axes[0].set_xticklabels([METHOD_LABELS[m] for m in methods])

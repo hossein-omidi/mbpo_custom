@@ -197,6 +197,7 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
     fig, ax = plt.subplots(figsize=(10, 5))
     err_fn = sem if error == 'sem' else sample_std
 
+    season_n = {}
     for i, method in enumerate(methods):
         means = []
         errs = []
@@ -204,18 +205,26 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
             vals = [_record_net_energy_kwh(r) for r in records
                     if r.get('season_calendar', r.get('season')) == season
                     and r['method'] == method]
+            season_n[season] = max(season_n.get(season, 0), len(vals))
             means.append(float(np.mean(vals)) if vals else np.nan)
-            errs.append(err_fn(vals) if vals else 0.0)
+            # Clip lower whisker at the sample minimum (net energy >= 0 when
+            # movement_penalty=0; avoids whiskers below realized support).
+            err = err_fn(vals) if vals else 0.0
+            lo = min(err, float(np.mean(vals)) - float(np.min(vals))) if vals else 0.0
+            errs.append([max(lo, 0.0), err])
         style = METHOD_STYLES.get(method, {'color': 'gray', 'label': method})
         offset = (i - (len(methods) - 1) / 2.0) * width
-        ax.bar(x + offset, means, width, yerr=errs, capsize=4,
+        ax.bar(x + offset, means, width,
+               yerr=np.asarray(errs, dtype=np.float64).T, capsize=4,
                color=style['color'], alpha=0.88, label=style.get('label', method))
 
     ax.set_xticks(x)
-    ax.set_xticklabels(seasons)
+    ax.set_xticklabels(['%s\n(n=%d days)' % (s, season_n.get(s, 0)) for s in seasons])
     ax.set_ylabel('Net daily energy (kWh, sum of rewards)')
-    ax.set_title('Net energy yield by calendar season and tracker%s\n(error bars = %s across MC episodes)' % (
-        title_suffix, error))
+    ax.set_title(
+        'Net energy yield by calendar season and tracker%s\n'
+        '(error bars = %s across MC episodes; seasonal means reflect the '
+        'sampled weather mix, n per season is small)' % (title_suffix, error))
     ax.legend(loc='best')
     ax.grid(axis='y', linestyle='--', alpha=0.35)
     tag = ('_%s' % file_tag) if file_tag else ('_%s' % error)

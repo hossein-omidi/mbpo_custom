@@ -1125,6 +1125,22 @@ def write_paired_mc_comparison_report(outdir, paths_by_name, eval_mode='mc', err
     return path
 
 
+def episode_weather_condition(infos):
+    """Episode-majority weather label (mode over steps).
+
+    The first step is 12:00 UTC (= around sunrise in NYC winter), so the
+    step-0 label alone can mark a sunny winter day as 'overcast'.
+    """
+    labels = [info.get('weather_condition') for info in infos
+              if info.get('weather_condition')]
+    if not labels:
+        return 'unknown'
+    counts = {}
+    for lab in labels:
+        counts[lab] = counts.get(lab, 0) + 1
+    return max(counts, key=counts.get)
+
+
 def get_rollout_metadata(path):
     infos = path.get('infos', [])
     info0 = infos[0] if infos else {}
@@ -1141,7 +1157,8 @@ def get_rollout_metadata(path):
         'day_of_year': day_of_year,
         'season': season,
         'season_calendar': season_calendar,
-        'weather_condition': info0.get('weather_condition', 'unknown'),
+        'weather_condition': episode_weather_condition(infos),
+        'weather_condition_first_step': info0.get('weather_condition', 'unknown'),
         'weather_source': info0.get('weather_source', 'unknown'),
         # NSRDB-native episode labels (None when dataset lacks the columns).
         'episode_cloud_type_mode': info0.get('episode_cloud_type_mode'),

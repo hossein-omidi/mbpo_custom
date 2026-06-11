@@ -19,7 +19,7 @@ CONFIG_VERSION = 'pv_tracking_conf2_nsrdb_slow_2026-06-10'
 TRAINING_STAGE = 'conf2'
 
 # Shared across train / in-train eval / result.sh MC eval and baselines.
-_MOVEMENT_PENALTY = 0.0021
+_MOVEMENT_PENALTY = .001
 
 params = build_nsrdb_params(
     CONFIG_VERSION,

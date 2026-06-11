@@ -22,7 +22,7 @@ params = build_nsrdb_params(
     algo_kwargs={
         'n_epochs': 2500,
         'n_initial_exploration_steps': 8000,
-        'real_ratio': 0.75,
+        'real_ratio': 0.85,
         'discount': 1.0,
         'max_model_rollout_length': 1,
         'rollout_schedule': [30, 400, 1, 1],
