@@ -25,7 +25,8 @@ SURFACE_TILT = 30.0
 SURFACE_AZIMUTH = 180.0
 
 
-def test_pvlib_power_path(df):
+# Helper, not a pytest case (this file is a script: python tests/test1.py).
+def check_pvlib_power_path(df):
     location = pvlib.location.Location(
         latitude=LATITUDE, longitude=LONGITUDE, tz=TZ, altitude=12, name='NewYork_test')
 
@@ -72,7 +73,7 @@ def main():
         else:
             print('  {}: not found'.format(col))
 
-    test_pvlib_power_path(weather)
+    check_pvlib_power_path(weather)
 
 
 if __name__ == '__main__':

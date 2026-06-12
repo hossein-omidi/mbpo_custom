@@ -115,7 +115,8 @@ def plot_rollout(data, outdir, name):
     axes[0].grid(True, linestyle='--', alpha=0.4)
 
     axes[1].plot(time, tilt, marker='o', linestyle='-', color='#ff7f0e')
-    axes[1].set_ylabel('Tilt (deg)')
+    axes[1].set_ylim(bottom=0.0)
+    axes[1].set_ylabel('Panel tilt (°) [0=horiz, 90=vert]')
     axes[1].grid(True, linestyle='--', alpha=0.4)
 
     axes[2].plot(time, azimuth, marker='o', linestyle='-', color='#2ca02c')

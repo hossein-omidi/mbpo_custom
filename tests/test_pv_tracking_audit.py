@@ -386,6 +386,37 @@ def test_fixed_no_motion_has_zero_movement_cost():
     env.close()
 
 
+def test_panel_tilt_never_negative_and_matches_pvlib_convention():
+    from mbpo.env.pvlib_physics import (
+        PANEL_TILT_DEG_MAX,
+        PANEL_TILT_DEG_MIN,
+        panel_tilt_deg_from_norm,
+        panel_tilt_norm_from_deg,
+    )
+
+    env = PVTrackingEnv(
+        randomize_day=False,
+        start_date='2020-06-21',
+        end_date='2020-06-21',
+        weather_source='clearsky',
+        movement_penalty=0.0,
+        observation_mode='physical',
+    )
+    env.seed(0)
+    env.reset()
+    for _ in range(50):
+        _, _, done, info = env.step(env.action_space.sample())
+        assert PANEL_TILT_DEG_MIN <= info['tilt'] <= PANEL_TILT_DEG_MAX
+        assert info['tilt'] >= 0.0
+        if done:
+            break
+    assert panel_tilt_norm_from_deg(45.0) == 0.5
+    assert panel_tilt_deg_from_norm(0.5) == 45.0
+    assert panel_tilt_deg_from_norm(-0.1) == 0.0
+    assert panel_tilt_deg_from_norm(1.5) == PANEL_TILT_DEG_MAX
+    env.close()
+
+
 def test_geometry_movement_cost_matches_actuator_model():
     from mbpo.env.pvlib_physics import actuator_movement_cost_kwh
 

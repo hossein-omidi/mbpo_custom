@@ -733,17 +733,24 @@ def plot_rollout_combined(outdir, path, idx):
     axes[1].set_ylabel('Cumulative kWh')
     axes[1].legend(loc='upper left', fontsize=8)
 
-    axes[2].plot(x, tilt, color='#ff7f0e', linewidth=1.5)
-    axes[2].set_ylabel('Tilt (deg)')
+    zenith = np.asarray(
+        [info.get('solar_zenith_deg', np.nan) for info in infos], dtype=np.float64)
+    axes[2].plot(x, tilt, color='#ff7f0e', linewidth=1.5, label='panel tilt')
+    if np.isfinite(zenith).any():
+        axes[2].plot(x, zenith, color='#bcbd22', linewidth=1.0, ls='--', alpha=0.8,
+                     label='solar zenith (target)')
+    axes[2].set_ylim(bottom=0.0)
+    axes[2].set_ylabel('Tilt (°) [0=horiz, 90=vert]')
+    axes[2].legend(loc='upper right', fontsize=7)
 
     axes[3].plot(x, azimuth, color='#2ca02c', linewidth=1.5)
-    axes[3].set_ylabel('Azimuth (deg)')
+    axes[3].set_ylabel('Azimuth (°) [N=0,E=90,S=180]')
 
     if actions.ndim == 2 and actions.shape[1] >= 2:
-        axes[4].plot(x, actions[:, 0], label='tilt cmd', color='#8c564b')
-        axes[4].plot(x, actions[:, 1], label='azimuth cmd', color='#e377c2')
+        axes[4].plot(x, actions[:, 0], label='Δtilt cmd (norm)', color='#8c564b')
+        axes[4].plot(x, actions[:, 1], label='Δaz cmd (norm)', color='#e377c2')
         axes[4].legend(loc='upper right', fontsize=8)
-    axes[4].set_ylabel('Action [-1,1]')
+    axes[4].set_ylabel('Action ∈ [-1,1] (increment, not angle)')
 
     axes[5].plot(x, rewards, color='#d62728', label='reward', linewidth=1.2)
     ax_twin = axes[5].twinx()

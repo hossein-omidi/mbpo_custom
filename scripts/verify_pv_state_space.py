@@ -66,6 +66,8 @@ WEATHER_CONDITION_COLORS = {
     'partly_cloudy': '#ffbb78',
     'overcast': '#7f7f7f',
 }
+# Site of the bundled *historical* (legacy TMY) catalog only — Albuquerque.
+# The NSRDB multi-year scenario path uses the NYC site (see make_nsrdb_env).
 DEFAULT_SITE_LAT = 35.0
 DEFAULT_SITE_LON = -106.0
 DEFAULT_SITE_ALT = 1600.0
@@ -222,7 +224,8 @@ def run_sun_tracking_episode(env, seed=0):
     done = False
     while not done:
         decoded = decode_pv_observation(obs)
-        target_tilt = decoded['solar_zenith_deg']
+        from mbpo.env.pvlib_physics import sun_tracker_target_tilt_deg
+        target_tilt = sun_tracker_target_tilt_deg(decoded['solar_zenith_deg'])
         target_az = decoded['solar_azimuth_deg']
         delta_tilt = np.clip(
             target_tilt - decoded['panel_tilt_deg'],

@@ -9,10 +9,17 @@ from pvlib.irradiance import aoi
 
 from mbpo.env.pvlib_physics import (
     actuator_movement_cost_kwh,
+    clip_panel_orientation,
+    clip_panel_tilt_deg,
     compute_panel_power_w,
     DEFAULT_ACTUATOR_POWER_W,
     DEFAULT_SLEW_RATE_AZIMUTH_DEG_S,
     DEFAULT_SLEW_RATE_TILT_DEG_S,
+    panel_tilt_norm_from_deg,
+    PANEL_TILT_DEG_MAX,
+    PANEL_TILT_DEG_MIN,
+    solar_zenith_norm_from_deg,
+    wrap_panel_azimuth_deg,
 )
 
 from .historical_weather import (
@@ -338,7 +345,7 @@ class PVTrackingEnv(gym.Env):
 
         self.interval_hours = pd.Timedelta(self.freq).total_seconds() / 3600.0
 
-        self.tilt_limits = (0.0, 90.0)
+        self.tilt_limits = (PANEL_TILT_DEG_MIN, PANEL_TILT_DEG_MAX)
         self.azimuth_limits = (0.0, 360.0)
 
         self.action_space = spaces.Box(
@@ -614,14 +621,14 @@ class PVTrackingEnv(gym.Env):
             return float(np.clip(value / TEMPERATURE_NORM, -1.0, 1.0))
 
         shared = [
-            float(np.clip(solar_zenith / 180.0, 0.0, 1.0)),
+            solar_zenith_norm_from_deg(solar_zenith),
             float(np.sin(solar_azimuth_rad)),
             float(np.cos(solar_azimuth_rad)),
             _norm_irradiance(weather['dni']),
             _norm_irradiance(weather['dhi']),
             _norm_irradiance(weather['ghi']),
             _norm_temperature(weather['temperature']),
-            float(self.tilt / 90.0),
+            panel_tilt_norm_from_deg(self.tilt),
             float(np.sin(panel_azimuth_rad)),
             float(np.cos(panel_azimuth_rad)),
         ]
@@ -721,8 +728,8 @@ class PVTrackingEnv(gym.Env):
         delta_tilt = float(action[0]) * self.max_delta_tilt
         delta_azimuth = float(action[1]) * self.max_delta_azimuth
 
-        self.tilt = float(np.clip(self.tilt + delta_tilt, *self.tilt_limits))
-        self.azimuth = float(np.mod(self.azimuth + delta_azimuth, 360.0))
+        self.tilt = clip_panel_tilt_deg(self.tilt + delta_tilt)
+        self.azimuth = wrap_panel_azimuth_deg(self.azimuth + delta_azimuth)
 
         self.step_index += 1
         done = self.step_index >= len(self.times) - 1

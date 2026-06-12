@@ -14,7 +14,7 @@ CONFIGS = {
     'conf1': (
         'examples.config.pv_tracking.conf1',
         'conf1.py',
-        'NSRDB fast — shorter epochs, light MBPO (parallel run)',
+        'NSRDB simple-strong — compact nets, fixed 30°S pose, real_ratio=0.9',
     ),
     'conf2': (
         'examples.config.pv_tracking.conf2',
@@ -29,7 +29,7 @@ CONFIGS = {
     'conf4': (
         'examples.config.pv_tracking.conf4',
         'conf4.py',
-        'NSRDB noisy — irradiance/obs augmentation (parallel run)',
+        'NSRDB light-fast — 64-wide nets, short run, quick epochs',
     ),
     'conf5': (
         'examples.config.pv_tracking.conf5',

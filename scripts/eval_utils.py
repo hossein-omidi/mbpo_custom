@@ -79,10 +79,10 @@ PV_EPISODE_START_TIME = _ENV_START_TIME
 PV_EPISODE_PERIODS = _ENV_PERIODS
 PV_EPISODE_FREQ = _ENV_FREQ
 PV_EPISODE_MAX_STEPS = _ENV_EPISODE_STEPS
-# Default site (must match env __init__ defaults).
-PV_DEFAULT_LATITUDE = 35.0
-PV_DEFAULT_LONGITUDE = -106.0
-PV_DEFAULT_ALTITUDE = 1600.0
+# Default site (must match env __init__ defaults: NYC NSRDB grid cell).
+PV_DEFAULT_LATITUDE = 40.72
+PV_DEFAULT_LONGITUDE = -74.01
+PV_DEFAULT_ALTITUDE = 12.0
 
 EVAL_PROTOCOL_INHERIT = 'inherit'
 EVAL_PROTOCOL_LEGACY_UTC = 'legacy_utc'
@@ -329,15 +329,21 @@ def normalize_angle_diff(target, current):
 
 def decode_pv_observation(obs):
     """Decode normalized PVTracking observation to physical units."""
+    from mbpo.env.pvlib_physics import panel_tilt_deg_from_norm
     obs = np.asarray(obs, dtype=np.float64).reshape(-1)
     solar_azimuth = np.rad2deg(
         np.arctan2(obs[1], obs[2])) % 360.0
     panel_azimuth = np.rad2deg(
         np.arctan2(obs[8], obs[9])) % 360.0
+    # solar_zenith_norm = clip(zenith/180, 0, 1); invert with same clip semantics.
+    zenith_norm = float(np.clip(obs[0], 0.0, 1.0))
     decoded = {
-        'solar_zenith_deg': float(obs[0] * 180.0),
+        'solar_zenith_deg': float(
+            np.clip(zenith_norm * 180.0, 0.0, 180.0)),
+        'solar_zenith_norm': zenith_norm,
         'solar_azimuth_deg': float(solar_azimuth),
-        'panel_tilt_deg': float(obs[7] * 90.0),
+        'panel_tilt_deg': panel_tilt_deg_from_norm(obs[7]),
+        'panel_tilt_norm': float(np.clip(obs[7], 0.0, 1.0)),
         'panel_azimuth_deg': float(panel_azimuth),
         'dni_norm': float(obs[3]),
         'ghi_norm': float(obs[5]),
@@ -470,6 +476,11 @@ def compute_episode_solar_bounds(
     kwargs = dict(env_kwargs or {})
     tz = kwargs.get('tz', PV_TIMEZONE)
     times = build_episode_times(date_str, kwargs)
+    # Site of the evaluated run takes precedence over module defaults so the
+    # reported sunrise/sunset match the env that produced the rollouts.
+    latitude = float(kwargs.get('latitude', latitude))
+    longitude = float(kwargs.get('longitude', longitude))
+    altitude = float(kwargs.get('altitude', altitude))
     loc = Location(latitude, longitude, tz=tz, altitude=altitude)
     sp = loc.get_solarposition(times)
     cs = loc.get_clearsky(times)
@@ -755,7 +766,8 @@ def make_baseline_rollout(env, baseline_type, path_length, seed=None):
             target_tilt = 30.0
             target_azimuth = solar_azimuth
         elif baseline_type in ('sun_seeking', 'sun_tracking'):
-            target_tilt = solar_zenith
+            from mbpo.env.pvlib_physics import sun_tracker_target_tilt_deg
+            target_tilt = sun_tracker_target_tilt_deg(solar_zenith)
             target_azimuth = solar_azimuth
         elif baseline_type in ('poa_greedy_oracle', 'greedy_poa_oracle'):
             target_tilt, target_azimuth = _greedy_poa_orientation(
@@ -1335,12 +1347,14 @@ def write_eval_scenario_confirmation(outdir, eval_env_params, paths_by_name, max
             max_path_length,
         ))
         f.write('Plots and CSV use clock_hour_utc only (no local conversion).\n')
+        site_lat = float(kwargs.get('latitude', PV_DEFAULT_LATITUDE))
+        site_lon = float(kwargs.get('longitude', PV_DEFAULT_LONGITUDE))
         f.write(
-            '\nConfigured grid vs solar day (pvlib, lat=%.1f lon=%.1f):\n' % (
-                PV_DEFAULT_LATITUDE, PV_DEFAULT_LONGITUDE))
+            '\nConfigured grid vs solar day (pvlib, lat=%.2f lon=%.2f):\n' % (
+                site_lat, site_lon))
         f.write(
-            '  Daylight UTC grid %s–%s: tuned for productive sun at 35N/106W. '
-            'Expect 0–2 pre-sunrise steps (power≈0, solar_alt<0) at the grid start in winter.\n' % (
+            '  Daylight UTC grid %s–%s centred on site solar noon. '
+            'Expect a few near-sunrise steps (power≈0, low solar_alt) at the grid start in winter.\n' % (
                 kwargs.get('start_time', PV_EPISODE_START_TIME),
                 _grid_end_clock_label(),
             ))
@@ -1437,9 +1451,9 @@ def write_reward_time_report(outdir, paths, paths_by_name=None):
                         row['peak_reward_time_mean'],
                         row['movement_cost_mean']))
 
-        f.write('\nPeak-power notes (UTC daylight grid at 35N/106W):\n')
+        f.write('\nPeak-power notes (UTC daylight grid, NYC site 40.72N/74.01W):\n')
         f.write(
-            '  A) GHI peak is often near 17-20h UTC in December (solar noon at this longitude).\n')
+            '  A) GHI peak is near site solar noon ~16:56 UTC (16-18h UTC across the year).\n')
         f.write(
             '  B) Gray bands on plots = solar altitude ≤ 0°; expect 0-2 pre-sunrise steps at grid start in winter.\n')
         f.write(

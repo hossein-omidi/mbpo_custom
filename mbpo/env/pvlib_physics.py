@@ -1,11 +1,86 @@
 """Shared pvlib POA irradiance and panel power (used by env, eval, verification).
 
+Angle conventions (uniform across NSRDB, pvlib, env state, observations, baselines)
+---------------------------------------------------------------------------------
+All angles are in **degrees** unless noted.
+
+* **Panel surface tilt** (`surface_tilt` in pvlib): angle between the module
+  plane and the **horizontal ground**, 0° = horizontal (face-up), 90° = vertical.
+  Valid range for this project: **[0°, 90°]** — negative tilt (below horizontal)
+  is non-physical for a ground mount and is clipped before every pvlib call.
+
+* **Panel surface azimuth** (`surface_azimuth` in pvlib): compass bearing the
+  module **faces** (normal projection on horizontal plane), **0° = North**,
+  **90° = East**, **180° = South**, **270° = West**. Stored in **[0°, 360°)**.
+
+* **Solar zenith** (pvlib / NSRDB ``Solar Zenith Angle``): angle from the
+  vertical to the sun, 0° = overhead, 90° = horizon, **> 90°** = below horizon
+  (possible at winter grid edges). Never used as a negative panel tilt.
+
+* **Solar azimuth** (pvlib): compass bearing **to the sun**, same N/E/S/W rule.
+
+* **Control actions** ``a = [a_tilt, a_az]`` in ``[-1, 1]``: normalized
+  **increments** ``Δtilt = a_tilt * max_delta_tilt``,
+  ``Δaz = a_az * max_delta_azimuth`` — **not** absolute angles. Negative
+  ``a_tilt`` means "decrease tilt toward horizontal", not "negative tilt".
+
+* **Observation** ``panel_tilt_norm = tilt_deg / 90`` ∈ [0, 1];
+  ``solar_zenith_norm = clip(zenith_deg / 180, 0, 1)``.
+
+Dual-axis sun-tracker baseline: ``target_tilt = clip(solar_zenith, 0, 90)``,
+``target_azimuth = solar_azimuth`` (standard POA heuristic).
+
 Power model: POA_global (isotropic sky) × area × efficiency.
 Temperature and wind_speed in NSRDB observations are exogenous state features;
 they are not used in the current DC power formula (no pvlib temperature derate).
 """
 
+import numpy as np
 from pvlib.irradiance import get_total_irradiance
+
+# Panel orientation limits (pvlib surface_tilt / surface_azimuth).
+PANEL_TILT_DEG_MIN = 0.0
+PANEL_TILT_DEG_MAX = 90.0
+PANEL_AZIMUTH_DEG_MIN = 0.0
+PANEL_AZIMUTH_DEG_MAX = 360.0  # stored as [0, 360)
+
+
+def clip_panel_tilt_deg(tilt_deg):
+    """Clip panel tilt to [0°, 90°] (pvlib surface_tilt, ground-mount)."""
+    return float(np.clip(float(tilt_deg), PANEL_TILT_DEG_MIN, PANEL_TILT_DEG_MAX))
+
+
+def wrap_panel_azimuth_deg(azimuth_deg):
+    """Normalize panel azimuth to [0°, 360°) (pvlib surface_azimuth)."""
+    return float(np.mod(float(azimuth_deg), PANEL_AZIMUTH_DEG_MAX))
+
+
+def clip_panel_orientation(surface_tilt_deg, surface_azimuth_deg):
+    """Return (tilt, azimuth) in the project's valid pvlib ranges."""
+    return (
+        clip_panel_tilt_deg(surface_tilt_deg),
+        wrap_panel_azimuth_deg(surface_azimuth_deg),
+    )
+
+
+def panel_tilt_norm_from_deg(tilt_deg):
+    """Observation feature panel_tilt_norm = tilt / 90."""
+    return clip_panel_tilt_deg(tilt_deg) / PANEL_TILT_DEG_MAX
+
+
+def panel_tilt_deg_from_norm(tilt_norm):
+    """Decode panel_tilt_norm back to degrees."""
+    return clip_panel_tilt_deg(float(tilt_norm) * PANEL_TILT_DEG_MAX)
+
+
+def solar_zenith_norm_from_deg(zenith_deg):
+    """Observation feature solar_zenith_norm (matches PVTrackingEnv)."""
+    return float(np.clip(float(zenith_deg) / 180.0, 0.0, 1.0))
+
+
+def sun_tracker_target_tilt_deg(solar_zenith_deg):
+    """Dual-axis heuristic: face the sun, capped at vertical."""
+    return clip_panel_tilt_deg(solar_zenith_deg)
 
 
 def compute_poa_global(
@@ -18,9 +93,10 @@ def compute_poa_global(
         dhi,
         model='isotropic'):
     """Plane-of-array global irradiance [W/m²] — same path as PVTrackingEnv."""
+    tilt, azimuth = clip_panel_orientation(surface_tilt, surface_azimuth)
     irradiance = get_total_irradiance(
-        surface_tilt=float(surface_tilt),
-        surface_azimuth=float(surface_azimuth),
+        surface_tilt=tilt,
+        surface_azimuth=azimuth,
         solar_zenith=float(solar_zenith),
         solar_azimuth=float(solar_azimuth),
         dni=float(dni),
