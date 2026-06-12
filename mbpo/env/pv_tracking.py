@@ -7,7 +7,13 @@ import pandas as pd
 from pvlib.location import Location
 from pvlib.irradiance import aoi
 
-from mbpo.env.pvlib_physics import compute_panel_power_w
+from mbpo.env.pvlib_physics import (
+    actuator_movement_cost_kwh,
+    compute_panel_power_w,
+    DEFAULT_ACTUATOR_POWER_W,
+    DEFAULT_SLEW_RATE_AZIMUTH_DEG_S,
+    DEFAULT_SLEW_RATE_TILT_DEG_S,
+)
 
 from .historical_weather import (
     available_month_days,
@@ -138,6 +144,10 @@ class PVTrackingEnv(gym.Env):
         temperature=25.0,
         wind_speed=2.0,
         movement_penalty=0.01,
+        movement_cost_mode='legacy',
+        actuator_power_w=DEFAULT_ACTUATOR_POWER_W,
+        slew_rate_tilt_deg_s=DEFAULT_SLEW_RATE_TILT_DEG_S,
+        slew_rate_azimuth_deg_s=DEFAULT_SLEW_RATE_AZIMUTH_DEG_S,
         fixed_eval_dates=None,
         excluded_dates=None,
         # Optional bounded irradiance augmentation (0 = paper default, deterministic profile per day).
@@ -186,7 +196,15 @@ class PVTrackingEnv(gym.Env):
         self.temperature_variation = 5.0
         self.wind_speed = wind_speed
         self.wind_speed_variation = 1.0
-        self.movement_penalty = movement_penalty
+        self.movement_penalty = float(movement_penalty)
+        self.movement_cost_mode = str(movement_cost_mode).lower()
+        if self.movement_cost_mode not in ('legacy', 'geometry'):
+            raise ValueError(
+                'movement_cost_mode must be legacy or geometry, got %r'
+                % movement_cost_mode)
+        self.actuator_power_w = float(actuator_power_w)
+        self.slew_rate_tilt_deg_s = float(slew_rate_tilt_deg_s)
+        self.slew_rate_azimuth_deg_s = float(slew_rate_azimuth_deg_s)
         # Optional bounded augmentation on catalog irradiance (0 = deterministic weather(d)).
         self.irradiance_perturbation_std = float(irradiance_perturbation_std)
         self.observation_noise_std = float(observation_noise_std)
@@ -720,10 +738,22 @@ class PVTrackingEnv(gym.Env):
         )
 
         energy_kwh = power * self.interval_hours / 1000.0
-        movement_cost = self.movement_penalty * (
-            abs(delta_tilt) / self.max_delta_tilt
-            + abs(delta_azimuth) / self.max_delta_azimuth
-        )
+        if self.movement_penalty <= 0.0:
+            movement_cost = 0.0
+        elif self.movement_cost_mode == 'geometry':
+            movement_cost = actuator_movement_cost_kwh(
+                delta_tilt,
+                delta_azimuth,
+                actuator_power_w=self.actuator_power_w,
+                slew_rate_tilt_deg_s=self.slew_rate_tilt_deg_s,
+                slew_rate_azimuth_deg_s=self.slew_rate_azimuth_deg_s,
+                scale=self.movement_penalty,
+            )
+        else:
+            movement_cost = self.movement_penalty * (
+                abs(delta_tilt) / self.max_delta_tilt
+                + abs(delta_azimuth) / self.max_delta_azimuth
+            )
         reward = energy_kwh - movement_cost
 
         obs = self._build_observation(
@@ -751,6 +781,7 @@ class PVTrackingEnv(gym.Env):
             'power': float(power),
             'energy_kwh': float(energy_kwh),
             'movement_cost': float(movement_cost),
+            'movement_cost_mode': self.movement_cost_mode,
             'reward_energy': float(energy_kwh),
             'reward_movement': float(movement_cost),
             'tilt': float(self.tilt),

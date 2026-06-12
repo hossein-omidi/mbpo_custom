@@ -37,7 +37,8 @@ params = build_nsrdb_params(
         'hidden_dim': 256,
         'num_networks': 7,
         'num_elites': 5,
-        'min_alpha': 0.05,
+        # min_alpha/reward_scale from _nsrdb_base (0.001 / 100): a 0.05 floor
+        # made the entropy bonus dominate the kWh-scale reward (run3 evidence).
     },
     policy_params_kwargs={
         'hidden_layer_sizes': _SAC_HIDDEN,

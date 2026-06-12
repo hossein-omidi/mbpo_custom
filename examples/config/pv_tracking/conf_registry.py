@@ -24,7 +24,7 @@ CONFIGS = {
     'conf3': (
         'examples.config.pv_tracking.conf3',
         'conf3.py',
-        'NSRDB strong — stable MBPO, recommended production (parallel run)',
+        'NSRDB strong — deep SAC + wide BNN, high real_ratio (recommended)',
     ),
     'conf4': (
         'examples.config.pv_tracking.conf4',

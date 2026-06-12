@@ -120,6 +120,15 @@ def default_nsrdb_algo_kwargs(**overrides):
         'eval_deterministic': True,
         'q_loss_warning_threshold': 500.0,
         'monitor_metric': 'evaluation/return-average',
+        # Reward/entropy scale fix (verified on run1-3 logs, 2026-06-12):
+        # raw step reward ~0.007 kWh while the SAC entropy bonus alpha*H was
+        # 0.024-0.127 per step (alpha pinned at min_alpha in every run), so the
+        # soft objective was dominated by entropy, eval return plateaued at
+        # ~0.93x sun tracker, and Q noise (sqrt(Q_loss)~0.018) buried per-action
+        # advantages (~0.001-0.005). reward_scale only multiplies rewards inside
+        # the TD target (sac.py/mbpo.py); env rewards, logs and plots stay kWh.
+        'reward_scale': 100.0,
+        'min_alpha': 0.001,
     })
     kw.update(overrides)
     return kw

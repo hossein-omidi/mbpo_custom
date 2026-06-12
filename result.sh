@@ -18,7 +18,7 @@ usage() {
 RUN_NAME="$1"
 shift
 MODE="full"
-NUM_ROLLOUTS="${NUM_ROLLOUTS:-16}"
+NUM_ROLLOUTS="${NUM_ROLLOUTS:-64}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

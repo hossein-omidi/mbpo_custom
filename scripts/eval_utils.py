@@ -1224,7 +1224,10 @@ def write_eval_statistics_readme(outdir, num_rollouts, eval_seed_base):
         f.write('  Deploy: tanh(mu) when deterministic=True (matches training eval).\n')
         f.write('  Integrity: evaluate_agent validates policy_input_dim vs env obs dim.\n\n')
         f.write('Per-step reward (all methods, same env.step):\n')
-        f.write('  r_t = energy_kwh_t - movement_penalty * (|a0| + |a1|)\n')
+        f.write('  r_t = energy_kwh_t - movement_cost\n')
+        f.write('  movement_cost=0 when movement_penalty=0.\n')
+        f.write('  geometry mode: P_motor*(|Δtilt|/ω_tilt+|Δaz|/ω_az)/3.6e6 * scale.\n')
+        f.write('  legacy mode: movement_penalty * (|a0| + |a1|).\n')
         f.write('  Episode return R = sum_t r_t  (discount=1 in PV env).\n\n')
         f.write('Monte Carlo over rollouts (this eval):\n')
         f.write('  N = %d independent episodes, seed_i = %d + i.\n' % (

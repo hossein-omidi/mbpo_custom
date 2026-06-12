@@ -386,6 +386,32 @@ def test_fixed_no_motion_has_zero_movement_cost():
     env.close()
 
 
+def test_geometry_movement_cost_matches_actuator_model():
+    from mbpo.env.pvlib_physics import actuator_movement_cost_kwh
+
+    env = PVTrackingEnv(
+        randomize_day=False,
+        start_date='2020-06-21',
+        end_date='2020-06-21',
+        weather_source='clearsky',
+        movement_penalty=1.0,
+        movement_cost_mode='geometry',
+        observation_mode='physical',
+    )
+    env.seed(0)
+    env.reset()
+    action = np.array([1.0, 0.5], dtype=np.float32)
+    _, _, _, info = env.step(action)
+    expected = actuator_movement_cost_kwh(
+        env.max_delta_tilt,
+        0.5 * env.max_delta_azimuth,
+        scale=1.0,
+    )
+    assert abs(info['movement_cost'] - expected) < 1e-9
+    assert info['movement_cost_mode'] == 'geometry'
+    env.close()
+
+
 def test_season_calendar_vs_env_june():
     import sys
     scripts = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scripts')
