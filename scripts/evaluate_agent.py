@@ -898,7 +898,8 @@ def main(args):
             eval_mode='nsrdb' if ws == 'nsrdb_multiyear' else 'mc',
             error='std')
     stats_readme = write_eval_statistics_readme(
-        args.outdir, len(paths), int(args.eval_seed_base))
+        args.outdir, len(paths), int(args.eval_seed_base),
+        checkpoint_path=checkpoint_path)
 
     reward_plot = plot_rewards(args.outdir, paths)
     plot_files = [

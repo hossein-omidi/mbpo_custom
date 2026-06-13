@@ -121,8 +121,7 @@ do_eval_nsrdb() {
     --max-path-length 117 \
     --max-rollout-plots 4 \
     --eval-protocol inherit \
-    --policy-mode deterministic \
-    --vary-init-orientation
+    --policy-mode deterministic
 }
 
 do_eval() {

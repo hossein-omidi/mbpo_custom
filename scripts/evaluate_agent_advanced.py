@@ -72,9 +72,9 @@ from evaluate_agent import (
 )
 
 METHOD_STYLES = {
-    'learned_policy': {'color': '#1f77b4', 'label': 'learned', 'lw': 2.0},
-    'sun_tracking': {'color': '#2ca02c', 'label': 'sun tracking', 'lw': 1.8},
-    'fixed_no_motion': {'color': '#ff7f0e', 'label': 'fixed', 'lw': 1.8},
+    'learned_policy': {'color': '#1f77b4', 'label': 'MBPO-SAC', 'lw': 2.0},
+    'sun_tracking': {'color': '#2ca02c', 'label': 'Sun tracker', 'lw': 1.8},
+    'fixed_no_motion': {'color': '#ff7f0e', 'label': 'Fixed mount', 'lw': 1.8},
 }
 
 

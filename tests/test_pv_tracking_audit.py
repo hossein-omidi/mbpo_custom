@@ -530,3 +530,61 @@ def test_historical_weather_changes_irradiance_and_power():
     finally:
         hist_env.close()
         clear_env.close()
+
+
+def test_expected_step_movement_cost_matches_env_legacy_and_geometry():
+    from scripts.eval_utils import expected_step_movement_cost_kwh
+
+    legacy = expected_step_movement_cost_kwh(
+        5.0, 10.0, movement_penalty=2.0, movement_cost_mode='legacy')
+    assert legacy == pytest.approx(2.0 * (1.0 + 1.0))
+
+    geometry = expected_step_movement_cost_kwh(
+        5.0, 10.0, movement_penalty=1.0, movement_cost_mode='geometry')
+    assert geometry == pytest.approx(0.00006944444444444445, rel=1e-6)
+
+    env = PVTrackingEnv(
+        randomize_day=False,
+        start_date='2020-06-21',
+        end_date='2020-06-21',
+        weather_source='clearsky',
+        movement_penalty=1.0,
+        movement_cost_mode='geometry',
+        randomize_initial_orientation=False,
+    )
+    try:
+        env.reset()
+        _, _, _, info = env.step(np.array([1.0, 0.5], dtype=np.float32))
+        expected = expected_step_movement_cost_kwh(
+            info['delta_tilt_deg'],
+            info['delta_azimuth_deg'],
+            movement_penalty=1.0,
+            movement_cost_mode='geometry',
+        )
+        assert info['movement_cost'] == pytest.approx(expected, abs=1e-9)
+    finally:
+        env.close()
+
+
+def test_validate_paired_mc_rollout_alignment_detects_mismatch():
+    from scripts.eval_utils import validate_paired_mc_rollout_alignment
+
+    base = {
+        'rewards': [0.1, 0.2],
+        'infos': [{'rollout_seed': 100, 'scenario_id': '2018-06-21'}] * 2,
+    }
+    matched = {
+        'learned_policy': [base],
+        'sun_tracking': [base],
+    }
+    validate_paired_mc_rollout_alignment(matched, label='test')
+
+    mismatched = {
+        'learned_policy': [base],
+        'sun_tracking': [{
+            'rewards': [0.1, 0.2],
+            'infos': [{'rollout_seed': 100, 'scenario_id': '2019-06-21'}] * 2,
+        }],
+    }
+    with pytest.raises(SystemExit):
+        validate_paired_mc_rollout_alignment(mismatched, label='test')

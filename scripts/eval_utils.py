@@ -973,6 +973,82 @@ def _rollout_net_energy(path):
     return float(np.sum(path.get('rewards', [])))
 
 
+def expected_step_movement_cost_kwh(
+        delta_tilt_deg,
+        delta_azimuth_deg,
+        movement_penalty,
+        movement_cost_mode='legacy',
+        max_delta_tilt=5.0,
+        max_delta_azimuth=10.0,
+        actuator_power_w=30.0,
+        slew_rate_tilt_deg_s=1.5,
+        slew_rate_azimuth_deg_s=2.0):
+    """Replicate PVTrackingEnv movement_cost for one control step."""
+    penalty = float(movement_penalty)
+    if penalty <= 0.0:
+        return 0.0
+    mode = str(movement_cost_mode).lower()
+    dt = abs(float(delta_tilt_deg))
+    da = abs(float(delta_azimuth_deg))
+    if mode == 'geometry':
+        from mbpo.env.pvlib_physics import actuator_movement_cost_kwh
+        return actuator_movement_cost_kwh(
+            dt, da,
+            actuator_power_w=actuator_power_w,
+            slew_rate_tilt_deg_s=slew_rate_tilt_deg_s,
+            slew_rate_azimuth_deg_s=slew_rate_azimuth_deg_s,
+            scale=penalty)
+    return penalty * (
+        dt / float(max_delta_tilt) + da / float(max_delta_azimuth))
+
+
+def movement_settings_from_eval_kwargs(eval_kwargs):
+    """Extract movement-cost parameters used for reward verification."""
+    kw = eval_kwargs or {}
+    return {
+        'movement_penalty': float(kw.get('movement_penalty', 0.0)),
+        'movement_cost_mode': str(kw.get('movement_cost_mode', 'legacy')).lower(),
+        'max_delta_tilt': float(kw.get('max_delta_tilt', 5.0)),
+        'max_delta_azimuth': float(kw.get('max_delta_azimuth', 10.0)),
+        'actuator_power_w': float(kw.get('actuator_power_w', 30.0)),
+        'slew_rate_tilt_deg_s': float(kw.get('slew_rate_tilt_deg_s', 1.5)),
+        'slew_rate_azimuth_deg_s': float(kw.get('slew_rate_azimuth_deg_s', 2.0)),
+    }
+
+
+def validate_paired_mc_rollout_alignment(paths_by_method, label='mc'):
+    """Ensure matched-seed MC: equal counts, same seed and scenario_id per index."""
+    if not paths_by_method:
+        return
+    methods = sorted(paths_by_method.keys())
+    ref_method = 'learned_policy' if 'learned_policy' in paths_by_method else methods[0]
+    ref_paths = paths_by_method[ref_method]
+    n = len(ref_paths)
+    for method, paths in paths_by_method.items():
+        if len(paths) != n:
+            raise SystemExit(
+                '[mc] ERROR: %s rollout count mismatch: %s has %d, %s has %d' % (
+                    label, method, len(paths), ref_method, n))
+    for idx in range(n):
+        seeds = {}
+        scenario_ids = {}
+        for method in methods:
+            path = paths_by_method[method][idx]
+            seeds[method] = _rollout_seed(path, idx)
+            meta = get_rollout_metadata(path)
+            sid = meta.get('scenario_id')
+            if sid:
+                scenario_ids[method] = sid
+        if len(set(seeds.values())) > 1:
+            raise SystemExit(
+                '[mc] ERROR: %s rollout %d seed mismatch across methods: %s' % (
+                    label, idx + 1, seeds))
+        if scenario_ids and len(set(scenario_ids.values())) > 1:
+            raise SystemExit(
+                '[mc] ERROR: %s rollout %d scenario_id mismatch across methods: %s' % (
+                    label, idx + 1, scenario_ids))
+
+
 def _rollout_seed(path, fallback_index=0):
     infos = path.get('infos', []) or []
     if infos:
@@ -1225,22 +1301,37 @@ def summarize_by_group(paths, key_fn):
     }
 
 
-def write_eval_statistics_readme(outdir, num_rollouts, eval_seed_base):
+def write_eval_statistics_readme(outdir, num_rollouts, eval_seed_base, checkpoint_path=None):
     """Document post-train estimators (not SAC entropy / Q bounds)."""
     path = os.path.join(outdir, 'EVAL_STATISTICS.txt')
     with open(path, 'w', encoding='utf-8') as f:
         f.write('Post-training evaluation statistics\n')
         f.write('=' * 40 + '\n\n')
         f.write('Checkpoint / policy\n')
-        f.write('  Loaded from trial params.json + checkpoint policy_weights.\n')
+        if checkpoint_path:
+            ckpt_base = os.path.basename(checkpoint_path.rstrip(os.sep))
+            f.write('  Path: %s\n' % checkpoint_path)
+            if ckpt_base == 'best_eval_checkpoint':
+                f.write('  Selection: best_eval_checkpoint (resolve_checkpoint preference).\n')
+                f.write('  In-training monitor: evaluation/return-average (max over epochs).\n')
+                f.write('  Policy: tanh(mu) when eval_deterministic=True (default).\n')
+            elif ckpt_base == 'latest_checkpoint':
+                f.write('  Selection: latest_checkpoint (no best_eval_checkpoint on disk).\n')
+            else:
+                f.write('  Selection: explicit checkpoint path.\n')
+        else:
+            f.write('  Loaded from trial params.json + checkpoint policy_weights.\n')
         f.write('  Deploy: tanh(mu) when deterministic=True (matches training eval).\n')
         f.write('  Integrity: evaluate_agent validates policy_input_dim vs env obs dim.\n\n')
         f.write('Per-step reward (all methods, same env.step):\n')
         f.write('  r_t = energy_kwh_t - movement_cost\n')
         f.write('  movement_cost=0 when movement_penalty=0.\n')
-        f.write('  geometry mode: P_motor*(|Δtilt|/ω_tilt+|Δaz|/ω_az)/3.6e6 * scale.\n')
-        f.write('  legacy mode: movement_penalty * (|a0| + |a1|).\n')
+        f.write('  geometry mode: P_motor*(|Δtilt|/ω_tilt+|Δaz|/ω_az)/3.6e6 * movement_penalty.\n')
+        f.write('  legacy mode: movement_penalty * (|Δtilt|/max_Δtilt + |Δaz|/max_Δaz).\n')
         f.write('  Episode return R = sum_t r_t  (discount=1 in PV env).\n\n')
+        f.write('Gross vs net energy:\n')
+        f.write('  gross_energy_kwh = sum_t energy_kwh_t  (pvlib harvest, no penalty).\n')
+        f.write('  net_energy_kwh   = sum_t r_t = gross - movement  (fair compare metric).\n\n')
         f.write('Monte Carlo over rollouts (this eval):\n')
         f.write('  N = %d independent episodes, seed_i = %d + i.\n' % (
             num_rollouts, eval_seed_base))
@@ -1255,7 +1346,7 @@ def write_eval_statistics_readme(outdir, num_rollouts, eval_seed_base):
         f.write('Baselines:\n')
         f.write('  sun_tracking: slew toward solar zenith/azimuth each step.\n')
         f.write('  fixed_no_motion: action=0 (panel frozen at reset pose; movement_cost=0).\n')
-        f.write('  fixed_tilt_south: optional slew to 30/180 (not default in Stage 3).\n\n')
+        f.write('  All three share identical weather, UTC grid, seed, and initial pose per rollout.\n\n')
         f.write('Episode clock (UTC): %s start, 5min steps, %d transitions.\n' % (
             _ENV_START_TIME, PV_EPISODE_MAX_STEPS))
         f.write('  Same grid as training; see eval_config episode_preset in summary.\n')
@@ -1490,7 +1581,8 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
         header = [
             'step', 'rollout_seed', 'clock_hour_utc', 'timezone', 'timestamp_utc_iso',
             'reward', 'terminal',
-            'power_w', 'energy_kwh', 'movement_cost',
+            'power_w', 'energy_kwh', 'movement_cost', 'movement_cost_mode',
+            'delta_tilt_deg', 'delta_azimuth_deg',
             'reward_energy', 'reward_movement',
             'tilt_deg', 'azimuth_deg',
             'solar_zenith_deg', 'solar_azimuth_deg', 'solar_altitude_deg',
@@ -1520,6 +1612,9 @@ def save_rollout_csv(outdir, paths, prefix='rollout'):
                 info.get('power', ''),
                 info.get('energy_kwh', ''),
                 info.get('movement_cost', ''),
+                info.get('movement_cost_mode', ''),
+                info.get('delta_tilt_deg', ''),
+                info.get('delta_azimuth_deg', ''),
                 info.get('reward_energy', info.get('energy_kwh', '')),
                 info.get('reward_movement', info.get('movement_cost', '')),
                 info.get('tilt', ''),

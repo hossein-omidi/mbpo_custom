@@ -33,7 +33,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
-from eval_utils import PV_EPISODE_START_TIME, compute_total_energy_kwh
+from eval_utils import (
+    PV_EPISODE_START_TIME,
+    compute_total_energy_kwh,
+    expected_step_movement_cost_kwh,
+    movement_settings_from_eval_kwargs,
+)
 
 MAX_DELTA_TILT = 5.0
 MAX_DELTA_AZIMUTH = 10.0
@@ -266,10 +271,18 @@ def load_evaluation_summary(eval_dir):
 
 def load_eval_movement_penalty(eval_dir):
     """movement_penalty from evaluation_summary.json (matches evaluate_agent eval_config)."""
+    return load_eval_movement_settings(eval_dir).get('movement_penalty')
+
+
+def load_eval_movement_settings(eval_dir, trial_dir=None):
+    """Movement-cost kwargs from eval summary, else training params.json."""
     kw = load_evaluation_summary(eval_dir).get('eval_config') or {}
-    if 'movement_penalty' in kw:
-        return float(kw['movement_penalty'])
-    return None
+    if kw:
+        return movement_settings_from_eval_kwargs(kw)
+    if trial_dir:
+        train_kw = load_training_params(trial_dir=trial_dir)
+        return movement_settings_from_eval_kwargs(train_kw)
+    return movement_settings_from_eval_kwargs({})
 
 
 def load_eval_deterministic(eval_dir):
@@ -422,10 +435,13 @@ def summarize_pair_coverage(pairs):
     return lines
 
 
-def verify_paired_fairness(learned_rows, baseline_rows, movement_penalty=None):
+def verify_paired_fairness(learned_rows, baseline_rows, movement_settings=None):
     """Same date/weather per step, same reward formula."""
     lines = []
     ok = True
+    settings = movement_settings or movement_settings_from_eval_kwargs({})
+    penalty = float(settings.get('movement_penalty', 0.0))
+    cost_mode = str(settings.get('movement_cost_mode', 'legacy')).lower()
     if len(learned_rows) != len(baseline_rows):
         ok = False
         lines.append('FAIL: trajectory length learned=%d baseline=%d' % (
@@ -467,7 +483,6 @@ def verify_paired_fairness(learned_rows, baseline_rows, movement_penalty=None):
         else:
             lines.append('OK: reward = energy_kwh - movement_cost for all steps (%s)' % label)
 
-    penalty = 0.0 if movement_penalty is None else float(movement_penalty)
     if penalty == 0.0:
         bad_move = sum(
             1 for r in learned_rows
@@ -482,18 +497,37 @@ def verify_paired_fairness(learned_rows, baseline_rows, movement_penalty=None):
     else:
         bad_move = 0
         for r in learned_rows:
-            a0, a1 = float(r['action_tilt']), float(r['action_azimuth'])
-            expected = penalty * (abs(a0) + abs(a1))
-            if abs(float(r['movement_cost']) - expected) > 1e-7:
+            dt = r.get('delta_tilt_deg')
+            da = r.get('delta_azimuth_deg')
+            if dt in (None, '') or da in (None, ''):
+                a0, a1 = float(r['action_tilt']), float(r['action_azimuth'])
+                dt = float(a0) * settings['max_delta_tilt']
+                da = float(a1) * settings['max_delta_azimuth']
+            else:
+                dt = float(dt)
+                da = float(da)
+            expected = expected_step_movement_cost_kwh(
+                dt,
+                da,
+                penalty,
+                movement_cost_mode=cost_mode,
+                max_delta_tilt=settings['max_delta_tilt'],
+                max_delta_azimuth=settings['max_delta_azimuth'],
+                actuator_power_w=settings['actuator_power_w'],
+                slew_rate_tilt_deg_s=settings['slew_rate_tilt_deg_s'],
+                slew_rate_azimuth_deg_s=settings['slew_rate_azimuth_deg_s'],
+            )
+            if abs(float(r['movement_cost']) - expected) > 1e-6:
                 bad_move += 1
+        mode_label = 'geometry (|Δangle|/slew rate)' if cost_mode == 'geometry' else 'legacy (|Δ|/max_Δ)'
         if bad_move:
             lines.append(
-                'NOTE: movement_cost != penalty*(|a0|+|a1|) on %d steps (penalty=%g); '
-                'energy metrics still valid.' % (bad_move, penalty))
+                'NOTE: movement_cost mismatch on %d steps (mode=%s, penalty=%g); '
+                'energy/reward identity still checked above.' % (bad_move, mode_label, penalty))
         else:
             lines.append(
-                'OK: movement_cost = movement_penalty*(|a0|+|a1|) with penalty=%g.'
-                % penalty)
+                'OK: movement_cost matches env formula (%s, penalty=%g).'
+                % (mode_label, penalty))
 
     lines.append('')
     lines.append('Comparison protocol: same get_eval_environment kwargs, seed=rollout_index,')
@@ -987,18 +1021,15 @@ def _run_diagnosis(args):
         pairs = [(learned_paths[i], sun_paths[i], 'rollout_%d' % (i + 1)) for i in range(n)]
 
     eval_summary = load_evaluation_summary(args.eval_dir)
-    movement_penalty = load_eval_movement_penalty(args.eval_dir)
-    if movement_penalty is None and args.trial_dir:
-        train_penalty = load_training_params(trial_dir=args.trial_dir).get('movement_penalty')
-        if train_penalty is not None:
-            movement_penalty = float(train_penalty)
+    movement_settings = load_eval_movement_settings(args.eval_dir, trial_dir=args.trial_dir)
+    movement_penalty = movement_settings.get('movement_penalty')
     eval_deterministic = load_eval_deterministic(args.eval_dir)
 
     if pairs:
         l0 = load_csv(pairs[0][0])
         s0 = load_csv(pairs[0][1])
         fair_ok, fair_lines = verify_paired_fairness(
-            l0, s0, movement_penalty=movement_penalty)
+            l0, s0, movement_settings=movement_settings)
         sections.append(('Eval fairness (rollout_1 learned vs sun_tracking)', fair_lines))
         sections.append(('Paired coverage (all aligned rollouts)', summarize_pair_coverage(pairs)))
 
@@ -1014,9 +1045,13 @@ def _run_diagnosis(args):
         protocol_lines.append(
             'NOTE: no deterministic flag in evaluation_summary.json — ensure eval used '
             '--deterministic (evaluate_agent default) before interpreting RC1.')
-    if movement_penalty is None:
+    if movement_penalty is None or float(movement_penalty) == 0.0:
         protocol_lines.append(
-            'NOTE: movement_penalty missing from eval_config — fairness uses penalty=0.')
+            'NOTE: movement_penalty=0 in eval_config — net energy equals gross harvest.')
+    else:
+        protocol_lines.append(
+            'movement_cost_mode=%s  movement_penalty=%g (same formula for all methods).'
+            % (movement_settings.get('movement_cost_mode', 'legacy'), float(movement_penalty)))
     sections.append(('Eval protocol (RC1 / fairness)', protocol_lines))
 
     learned_summaries = []

@@ -49,6 +49,7 @@ from eval_utils import (
     rollout_xlabel,
     save_rollout_csv,
     season_from_calendar_date,
+    validate_paired_mc_rollout_alignment,
     write_eval_scenario_confirmation,
     write_eval_statistics_readme,
 )
@@ -236,7 +237,7 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
 
 
 def validate_mc_rollout_paths(paths_by_method, path_length, label='mc'):
-    """Fail loudly if rollouts are empty or wrong horizon (avoids blank plots)."""
+    """Fail loudly if rollouts are empty, wrong horizon, or seed/scenario mis-paired."""
     for method, paths in paths_by_method.items():
         if not paths:
             raise SystemExit('[mc] ERROR: %s has no %s rollouts' % (label, method))
@@ -262,6 +263,7 @@ def validate_mc_rollout_paths(paths_by_method, path_length, label='mc'):
                     raise SystemExit(
                         '[mc] ERROR: NSRDB control_interval_minutes=%r (expected 5.0)' % (
                             info0.get('control_interval_minutes')))
+    validate_paired_mc_rollout_alignment(paths_by_method, label=label)
 
 
 def write_nsrdb_mc_rollout_plots(args, aligned_by_method, methods, path_length):
@@ -334,7 +336,7 @@ def plot_season_ratio_bars(outdir, records, baseline='sun_tracking', error='sem'
     return path
 
 
-def write_mc_report(outdir, args, dates, records, paths_by_name=None):
+def write_mc_report(outdir, args, dates, records, paths_by_name=None, eval_env_params=None):
     path = os.path.join(outdir, 'mc_evaluation_report.txt')
     is_annual = args.date_set == 'annual' or dates == ['annual']
     is_nsrdb = args.date_set == 'nsrdb_multiyear' or dates == ['nsrdb_multiyear']
@@ -358,7 +360,10 @@ def write_mc_report(outdir, args, dates, records, paths_by_name=None):
             f.write('dates (%d): %s\n' % (len(dates), ', '.join(dates)))
             f.write('replicates_per_date: %d\n' % args.replicates_per_date)
         f.write('policy_mode: %s\n' % args.policy_mode)
-        f.write('vary_init_orientation: %s\n' % args.vary_init_orientation)
+        f.write('vary_init_orientation CLI override: %s\n' % args.vary_init_orientation)
+        if eval_env_params:
+            eff = eval_env_params.get('kwargs', {}).get('randomize_initial_orientation')
+            f.write('effective randomize_initial_orientation: %s (from eval env kwargs)\n' % eff)
         f.write('eval_protocol: inherit\n\n')
         if not is_annual and not is_nsrdb:
             by_season = dates_by_season(dates)
@@ -646,9 +651,12 @@ def main():
     }
 
     report_dates = dates or [args.date_set]
-    write_mc_report(args.outdir, args, report_dates, records, paths_by_name=paths_by_name)
+    write_mc_report(args.outdir, args, report_dates, records, paths_by_name=paths_by_name,
+                    eval_env_params=eval_env_params)
     if args.date_set in ('annual', 'nsrdb_multiyear'):
-        write_eval_statistics_readme(args.outdir, args.num_rollouts, args.eval_seed_base)
+        write_eval_statistics_readme(
+            args.outdir, args.num_rollouts, args.eval_seed_base,
+            checkpoint_path=checkpoint_path)
     with open(os.path.join(args.outdir, 'mc_records.json'), 'w') as f:
         json.dump(records, f, indent=2)
     write_eval_scenario_confirmation(

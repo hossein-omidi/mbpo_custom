@@ -31,9 +31,9 @@ from eval_utils import (
 
 METHODS = ('learned_policy', 'sun_tracking', 'fixed_no_motion')
 METHOD_LABELS = {
-    'learned_policy': 'MBPO-SAC',
-    'sun_tracking': 'Sun tracker',
-    'fixed_no_motion': 'Fixed tracker',
+    'learned_policy': 'MBPO-SAC (learned)',
+    'sun_tracking': 'Sun tracker (greedy zenith/az)',
+    'fixed_no_motion': 'Fixed mount (no motion)',
 }
 METHOD_COLORS = {
     'learned_policy': '#1f77b4',
