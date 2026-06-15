@@ -255,10 +255,10 @@ def test_baselines_share_scenario_id(manifest_available):
     env = PVTrackingEnv(**_env_kwargs(fixed_eval_scenarios=['2020-06-21']))
     try:
         paths = {}
-        for method in ('sun_tracking', 'fixed_no_motion'):
+        for method in ('poa_greedy_oracle', 'fixed_no_motion'):
             env.seed(7)
             paths[method] = make_baseline_rollout(env, method, path_length=117, seed=7)
-        sid0 = paths['sun_tracking']['infos'][0].get('scenario_id')
+        sid0 = paths['poa_greedy_oracle']['infos'][0].get('scenario_id')
         sid1 = paths['fixed_no_motion']['infos'][0].get('scenario_id')
         assert sid0 == sid1 == '2020-06-21'
     finally:

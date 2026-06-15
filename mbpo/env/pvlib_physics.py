@@ -27,10 +27,17 @@ All angles are in **degrees** unless noted.
 * **Observation** ``panel_tilt_norm = tilt_deg / 90`` ∈ [0, 1];
   ``solar_zenith_norm = clip(zenith_deg / 180, 0, 1)``.
 
-Dual-axis sun-tracker baseline: ``target_tilt = clip(solar_zenith, 0, 90)``,
-``target_azimuth = solar_azimuth`` (standard POA heuristic).
+POA transposition: ``pvlib.irradiance.get_total_irradiance`` (default
+``model='isotropic'``) via :func:`compute_poa_global`. All env steps, baselines,
+and the POA oracle use this same function — no hand-rolled transposition.
 
-Power model: POA_global (isotropic sky) × area × efficiency.
+Dual-axis sun-tracker baseline: ``target_tilt = clip(solar_zenith, 0, 90)``,
+``target_azimuth = solar_azimuth`` (standard astronomical dual-axis pointing).
+This is **not** ``pvlib.tracking.singleaxis`` (single-axis hardware with one
+rotation axis). Use :func:`single_axis_tracking_targets` only for the optional
+``single_axis`` eval baseline.
+
+Power model: POA_global × area × efficiency.
 Temperature and wind_speed in NSRDB observations are exogenous state features;
 they are not used in the current DC power formula (no pvlib temperature derate).
 """
@@ -83,6 +90,50 @@ def sun_tracker_target_tilt_deg(solar_zenith_deg):
     return clip_panel_tilt_deg(solar_zenith_deg)
 
 
+def dual_axis_tracking_targets(solar_zenith_deg, solar_azimuth_deg):
+    """Ideal dual-axis tracker surface angles (same convention as PVTrackingEnv).
+
+    Returns ``(surface_tilt, surface_azimuth)`` for a full dual-axis mount that
+    slews toward the sun each step. POA at these angles still uses
+    :func:`compute_poa_global` → ``get_total_irradiance``.
+    """
+    return (
+        sun_tracker_target_tilt_deg(solar_zenith_deg),
+        wrap_panel_azimuth_deg(solar_azimuth_deg),
+    )
+
+
+def single_axis_tracking_targets(
+        apparent_zenith,
+        apparent_azimuth,
+        axis_tilt=0.0,
+        axis_azimuth=180.0,
+        max_angle=90.0,
+        backtrack=True,
+        gcr=0.35):
+    """Surface angles from ``pvlib.tracking.singleaxis`` (one-axis tracker).
+
+    Uses apparent zenith/azimuth as required by pvlib. When the sun is below
+    the horizon, pvlib returns NaN — fall back to ``(0°, axis_azimuth)``.
+    """
+    from pvlib import tracking
+
+    result = tracking.singleaxis(
+        apparent_zenith=apparent_zenith,
+        apparent_azimuth=apparent_azimuth,
+        axis_tilt=axis_tilt,
+        axis_azimuth=axis_azimuth,
+        max_angle=max_angle,
+        backtrack=backtrack,
+        gcr=gcr,
+    )
+    tilt = float(result['surface_tilt'])
+    az = float(result['surface_azimuth'])
+    if not np.isfinite(tilt) or not np.isfinite(az):
+        return clip_panel_orientation(0.0, axis_azimuth)
+    return clip_panel_orientation(tilt, az)
+
+
 def compute_poa_global(
         surface_tilt,
         surface_azimuth,
@@ -105,6 +156,37 @@ def compute_poa_global(
         model=model,
     )
     return max(float(irradiance['poa_global']), 0.0)
+
+
+def verify_get_total_irradiance_parity(
+        surface_tilt,
+        surface_azimuth,
+        solar_zenith,
+        solar_azimuth,
+        dni,
+        ghi,
+        dhi,
+        model='isotropic',
+        rtol=1e-9):
+    """True when :func:`compute_poa_global` matches a direct pvlib call."""
+    poa = compute_poa_global(
+        surface_tilt, surface_azimuth,
+        solar_zenith, solar_azimuth,
+        dni, ghi, dhi, model=model)
+    direct = get_total_irradiance(
+        surface_tilt=clip_panel_tilt_deg(surface_tilt),
+        surface_azimuth=wrap_panel_azimuth_deg(surface_azimuth),
+        solar_zenith=float(solar_zenith),
+        solar_azimuth=float(solar_azimuth),
+        dni=float(dni),
+        ghi=float(ghi),
+        dhi=float(dhi),
+        model=model,
+    )
+    expected = max(float(direct['poa_global']), 0.0)
+    if expected < 1e-12 and poa < 1e-12:
+        return True, 0.0
+    return np.isclose(poa, expected, rtol=rtol, atol=1e-9), abs(poa - expected)
 
 
 def compute_panel_power_w(

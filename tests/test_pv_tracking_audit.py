@@ -473,8 +473,8 @@ def test_plot_daily_gain_matplotlib_colors():
     }
     paths_by_name = {
         'learned_policy': [mock_path, mock_path],
-        'sun_tracking': [mock_path],
-        'fixed_no_motion': [mock_path],
+        'poa_greedy_oracle': [mock_path, mock_path],
+        'fixed_no_motion': [mock_path, mock_path],
     }
     with tempfile.TemporaryDirectory() as tmp:
         p1 = plot_daily_gain_distributions(tmp, paths_by_name)
@@ -494,7 +494,8 @@ def test_train_result_shell_entrypoints():
     assert 'evaluate_agent.py' in result
     assert 'compare-baselines' in result
     assert 'eval-seed-base' in result
-    assert 'fixed_no_motion' not in result or 'sun_tracking' in result
+    assert 'evaluate_fullyear_mc' in result
+    assert 'poa_greedy_oracle' not in result or 'evaluate_fullyear_mc' in result
     assert 'resolve_trial_for_run' in result or 'trial_pointer' in result
 
 
@@ -575,16 +576,70 @@ def test_validate_paired_mc_rollout_alignment_detects_mismatch():
     }
     matched = {
         'learned_policy': [base],
-        'sun_tracking': [base],
+        'poa_greedy_oracle': [base],
     }
     validate_paired_mc_rollout_alignment(matched, label='test')
 
     mismatched = {
         'learned_policy': [base],
-        'sun_tracking': [{
+        'poa_greedy_oracle': [{
             'rewards': [0.1, 0.2],
             'infos': [{'rollout_seed': 100, 'scenario_id': '2019-06-21'}] * 2,
         }],
     }
     with pytest.raises(SystemExit):
         validate_paired_mc_rollout_alignment(mismatched, label='test')
+
+
+def test_compute_poa_global_matches_get_total_irradiance():
+    from mbpo.env.pvlib_physics import verify_get_total_irradiance_parity
+
+    ok, err = verify_get_total_irradiance_parity(
+        30.0, 180.0, 45.0, 180.0, dni=800.0, ghi=900.0, dhi=100.0)
+    assert ok, 'POA parity failed, err=%s' % err
+
+
+def test_dual_axis_tracking_targets_match_sun_tracker_heuristic():
+    from mbpo.env.pvlib_physics import (
+        dual_axis_tracking_targets,
+        sun_tracker_target_tilt_deg,
+    )
+
+    zen, az = 52.3, 214.7
+    tilt, surface_az = dual_axis_tracking_targets(zen, az)
+    assert tilt == pytest.approx(sun_tracker_target_tilt_deg(zen))
+    assert surface_az == pytest.approx(az % 360.0)
+
+
+def test_single_axis_tracking_uses_pvlib_singleaxis():
+    from mbpo.env.pvlib_physics import single_axis_tracking_targets
+    from pvlib import tracking
+
+    apparent_zenith = 35.0
+    apparent_azimuth = 160.0
+    expected = tracking.singleaxis(
+        apparent_zenith=apparent_zenith,
+        apparent_azimuth=apparent_azimuth,
+        axis_tilt=0.0,
+        axis_azimuth=180.0,
+        max_angle=90.0,
+        backtrack=True,
+        gcr=0.35,
+    )
+    tilt, az = single_axis_tracking_targets(apparent_zenith, apparent_azimuth)
+    assert tilt == pytest.approx(float(expected['surface_tilt']))
+    assert az == pytest.approx(float(expected['surface_azimuth']))
+
+
+def test_baseline_rollout_power_matches_pvlib(env=None):
+    from scripts.eval_utils import make_baseline_rollout, verify_rollout_pvlib_power
+
+    env = env or make_physical_env()
+    try:
+        path = make_baseline_rollout(
+            env, 'poa_greedy_oracle', path_length=min(3, env.num_action_steps), seed=42)
+        ok, max_err, _ = verify_rollout_pvlib_power(path, area=env.area, efficiency=env.efficiency)
+        assert ok, 'poa oracle pvlib spot-check failed, max_err=%s' % max_err
+    finally:
+        if env is not None:
+            env.close()

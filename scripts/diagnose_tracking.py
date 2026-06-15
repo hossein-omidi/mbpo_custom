@@ -28,17 +28,24 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import numpy as np
-
 from eval_utils import (
+    MC_REFERENCE_BASELINE,
+    MC_METHOD_COLORS,
+    MC_METHOD_LABELS,
     PV_EPISODE_START_TIME,
     compute_total_energy_kwh,
     expected_step_movement_cost_kwh,
     movement_settings_from_eval_kwargs,
 )
+
+REF_BASELINE = MC_REFERENCE_BASELINE
+REF_COLOR = MC_METHOD_COLORS[MC_REFERENCE_BASELINE]
+REF_LABEL = MC_METHOD_LABELS[MC_REFERENCE_BASELINE]
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
 
 MAX_DELTA_TILT = 5.0
 MAX_DELTA_AZIMUTH = 10.0
@@ -65,19 +72,19 @@ def parse_args():
     p.add_argument('--summer-dates', default='2020-06-07,2020-06-21',
                    help='Comma-separated dates for season comparison if present in CSVs')
     p.add_argument('--max-paired-plot-days', type=int, default=6,
-                   help='Max learned-vs-sun diagnostic plot sets (8 PNGs each); rest use MC summaries')
+                   help='Max learned-vs-oracle diagnostic plot sets (8 PNGs each); rest use MC summaries')
     p.add_argument('--gate', action='store_true',
                    help='Exit 1 if phase gates fail (CI / TRAINING_PROTOCOL.md)')
     p.add_argument('--min-energy-ratio', type=float, default=0.95,
-                   help='Require mean learned/sun total_energy_kwh >= this (default 0.95)')
+                   help='Require mean learned/oracle energy >= this (default 0.95)')
     p.add_argument('--min-action-ratio', type=float, default=0.5,
-                   help='Require mean action L1 ratio learned/sun >= this (default 0.5)')
+                   help='Require mean action L1 ratio learned/oracle >= this (default 0.5)')
     p.add_argument('--max-tilt-error-deg', type=float, default=10.0,
                    help='Require mean |tilt-zenith| learned <= this deg (default 10)')
     return p.parse_args()
 
 
-def evaluate_phase_gates(learned_summaries, sun_summaries, fixed_summaries,
+def evaluate_phase_gates(learned_summaries, ref_summaries, fixed_summaries,
                          min_energy_ratio, min_action_ratio, max_tilt_error_deg,
                          movement_penalty=None):
     """Return (passed: bool, lines: list) per docs/TRAINING_PROTOCOL.md."""
@@ -98,24 +105,24 @@ def evaluate_phase_gates(learned_summaries, sun_summaries, fixed_summaries,
         metric_label = 'gross energy kWh'
 
     e_learned = _mean(metric_key, learned_summaries)
-    e_sun = _mean(metric_key, sun_summaries)
-    energy_ratio = e_learned / max(e_sun, 1e-9)
+    e_ref = _mean(metric_key, ref_summaries)
+    energy_ratio = e_learned / max(e_ref, 1e-9)
     ok_energy = np.isfinite(energy_ratio) and energy_ratio >= min_energy_ratio
-    lines.append('  %s ratio (learned/sun) %.3f >= %.2f  [%s]' % (
+    lines.append('  %s ratio (learned/oracle) %.3f >= %.2f  [%s]' % (
         metric_label, energy_ratio, min_energy_ratio, 'PASS' if ok_energy else 'FAIL'))
     passed = passed and ok_energy
 
     if use_net:
         g_learned = _mean('total_energy_kwh', learned_summaries)
-        g_sun = _mean('total_energy_kwh', sun_summaries)
-        lines.append('  (info) gross energy ratio learned/sun %.3f' % (
-            g_learned / max(g_sun, 1e-9)))
+        g_ref = _mean('total_energy_kwh', ref_summaries)
+        lines.append('  (info) gross energy ratio learned/oracle %.3f' % (
+            g_learned / max(g_ref, 1e-9)))
 
     a_learned = _mean('mean_action_l1_productive', learned_summaries)
-    a_sun = _mean('mean_action_l1_productive', sun_summaries)
-    action_ratio = a_learned / max(a_sun, 1e-9)
+    a_ref = _mean('mean_action_l1_productive', ref_summaries)
+    action_ratio = a_learned / max(a_ref, 1e-9)
     ok_action = np.isfinite(action_ratio) and action_ratio >= min_action_ratio
-    lines.append('  action L1 ratio (learned/sun) %.3f >= %.2f  [%s]' % (
+    lines.append('  action L1 ratio (learned/oracle) %.3f >= %.2f  [%s]' % (
         action_ratio, min_action_ratio, 'PASS' if ok_action else 'FAIL'))
     passed = passed and ok_action
 
@@ -682,7 +689,7 @@ def analyze_progress_csv(path, training_params=None):
 def plot_tilt_vs_zenith(learned_rows, baseline_rows, date, outpath):
     fig, ax = plt.subplots(figsize=(10, 5))
     for rows, style in ((learned_rows, dict(color='#1f77b4', label='learned', lw=2)),
-                        (baseline_rows, dict(color='#2ca02c', label='sun_tracking', lw=1.8, ls='--'))):
+                        (baseline_rows, dict(color=REF_COLOR, label=REF_BASELINE, lw=1.8, ls='--'))):
         t = [r['clock_hour_utc'] for r in rows]
         ax.plot(t, [r['tilt_deg'] for r in rows], **style)
     t = [r['clock_hour_utc'] for r in baseline_rows]
@@ -704,7 +711,7 @@ def plot_action_histogram(learned_rows, baseline_rows, date, outpath):
     ba = [action_l1(r) for r in baseline_rows]
     bins = np.linspace(0, 2.05, 22)
     ax.hist(la, bins=bins, alpha=0.6, label='learned', color='#1f77b4', density=True)
-    ax.hist(ba, bins=bins, alpha=0.6, label='sun_tracking', color='#2ca02c', density=True)
+    ax.hist(ba, bins=bins, alpha=0.6, label=REF_LABEL, color=REF_COLOR, density=True)
     ax.set_title('|action_tilt|+|action_az| — %s' % date)
     ax.set_xlabel('Action L1 norm')
     ax.set_ylabel('Density')
@@ -783,23 +790,23 @@ def plot_actions_time_series(learned_rows, sun_rows, tag, outpath):
     diff_l1 = np.abs(l_tilt - s_tilt) + np.abs(l_az - s_az)
 
     fig, axes = plt.subplots(3, 1, sharex=True, figsize=(11, 8))
-    fig.suptitle('Actions: learned vs sun_tracking — %s' % tag, fontsize=11)
+    fig.suptitle('Actions: learned vs %s — %s' % (REF_LABEL, tag), fontsize=11)
 
     axes[0].plot(t, l_tilt, color='#1f77b4', lw=2, label='learned tilt')
-    axes[0].plot(t, s_tilt, color='#2ca02c', lw=1.6, ls='--', label='sun tilt')
+    axes[0].plot(t, s_tilt, color=REF_COLOR, lw=1.6, ls='--', label='oracle tilt')
     axes[0].set_ylabel('action_tilt [-1,1]')
     axes[0].legend(loc='upper right', fontsize=8)
     axes[0].grid(True, alpha=0.3)
 
     axes[1].plot(t, l_az, color='#1f77b4', lw=2, label='learned az')
-    axes[1].plot(t, s_az, color='#2ca02c', lw=1.6, ls='--', label='sun az')
+    axes[1].plot(t, s_az, color=REF_COLOR, lw=1.6, ls='--', label='oracle az')
     axes[1].set_ylabel('action_azimuth [-1,1]')
     axes[1].legend(loc='upper right', fontsize=8)
     axes[1].grid(True, alpha=0.3)
 
     axes[2].plot(t, diff_l1, color='#d62728', lw=1.8, label='|Δa| L1')
     axes[2].fill_between(t, 0, diff_l1, color='#d62728', alpha=0.15)
-    axes[2].set_ylabel('|learned − sun|')
+    axes[2].set_ylabel('|learned − oracle|')
     axes[2].set_xlabel('Clock hour UTC')
     axes[2].legend(loc='upper right', fontsize=8)
     axes[2].grid(True, alpha=0.3)
@@ -826,7 +833,7 @@ def plot_actions_3d(learned_rows, sun_rows, tag, outpath):
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
     ax.plot(t, l_tilt, l_az, color='#1f77b4', lw=2.2, label='learned')
-    ax.plot(t, s_tilt, s_az, color='#2ca02c', lw=1.8, ls='--', label='sun_tracking')
+    ax.plot(t, s_tilt, s_az, color=REF_COLOR, lw=1.8, ls='--', label=REF_BASELINE)
     ax.scatter(t[0], l_tilt[0], l_az[0], color='#1f77b4', s=40, depthshade=False)
     ax.scatter(t[-1], l_tilt[-1], l_az[-1], color='#1f77b4', s=55, marker='s', depthshade=False)
     ax.scatter(t[0], s_tilt[0], s_az[0], color='#2ca02c', s=40, depthshade=False)
@@ -862,7 +869,7 @@ def plot_orientation_3d(learned_rows, sun_rows, tag, outpath):
     fig = plt.figure(figsize=(11, 8))
     ax = fig.add_subplot(111, projection='3d')
     ax.plot(t, l_tilt, l_az, color='#1f77b4', lw=2.2, label='learned panel')
-    ax.plot(t, s_tilt, s_az, color='#2ca02c', lw=1.8, ls='--', label='sun_tracking panel')
+    ax.plot(t, s_tilt, s_az, color=REF_COLOR, lw=1.8, ls='--', label='%s panel' % REF_LABEL)
     ax.plot(t, tgt_tilt, tgt_az, color='#9467bd', lw=1.4, ls=':', label='solar target (zenith, az)')
 
     ax.set_xlabel('Clock hour UTC')
@@ -886,7 +893,7 @@ def plot_action_vs_sun_scatter(learned_rows, sun_rows, tag, outpath):
     lim = (-1.05, 1.05)
 
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.5))
-    fig.suptitle('Learned action vs sun_tracking — %s' % tag, fontsize=11)
+    fig.suptitle('Learned action vs %s — %s' % (REF_LABEL, tag), fontsize=11)
     sc = None
     for ax, lx, sx, xlab in (
             (axes[0], l_tilt, s_tilt, 'action_tilt'),
@@ -895,7 +902,7 @@ def plot_action_vs_sun_scatter(learned_rows, sun_rows, tag, outpath):
         ax.plot(lim, lim, 'k--', lw=1, alpha=0.5)
         ax.set_xlim(lim)
         ax.set_ylim(lim)
-        ax.set_xlabel('sun %s' % xlab)
+        ax.set_xlabel('oracle %s' % xlab)
         ax.set_ylabel('learned %s' % xlab)
         ax.set_aspect('equal', adjustable='box')
         ax.grid(True, alpha=0.3)
@@ -922,9 +929,9 @@ def plot_cumulative_energy_net(learned_rows, sun_rows, tag, outpath, movement_pe
 
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(t[:n], l_gross, color='#1f77b4', lw=1.8, ls='--', alpha=0.65, label='learned gross')
-    ax.plot(t[:n], s_gross, color='#2ca02c', lw=1.8, ls='--', alpha=0.65, label='sun gross')
+    ax.plot(t[:n], s_gross, color=REF_COLOR, lw=1.8, ls='--', alpha=0.65, label='oracle gross')
     ax.plot(t[:n], l_net, color='#1f77b4', lw=2.2, label='learned net (reward)')
-    ax.plot(t[:n], s_net, color='#2ca02c', lw=2.0, label='sun net (reward)')
+    ax.plot(t[:n], s_net, color=REF_COLOR, lw=2.0, label='oracle net (reward)')
     penalty_note = ''
     if movement_penalty is not None and float(movement_penalty) > 0:
         penalty_note = ' (penalty=%g)' % float(movement_penalty)
@@ -950,7 +957,7 @@ def plot_all_tracking_diagnostics(learned_rows, sun_rows, tag, plot_dir, movemen
             ('actions_time_%s.png', lambda p: plot_actions_time_series(learned_rows, sun_rows, tag, p)),
             ('actions_3d_%s.png', lambda p: plot_actions_3d(learned_rows, sun_rows, tag, p)),
             ('orientation_3d_%s.png', lambda p: plot_orientation_3d(learned_rows, sun_rows, tag, p)),
-            ('action_vs_sun_scatter_%s.png', lambda p: plot_action_vs_sun_scatter(learned_rows, sun_rows, tag, p)),
+            ('action_vs_ref_scatter_%s.png', lambda p: plot_action_vs_sun_scatter(learned_rows, sun_rows, tag, p)),
             ('cumulative_energy_net_%s.png',
              lambda p: plot_cumulative_energy_net(
                  learned_rows, sun_rows, tag, p, movement_penalty=movement_penalty)),
@@ -999,7 +1006,7 @@ def _run_diagnosis(args):
         ]))
 
     learned_paths = find_rollouts(args.eval_dir, 'rollouts')
-    sun_paths = find_rollouts(args.eval_dir, 'baseline_rollouts/sun_tracking')
+    ref_paths = find_rollouts(args.eval_dir, 'baseline_rollouts/%s' % REF_BASELINE)
     fixed_paths = find_rollouts(args.eval_dir, 'baseline_rollouts/fixed_no_motion')
 
     if not learned_paths:
@@ -1014,11 +1021,10 @@ def _run_diagnosis(args):
         'PASS' if len(csv_errors) == 0 else 'FAIL (first 3): %s' % str(csv_errors[:3]),
     ]))
 
-    pairs = pair_rollouts_by_date(learned_paths, sun_paths)
+    pairs = pair_rollouts_by_date(learned_paths, ref_paths)
     if not pairs:
-        # Fall back: index-aligned pairing
-        n = min(len(learned_paths), len(sun_paths))
-        pairs = [(learned_paths[i], sun_paths[i], 'rollout_%d' % (i + 1)) for i in range(n)]
+        n = min(len(learned_paths), len(ref_paths))
+        pairs = [(learned_paths[i], ref_paths[i], 'rollout_%d' % (i + 1)) for i in range(n)]
 
     eval_summary = load_evaluation_summary(args.eval_dir)
     movement_settings = load_eval_movement_settings(args.eval_dir, trial_dir=args.trial_dir)
@@ -1027,10 +1033,10 @@ def _run_diagnosis(args):
 
     if pairs:
         l0 = load_csv(pairs[0][0])
-        s0 = load_csv(pairs[0][1])
+        r0 = load_csv(pairs[0][1])
         fair_ok, fair_lines = verify_paired_fairness(
-            l0, s0, movement_settings=movement_settings)
-        sections.append(('Eval fairness (rollout_1 learned vs sun_tracking)', fair_lines))
+            l0, r0, movement_settings=movement_settings)
+        sections.append(('Eval fairness (rollout_1 learned vs %s)' % REF_BASELINE, fair_lines))
         sections.append(('Paired coverage (all aligned rollouts)', summarize_pair_coverage(pairs)))
 
     protocol_lines = []
@@ -1055,7 +1061,7 @@ def _run_diagnosis(args):
     sections.append(('Eval protocol (RC1 / fairness)', protocol_lines))
 
     learned_summaries = []
-    sun_summaries = []
+    ref_summaries = []
     fixed_summaries = []
     clear_day_pairs = []
 
@@ -1070,20 +1076,20 @@ def _run_diagnosis(args):
     else:
         plot_pair_indices = set(range(len(pairs)))
 
-    for plot_pair_index, (lp, sp, tag) in enumerate(pairs):
+    for plot_pair_index, (lp, rp, tag) in enumerate(pairs):
         lrows = load_csv(lp)
-        srows = load_csv(sp)
+        rrows = load_csv(rp)
         ls = summarize_trajectory(lrows, 'learned')
-        ss = summarize_trajectory(srows, 'sun_tracking')
+        rs = summarize_trajectory(rrows, REF_BASELINE)
         learned_summaries.append(ls)
-        sun_summaries.append(ss)
+        ref_summaries.append(rs)
 
         if lrows and lrows[0].get('weather_condition') == 'clear':
-            clear_day_pairs.append((lrows, srows, tag))
+            clear_day_pairs.append((lrows, rrows, tag))
 
         if plot_pair_index in plot_pair_indices:
             plot_all_tracking_diagnostics(
-                lrows, srows, tag, plot_dir, movement_penalty=movement_penalty)
+                lrows, rrows, tag, plot_dir, movement_penalty=movement_penalty)
 
     # Aggregate comparison
     def _mean(key, summaries):
@@ -1093,56 +1099,56 @@ def _run_diagnosis(args):
     def _fmt(value, fmt):
         return fmt % value if np.isfinite(value) else 'n/a'
 
-    if sun_summaries:
+    if ref_summaries:
         tilt_err_ratio = _mean('mean_abs_tilt_error_deg', learned_summaries) / max(
-            _mean('mean_abs_tilt_error_deg', sun_summaries), 1e-6)
+            _mean('mean_abs_tilt_error_deg', ref_summaries), 1e-6)
         action_ratio_table = _mean('mean_action_l1_productive', learned_summaries) / max(
-            _mean('mean_action_l1_productive', sun_summaries), 1e-6)
+            _mean('mean_action_l1_productive', ref_summaries), 1e-6)
         energy_ratio_table = _mean('total_energy_kwh', learned_summaries) / max(
-            _mean('total_energy_kwh', sun_summaries), 1e-6)
+            _mean('total_energy_kwh', ref_summaries), 1e-6)
         net_ratio_table = _mean('total_net_reward_kwh', learned_summaries) / max(
-            _mean('total_net_reward_kwh', sun_summaries), 1e-6)
+            _mean('total_net_reward_kwh', ref_summaries), 1e-6)
         agg_lines = [
             'Paired rollouts: %d' % len(pairs),
             '',
-            'Metric                          learned    sun_track   ratio (learned/sun)',
+            'Metric                          learned    POA oracle  ratio (learned/oracle)',
             'mean |tilt - zenith| (deg)     %8s    %8s    %s' % (
                 _fmt(_mean('mean_abs_tilt_error_deg', learned_summaries), '%.2f'),
-                _fmt(_mean('mean_abs_tilt_error_deg', sun_summaries), '%.2f'),
+                _fmt(_mean('mean_abs_tilt_error_deg', ref_summaries), '%.2f'),
                 _fmt(tilt_err_ratio, '%.2f')),
             'mean action L1 (productive sun) %8s    %8s    %s' % (
                 _fmt(_mean('mean_action_l1_productive', learned_summaries), '%.3f'),
-                _fmt(_mean('mean_action_l1_productive', sun_summaries), '%.3f'),
+                _fmt(_mean('mean_action_l1_productive', ref_summaries), '%.3f'),
                 _fmt(action_ratio_table, '%.2f')),
             'total gross energy kWh (mean)   %8s    %8s    %s' % (
                 _fmt(_mean('total_energy_kwh', learned_summaries), '%.4f'),
-                _fmt(_mean('total_energy_kwh', sun_summaries), '%.4f'),
+                _fmt(_mean('total_energy_kwh', ref_summaries), '%.4f'),
                 _fmt(energy_ratio_table, '%.2f')),
             'total net return kWh (mean)     %8s    %8s    %s' % (
                 _fmt(_mean('total_net_reward_kwh', learned_summaries), '%.4f'),
-                _fmt(_mean('total_net_reward_kwh', sun_summaries), '%.4f'),
+                _fmt(_mean('total_net_reward_kwh', ref_summaries), '%.4f'),
                 _fmt(net_ratio_table, '%.2f')),
             'total movement cost (mean)    %8s    %8s' % (
                 _fmt(_mean('total_movement_cost', learned_summaries), '%.5f'),
-                _fmt(_mean('total_movement_cost', sun_summaries), '%.5f')),
+                _fmt(_mean('total_movement_cost', ref_summaries), '%.5f')),
             '',
             'Per-date diagnostic plots: %d of %d pairs (see --max-paired-plot-days); MC summaries in eval dir.' % (
                 len(plot_pair_indices), len(pairs)),
             'Plot types when enabled (diagnostics/plots/):',
-            '  actions_time_* — learned vs sun action commands over UTC time',
+            '  actions_time_* — learned vs POA oracle action commands over UTC time',
             '  actions_3d_* — 3D path (time, action_tilt, action_azimuth)',
             '  orientation_3d_* — panel tilt/az vs solar target in 3D',
-            '  action_vs_sun_scatter_* — per-step learned vs sun in action space',
-            '  cumulative_energy_net_* — gross vs net cumulative (learned & sun)',
+            '  action_vs_ref_scatter_* — per-step learned vs oracle in action space',
+            '  cumulative_energy_net_* — gross vs net cumulative (learned & oracle)',
         ]
     else:
         agg_lines = [
             'Paired rollouts: 0',
             '',
-            'No sun_tracking baseline rollouts found.',
-            'Re-run evaluate_agent.py with --compare-baselines for learned-vs-sun ratios.',
+            'No %s baseline rollouts found.' % REF_BASELINE,
+            'Re-run result.sh / evaluate_fullyear_mc for learned-vs-oracle ratios.',
         ]
-    sections.append(('Aligned learned vs sun_tracking', agg_lines))
+    sections.append(('Aligned learned vs POA oracle', agg_lines))
 
     if fixed_paths:
         fixed_pairs = pair_rollouts_by_date(learned_paths, fixed_paths)
@@ -1162,7 +1168,7 @@ def _run_diagnosis(args):
             'mean gross energy fixed: %.4f kWh (movement_cost≈0)' % fixed_gross,
             'mean movement fixed: %.6f (expect ~0: action=0, frozen at reset pose)' % fixed_move,
             'PASS beats fixed (net vs gross)' if learned_net > fixed_gross else
-            'FAIL: learned net below fixed gross — wrong tracking, not just vs sun tracker',
+            'FAIL: learned net below fixed gross — wrong tracking, not just vs POA oracle',
         ]))
 
     if clear_day_pairs:
@@ -1170,11 +1176,11 @@ def _run_diagnosis(args):
         cs = [summarize_trajectory(s, 's') for _, s, _ in clear_day_pairs]
         sections.append(('Clear-sky days only (weather ambiguity check)', [
             'n=%d clear-day pairs' % len(clear_day_pairs),
-            'mean energy learned: %.4f  sun: %.4f' % (
+            'mean energy learned: %.4f  oracle: %.4f' % (
                 _mean('total_energy_kwh', cl), _mean('total_energy_kwh', cs)),
-            'mean |tilt-zenith| learned: %.2f  sun: %.2f' % (
+            'mean |tilt-zenith| learned: %.2f  oracle: %.2f' % (
                 _mean('mean_abs_tilt_error_deg', cl), _mean('mean_abs_tilt_error_deg', cs)),
-            'On clear days, learned should approach sun tracker if action magnitude were sufficient.',
+            'On clear days, learned should approach POA oracle if action magnitude were sufficient.',
         ]))
 
     sample_rows = load_csv(learned_paths[0])
@@ -1268,14 +1274,14 @@ def _run_diagnosis(args):
     # Root cause ranking from evidence (see docs/PV_TRACKING_ROOT_CAUSES.md)
     ratio_action = (
         _mean('mean_action_l1_productive', learned_summaries) / max(
-            _mean('mean_action_l1_productive', sun_summaries), 1e-6)
-        if sun_summaries else float('nan'))
+            _mean('mean_action_l1_productive', ref_summaries), 1e-6)
+        if ref_summaries else float('nan'))
     ratio_energy = (
         _mean('total_energy_kwh', learned_summaries) / max(
-            _mean('total_energy_kwh', sun_summaries), 1e-6)
-        if sun_summaries else float('nan'))
+            _mean('total_energy_kwh', ref_summaries), 1e-6)
+        if ref_summaries else float('nan'))
     tilt_err_l = _mean('mean_abs_tilt_error_deg', learned_summaries)
-    tilt_err_s = _mean('mean_abs_tilt_error_deg', sun_summaries)
+    tilt_err_r = _mean('mean_abs_tilt_error_deg', ref_summaries)
     e_learned = _mean('total_energy_kwh', learned_summaries)
     e_fixed = _mean('total_energy_kwh', fixed_summaries) if fixed_summaries else float('nan')
 
@@ -1294,11 +1300,11 @@ def _run_diagnosis(args):
         'RC2 [100%%] Small deterministic deploy action magnitude: rho_A=%s (need ~0.3+ to track zenith swing).'
         % _fmt(ratio_action, '%.3f'),
         '     Necessary |a| bound ~D/(5T) with D=zenith swing, T=117: see docs/PV_TRACKING_ROOT_CAUSES.md.',
-        '     rho_G=%s gross energy; rho_net=%s net return (learned/sun).'
+        '     rho_G=%s gross energy; rho_net=%s net return (learned/oracle).'
         % (_fmt(ratio_energy, '%.3f'),
            _fmt(_mean('total_net_reward_kwh', learned_summaries) / max(
-               _mean('total_net_reward_kwh', sun_summaries), 1e-6), '%.3f')
-           if sun_summaries else 'n/a'),
+               _mean('total_net_reward_kwh', ref_summaries), 1e-6), '%.3f')
+           if ref_summaries else 'n/a'),
         '',
         'RC3 [100%] Wrong-signed tilt control (greedy zenith rule; step-0 + full episode):',
         '     sign agreement=%.0f%% (n=%d)  corr(e,a_tilt)=%.2f'
@@ -1325,11 +1331,11 @@ def _run_diagnosis(args):
                    ex.get('sun_action_tilt', float('nan'))))
     verdict_lines.extend([
         '',
-        'RC4 [100%%] Local energy optimum: G_fixed < G_learned < G_sun gross (%.4f < %.4f < %.4f kWh).'
-        % (e_fixed, e_learned, _mean('total_energy_kwh', sun_summaries)),
-        '     Net return (with movement penalty): learned=%.4f  sun=%.4f kWh.'
+        'RC4 [100%%] Local energy optimum: G_fixed < G_learned < G_oracle gross (%.4f < %.4f < %.4f kWh).'
+        % (e_fixed, e_learned, _mean('total_energy_kwh', ref_summaries)),
+        '     Net return (with movement penalty): learned=%.4f  oracle=%.4f kWh.'
         % (_mean('total_net_reward_kwh', learned_summaries),
-           _mean('total_net_reward_kwh', sun_summaries)),
+           _mean('total_net_reward_kwh', ref_summaries)),
         '     Not pvlib/reset/action-space bug (CSV scaling PASS).',
         '',
         'RC5 [checkpoint-specific] Train MDP vs eval:',
@@ -1344,12 +1350,12 @@ def _run_diagnosis(args):
         verdict_lines.append('     (pass --trial-dir for params.json train/eval mismatch check)')
     verdict_lines.extend([
         '',
-        'Ruled out: wrong action scaling; unfair sun eval; multi-day episodes; no env exploration.',
+        'Ruled out: wrong action scaling; unfair eval pairing; multi-day episodes; no env exploration.',
         '',
-        'Fixes (ordered): Stage0 retrain -> --gate on sun -> BC/demos -> optional cos_aoi shaping.',
+        'Fixes (ordered): Stage0 retrain -> --gate on oracle -> BC/demos -> optional cos_aoi shaping.',
         'Do NOT rely on min_alpha alone when alpha already at floor and sign is wrong.',
         '',
-        'mean |tilt-zenith| learned=%.2f° sun=%.2f°' % (tilt_err_l, tilt_err_s),
+        'mean |tilt-zenith| learned=%.2f° oracle=%.2f°' % (tilt_err_l, tilt_err_r),
     ])
     sections.append(('Root-cause verdict (verified)', verdict_lines))
 
@@ -1366,10 +1372,10 @@ def _run_diagnosis(args):
     sections.append(('Config change rationale', config_lines))
 
     gate_passed = None
-    if args.gate and sun_summaries and learned_summaries:
+    if args.gate and ref_summaries and learned_summaries:
         gate_passed, gate_lines = evaluate_phase_gates(
             learned_summaries,
-            sun_summaries,
+            ref_summaries,
             fixed_summaries,
             args.min_energy_ratio,
             args.min_action_ratio,
@@ -1388,7 +1394,7 @@ def _run_diagnosis(args):
 
     if args.gate:
         if gate_passed is None:
-            print('\n[diagnose] --gate: skipped (need learned + sun_tracking rollouts)')
+            print('\n[diagnose] --gate: skipped (need learned + %s rollouts)' % REF_BASELINE)
             sys.exit(2)
         if not gate_passed:
             print('\n[diagnose] GATE FAIL — see Phase gates section in report')

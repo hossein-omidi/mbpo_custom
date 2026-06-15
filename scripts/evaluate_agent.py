@@ -154,7 +154,7 @@ def parse_args():
     parser.add_argument(
         '--baseline-types',
         nargs='+',
-        default=['fixed_no_motion', 'sun_tracking'],
+        default=['fixed_no_motion', 'poa_greedy_oracle'],
         help='Baselines to run when --compare-baselines is set.')
     parser.add_argument(
         '--min-rollouts',

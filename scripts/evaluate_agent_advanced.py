@@ -75,6 +75,7 @@ METHOD_STYLES = {
     'learned_policy': {'color': '#1f77b4', 'label': 'MBPO-SAC', 'lw': 2.0},
     'sun_tracking': {'color': '#2ca02c', 'label': 'Sun tracker', 'lw': 1.8},
     'fixed_no_motion': {'color': '#ff7f0e', 'label': 'Fixed mount', 'lw': 1.8},
+    'poa_greedy_oracle': {'color': '#9467bd', 'label': 'POA oracle', 'lw': 1.8},
 }
 
 
@@ -102,7 +103,7 @@ def parse_args():
     p.add_argument('--vary-init-orientation', action='store_true',
                    help='Randomize initial panel pose across replicates (more variance)')
     p.add_argument('--baseline-types', nargs='+',
-                   default=['fixed_no_motion', 'sun_tracking'])
+                   default=['fixed_no_motion', 'poa_greedy_oracle'])
     p.add_argument('--variant-file', default='params.json')
     p.add_argument('--eval-env-override', default=None)
     p.add_argument('--no-dashboard', action='store_true')

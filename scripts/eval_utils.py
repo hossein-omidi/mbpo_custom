@@ -322,6 +322,48 @@ def season_from_calendar_date(date_str):
 
 SEASON_CALENDAR_ORDER = ('winter', 'spring', 'summer', 'fall')
 
+# Evaluation methods (stable order for MC reports and paper figures).
+# Primary reference baseline: POA greedy oracle (myopic pvlib POA grid per step).
+MC_REFERENCE_BASELINE = 'poa_greedy_oracle'
+MC_METHOD_ORDER = (
+    'learned_policy', 'poa_greedy_oracle', 'fixed_no_motion')
+MC_METHOD_LABELS = {
+    'learned_policy': 'MBPO-SAC (learned)',
+    'poa_greedy_oracle': 'POA oracle (myopic upper bound)',
+    'fixed_no_motion': 'Fixed mount (no motion)',
+}
+MC_METHOD_COLORS = {
+    'learned_policy': '#1f77b4',
+    'poa_greedy_oracle': '#9467bd',
+    'fixed_no_motion': '#ff7f0e',
+}
+
+
+def mc_method_list():
+    """Methods included in NSRDB / annual MC eval."""
+    return list(MC_METHOD_ORDER)
+
+
+def ordered_methods_present(paths_by_name):
+    """Subset of MC_METHOD_ORDER present in paths_by_name."""
+    return [m for m in MC_METHOD_ORDER if paths_by_name.get(m)]
+
+
+def build_paths_by_name(aligned_by_method):
+    """Paths dict for reports/plots (paired MC, same seed per index)."""
+    return {
+        m: aligned_by_method[m]
+        for m in MC_METHOD_ORDER
+        if aligned_by_method.get(m)
+    }
+
+
+def baseline_rollout_methods(paths_by_name):
+    """Non-learned methods to export under baseline_rollouts/."""
+    return tuple(
+        m for m in ('poa_greedy_oracle', 'fixed_no_motion')
+        if m in paths_by_name)
+
 
 def normalize_angle_diff(target, current):
     return (target - current + 180.0) % 360.0 - 180.0
@@ -700,7 +742,8 @@ def _extract_underlying_env(env):
 
 
 def _greedy_poa_orientation(underlying, solar_zenith, solar_azimuth, weather=None):
-    """Myopic POA-maximizing tilt/azimuth (oracle upper bound, not deployable)."""
+    """Myopic POA-maximizing tilt/azimuth via pvlib get_total_irradiance (oracle)."""
+    from mbpo.env.pvlib_physics import compute_panel_power_w
     if weather is None:
         weather = underlying._current_weather()
     best_power = -1.0
@@ -709,8 +752,13 @@ def _greedy_poa_orientation(underlying, solar_zenith, solar_azimuth, weather=Non
     for tilt in np.linspace(0.0, 90.0, 19):
         for az_offset in np.linspace(-90.0, 90.0, 19):
             az = float(np.mod(az_center + az_offset, 360.0))
-            power = underlying._power_from_orientation(
-                solar_zenith, solar_azimuth, tilt, az)
+            power = compute_panel_power_w(
+                tilt, az,
+                solar_zenith, solar_azimuth,
+                weather['dni'], weather['ghi'], weather['dhi'],
+                area=underlying.area,
+                efficiency=underlying.efficiency,
+            )
             if power > best_power:
                 best_power = power
                 best_tilt, best_az = float(tilt), az
@@ -763,12 +811,16 @@ def make_baseline_rollout(env, baseline_type, path_length, seed=None):
             target_tilt = 30.0
             target_azimuth = 180.0
         elif baseline_type == 'single_axis':
-            target_tilt = 30.0
-            target_azimuth = solar_azimuth
+            from mbpo.env.pvlib_physics import single_axis_tracking_targets
+            solar_position = underlying._solar_position(underlying.current_time)
+            target_tilt, target_azimuth = single_axis_tracking_targets(
+                solar_position.apparent_zenith,
+                solar_position.apparent_azimuth,
+            )
         elif baseline_type in ('sun_seeking', 'sun_tracking'):
-            from mbpo.env.pvlib_physics import sun_tracker_target_tilt_deg
-            target_tilt = sun_tracker_target_tilt_deg(solar_zenith)
-            target_azimuth = solar_azimuth
+            from mbpo.env.pvlib_physics import dual_axis_tracking_targets
+            target_tilt, target_azimuth = dual_axis_tracking_targets(
+                solar_zenith, solar_azimuth)
         elif baseline_type in ('poa_greedy_oracle', 'greedy_poa_oracle'):
             target_tilt, target_azimuth = _greedy_poa_orientation(
                 underlying, solar_zenith, solar_azimuth)
@@ -973,6 +1025,10 @@ def _rollout_net_energy(path):
     return float(np.sum(path.get('rewards', [])))
 
 
+def _rollout_gross_energy(path):
+    return float(get_rollout_metadata(path)['total_energy_kwh'])
+
+
 def expected_step_movement_cost_kwh(
         delta_tilt_deg,
         delta_azimuth_deg,
@@ -1111,15 +1167,116 @@ def summarize_paired_mc(paths_by_name, reference='learned_policy'):
         stats['scenario_id_mismatches'] = scenario_mismatch
         return stats
 
-    if 'sun_tracking' in methods and 'fixed_no_motion' in methods:
-        out['paired_deltas']['sun_minus_fixed'] = _paired_delta(
-            'sun_tracking', 'fixed_no_motion')
-    if 'learned_policy' in methods and 'sun_tracking' in methods:
-        out['paired_deltas']['learned_minus_sun'] = _paired_delta(
-            'learned_policy', 'sun_tracking')
+    ref = MC_REFERENCE_BASELINE
+    if ref in methods and 'fixed_no_motion' in methods:
+        out['paired_deltas']['oracle_minus_fixed'] = _paired_delta(
+            ref, 'fixed_no_motion')
+    if 'learned_policy' in methods and ref in methods:
+        out['paired_deltas']['learned_minus_oracle'] = _paired_delta(
+            'learned_policy', ref)
     if 'learned_policy' in methods and 'fixed_no_motion' in methods:
         out['paired_deltas']['learned_minus_fixed'] = _paired_delta(
             'learned_policy', 'fixed_no_motion')
+    return out
+
+
+def summarize_paired_mc_gross(paths_by_name, reference='learned_policy'):
+    """Paired gross-energy (harvest) stats — same seed alignment as net MC."""
+    pairs = align_paired_rollouts(paths_by_name, reference=reference)
+    if not pairs:
+        return {}
+
+    def _paired_gross_delta(method_a, method_b):
+        deltas = []
+        for row in pairs:
+            if method_a not in row or method_b not in row:
+                continue
+            deltas.append(
+                _rollout_gross_energy(row[method_a]) - _rollout_gross_energy(row[method_b]))
+        return summarize_values(deltas)
+
+    out = {'methods': {}, 'paired_gross_deltas': {}, 'gross_ratios': {}}
+    for method in ordered_methods_present(paths_by_name):
+        vals = [_rollout_gross_energy(pairs[i][method])
+                for i in range(len(pairs)) if method in pairs[i]]
+        out['methods'][method] = summarize_values(vals)
+
+    ref = MC_REFERENCE_BASELINE
+    if 'learned_policy' in paths_by_name and ref in paths_by_name:
+        out['paired_gross_deltas']['learned_minus_oracle'] = _paired_gross_delta(
+            'learned_policy', ref)
+        oracle_stats = out['methods'].get(ref, {})
+        learned_stats = out['methods'].get('learned_policy', {})
+        if oracle_stats.get('mean', 0) > 0:
+            out['gross_ratios']['learned_over_oracle_mean'] = (
+                learned_stats['mean'] / oracle_stats['mean'])
+    if ref in paths_by_name and 'fixed_no_motion' in paths_by_name:
+        out['paired_gross_deltas']['oracle_minus_fixed'] = _paired_gross_delta(
+            ref, 'fixed_no_motion')
+        fixed_stats = out['methods'].get('fixed_no_motion', {})
+        oracle_stats = out['methods'].get(ref, {})
+        if oracle_stats.get('mean', 0) > 0:
+            out['gross_ratios']['fixed_over_oracle_mean'] = (
+                fixed_stats['mean'] / oracle_stats['mean'])
+    return out
+
+
+def summarize_paired_mc_ratios(paths_by_name, reference=MC_REFERENCE_BASELINE):
+    """Per-rollout energy ratios vs reference method (paired by seed/scenario)."""
+    pairs = align_paired_rollouts(paths_by_name)
+    if not pairs:
+        return {}
+
+    def _ratio_series(method, energy_fn):
+        ratios = []
+        for row in pairs:
+            if method not in row or reference not in row:
+                continue
+            ref_val = energy_fn(row[reference])
+            if ref_val <= 0:
+                continue
+            ratios.append(energy_fn(row[method]) / ref_val)
+        return summarize_values(ratios)
+
+    out = {
+        'reference': reference,
+        'net_ratios': {},
+        'gross_ratios': {},
+        'oracle_dominance': {},
+    }
+    for method in ordered_methods_present(paths_by_name):
+        if method == reference:
+            continue
+        out['net_ratios']['%s_over_%s_net' % (method, reference)] = _ratio_series(
+            method, _rollout_net_energy)
+        out['gross_ratios']['%s_over_%s_gross' % (method, reference)] = _ratio_series(
+            method, _rollout_gross_energy)
+
+    if reference in paths_by_name and 'learned_policy' in paths_by_name:
+        oracle_net_wins = 0
+        oracle_gross_wins = 0
+        learned_net_wins = 0
+        n_pairs = 0
+        for row in pairs:
+            if reference not in row or 'learned_policy' not in row:
+                continue
+            n_pairs += 1
+            o_net = _rollout_net_energy(row[reference])
+            l_net = _rollout_net_energy(row['learned_policy'])
+            o_gross = _rollout_gross_energy(row[reference])
+            l_gross = _rollout_gross_energy(row['learned_policy'])
+            if o_net >= l_net:
+                oracle_net_wins += 1
+            if o_gross >= l_gross:
+                oracle_gross_wins += 1
+            if l_net >= o_net:
+                learned_net_wins += 1
+        out['oracle_dominance'] = {
+            'n_pairs': n_pairs,
+            'oracle_net_ge_learned_count': oracle_net_wins,
+            'oracle_gross_ge_learned_count': oracle_gross_wins,
+            'learned_net_ge_oracle_count': learned_net_wins,
+        }
     return out
 
 
@@ -1179,13 +1336,65 @@ def write_paired_mc_comparison_report(outdir, paths_by_name, eval_mode='mc', err
                 method, stats['mean'], stats['std'], stats['count'],
                 stats['min'], stats['max']))
 
-        f.write('\nPaired deltas (same scenario per row):\n')
+        f.write('\nPaired deltas — net energy (same scenario per row):\n')
         for label, stats in summary.get('paired_deltas', {}).items():
             f.write('  %-22s  E[Δ]=%+.4f kWh  σ_Δ=%.4f  n=%d' % (
                 label, stats['mean'], stats['std'], stats['count']))
             if stats.get('scenario_id_mismatches', 0):
                 f.write('  WARN mismatches=%d' % stats['scenario_id_mismatches'])
             f.write('\n')
+
+        gross = summarize_paired_mc_gross(paths_by_name)
+        if gross.get('methods'):
+            f.write('\nPer-method gross energy (kWh = sum step energy_kwh, ddof=1):\n')
+            for method in ordered_methods_present(paths_by_name):
+                stats = gross['methods'][method]
+                f.write('  %-18s  E=%.4f  σ=%.4f  n=%d  [min=%.4f max=%.4f]\n' % (
+                    method, stats['mean'], stats['std'], stats['count'],
+                    stats['min'], stats['max']))
+            f.write('\nPaired gross deltas (harvest, movement excluded):\n')
+            for label, stats in gross.get('paired_gross_deltas', {}).items():
+                f.write('  %-22s  E[Δ]=%+.4f kWh  σ_Δ=%.4f  n=%d\n' % (
+                    label, stats['mean'], stats['std'], stats['count']))
+            ratios = gross.get('gross_ratios', {})
+            if ratios:
+                f.write('\nMean gross energy ratios (E[method]/E[reference]):\n')
+                if 'learned_over_oracle_mean' in ratios:
+                    f.write('  learned / POA oracle      = %.4f (%.1f%%)\n' % (
+                        ratios['learned_over_oracle_mean'],
+                        100.0 * ratios['learned_over_oracle_mean']))
+                if 'fixed_over_oracle_mean' in ratios:
+                    f.write('  fixed / POA oracle        = %.4f (%.1f%%)\n' % (
+                        ratios['fixed_over_oracle_mean'],
+                        100.0 * ratios['fixed_over_oracle_mean']))
+
+            ratio_summary = summarize_paired_mc_ratios(paths_by_name)
+            net_ratios = ratio_summary.get('net_ratios', {})
+            gross_ratios = ratio_summary.get('gross_ratios', {})
+            if net_ratios or gross_ratios:
+                f.write('\nPaired per-rollout ratios vs %s (same scenario per seed):\n' % (
+                    MC_REFERENCE_BASELINE))
+                for key, stats in sorted(net_ratios.items()):
+                    f.write('  net  %-30s  E[ratio]=%.4f  σ=%.4f  n=%d\n' % (
+                        key, stats['mean'], stats['std'], stats['count']))
+                for key, stats in sorted(gross_ratios.items()):
+                    f.write('  gross%-30s  E[ratio]=%.4f  σ=%.4f  n=%d\n' % (
+                        key, stats['mean'], stats['std'], stats['count']))
+            dom = ratio_summary.get('oracle_dominance', {})
+            if dom.get('n_pairs'):
+                f.write('\nPOA oracle vs learned (per-day, not guaranteed every day):\n')
+                f.write('  n_pairs=%d  oracle_net≥learned: %d  oracle_gross≥learned: %d  '
+                        'learned_net≥oracle: %d\n' % (
+                            dom['n_pairs'],
+                            dom.get('oracle_net_ge_learned_count', 0),
+                            dom.get('oracle_gross_ge_learned_count', 0),
+                            dom.get('learned_net_ge_oracle_count', 0)))
+            f.write(
+                '\nPOA oracle semantics:\n'
+                '  Deterministic per scenario (fixed weather/seed/pose → same grid search).\n'
+                '  MC mean±σ aggregates over independent calendar scenarios (probabilistic).\n'
+                '  Myopic 19×19 tilt/az grid per step + same action limits as learned policy;\n'
+                '  not guaranteed to beat learned/fixed on every single day.\n')
 
         f.write('\nScenario alignment (first %d rollouts):\n' % min(8, len(pairs)))
         for row in pairs[:8]:
@@ -1344,9 +1553,13 @@ def write_eval_statistics_readme(outdir, num_rollouts, eval_seed_base, checkpoin
         f.write('  season_calendar: month buckets (Jun-Aug = summer).\n')
         f.write('  season (env): equinox buckets in PVTrackingEnv (Jun 1 can be spring).\n\n')
         f.write('Baselines:\n')
-        f.write('  sun_tracking: slew toward solar zenith/azimuth each step.\n')
+        f.write('  POA power (all methods): pvlib.irradiance.get_total_irradiance\n')
+        f.write('    via mbpo.env.pvlib_physics.compute_poa_global (model=isotropic).\n')
+        f.write('  poa_greedy_oracle (reference): myopic POA-max grid via compute_panel_power_w\n')
+        f.write('    then env.step → same get_total_irradiance path as learned policy.\n')
         f.write('  fixed_no_motion: action=0 (panel frozen at reset pose; movement_cost=0).\n')
-        f.write('  All three share identical weather, UTC grid, seed, and initial pose per rollout.\n\n')
+        f.write('  Primary comparison: learned vs POA oracle (paired MC ratios in reports).\n')
+        f.write('  All methods share identical weather, UTC grid, seed, and initial pose.\n\n')
         f.write('Episode clock (UTC): %s start, 5min steps, %d transitions.\n' % (
             _ENV_START_TIME, PV_EPISODE_MAX_STEPS))
         f.write('  Same grid as training; see eval_config episode_preset in summary.\n')
@@ -1410,6 +1623,8 @@ def write_eval_scenario_confirmation(outdir, eval_env_params, paths_by_name, max
         f.write('  [x] per-rollout seed recorded in rollout metadata / CSV\n')
         f.write('  [x] same reward = energy_kwh - movement_cost\n')
         f.write('  [x] power/energy from pvlib via env.step (all methods)\n')
+        f.write('  [x] POA = get_total_irradiance (compute_poa_global); baselines use same kernel\n')
+        f.write('  [x] reference baseline = POA greedy oracle (myopic grid, deterministic per scenario)\n')
         f.write('  [x] baselines do not call the neural policy\n')
         f.write('\nPer-method rollout dates (seed order):\n')
         for method, paths in sorted(paths_by_name.items()):

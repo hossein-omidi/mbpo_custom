@@ -18,7 +18,7 @@ usage() {
 RUN_NAME="$1"
 shift
 MODE="full"
-NUM_ROLLOUTS="${NUM_ROLLOUTS:-64}"
+NUM_ROLLOUTS="${NUM_ROLLOUTS:-120}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -157,7 +157,7 @@ echo ""
 echo "Results folder: $RESULTS"
 echo "  training/     learning curves (E[R] ± σ from progress.csv)"
 if [[ "${IS_NSRDB:-0}" -eq 1 ]]; then
-  echo "  evaluation/   NSRDB scenario MC: PAIRED_MC_COMPARISON.txt, paper_figures/, rollout_plots/, mc_records.json"
+  echo "  evaluation/   NSRDB scenario MC: PAIRED_MC_COMPARISON.txt (vs POA oracle), paper_figures/, mc_records.json"
 else
   echo "  evaluation/   TMY annual MC: PAIRED_MC_COMPARISON.txt, paper_figures/, evaluation_summary.txt"
 fi

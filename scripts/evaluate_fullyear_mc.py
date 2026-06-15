@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Monte Carlo full-year evaluation with uncertainty bands and season summaries.
 
-Compares learned policy vs sun_tracking vs fixed_no_motion on the real PVTrackingEnv.
+Compares learned policy vs POA greedy oracle vs fixed_no_motion on the real PVTrackingEnv.
 
 Default (--date-set annual): independent eval seeds over full annual day support (RL protocol).
 Optional stress_test / holdout: fixed calendar dates for diagnostic ensemble bands only.
@@ -42,8 +42,12 @@ from examples.config.pv_tracking.verified_dates import (
 from eval_utils import (
     EVAL_PROTOCOL_INHERIT,
     SEASON_CALENDAR_ORDER,
+    MC_METHOD_ORDER,
+    baseline_rollout_methods,
+    build_paths_by_name,
     compute_total_energy_kwh,
     get_rollout_metadata,
+    mc_method_list,
     night_intervals_from_path,
     rollout_time_axis,
     rollout_xlabel,
@@ -76,9 +80,9 @@ from evaluate_agent_advanced import (
     validate_policy_environment_observation_dims,
 )
 
-METHODS = ('learned_policy', 'sun_tracking', 'fixed_no_motion')
-NSRDB_METHODS = METHODS + ('poa_greedy_oracle',)
-BASELINE_METHODS = ('sun_tracking', 'fixed_no_motion')
+METHODS = ('learned_policy', 'poa_greedy_oracle', 'fixed_no_motion')
+NSRDB_METHODS = MC_METHOD_ORDER
+BASELINE_METHODS = ('poa_greedy_oracle', 'fixed_no_motion')
 
 
 def _record_net_energy_kwh(record):
@@ -187,7 +191,7 @@ def plot_season_energy_bars(outdir, records, error='sem', title_suffix='', file_
         return None
     seasons = [s for s in SEASON_CALENDAR_ORDER if any(
         r.get('season_calendar', r.get('season')) == s for r in records)]
-    methods = [m for m in METHODS if any(r['method'] == m for r in records)]
+    methods = [m for m in MC_METHOD_ORDER if any(r['method'] == m for r in records)]
     if not seasons or not methods:
         print('[mc] skip season_energy_yield%s: no season/method data' % (
             ('_%s' % file_tag) if file_tag else ''))
@@ -292,8 +296,8 @@ def write_nsrdb_mc_rollout_plots(args, aligned_by_method, methods, path_length):
         print('[mc] aligned comparison (seed-matched): %s' % out)
 
 
-def plot_season_ratio_bars(outdir, records, baseline='sun_tracking', error='sem'):
-    """Learned / baseline energy ratio by calendar season (paired by seed/replicate)."""
+def plot_season_ratio_bars(outdir, records, baseline='poa_greedy_oracle', error='sem'):
+    """Learned / POA oracle energy ratio by calendar season (paired by seed/replicate)."""
     if not records:
         print('[mc] skip season ratio plot: no records')
         return None
@@ -322,11 +326,12 @@ def plot_season_ratio_bars(outdir, records, baseline='sun_tracking', error='sem'
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
     ax.bar(x, means, yerr=errs, capsize=4, color='#1f77b4', alpha=0.88)
-    ax.axhline(1.0, color='#2ca02c', linestyle='--', lw=1.5, label='sun tracker parity')
+    ax.axhline(1.0, color='#9467bd', linestyle='--', lw=1.5, label='POA oracle parity')
     ax.set_xticks(x)
     ax.set_xticklabels(seasons)
-    ax.set_ylabel('Net energy ratio (learned / %s)' % baseline.replace('_', ' '))
-    ax.set_title('Relative yield vs %s by season' % baseline.replace('_', ' '))
+    ref_label = baseline.replace('_', ' ')
+    ax.set_ylabel('Net energy ratio (learned / %s)' % ref_label)
+    ax.set_title('Relative yield vs %s by season' % ref_label)
     ax.legend()
     ax.grid(axis='y', linestyle='--', alpha=0.35)
     path = os.path.join(outdir, 'season_learned_vs_%s_ratio.png' % baseline)
@@ -364,26 +369,39 @@ def write_mc_report(outdir, args, dates, records, paths_by_name=None, eval_env_p
         if eval_env_params:
             eff = eval_env_params.get('kwargs', {}).get('randomize_initial_orientation')
             f.write('effective randomize_initial_orientation: %s (from eval env kwargs)\n' % eff)
-        f.write('eval_protocol: inherit\n\n')
+        f.write('eval_protocol: inherit\n')
+        f.write('reference_baseline: poa_greedy_oracle (myopic POA grid)\n')
+        f.write('\n')
         if not is_annual and not is_nsrdb:
             by_season = dates_by_season(dates)
             f.write('Dates by season:\n')
             for s, ds in by_season.items():
                 f.write('  %s: %s\n' % (s, ', '.join(ds)))
-        f.write('\nPer method (net energy kWh: mean ± std, n episodes):\n')
-        for method in METHODS:
+        method_list = [m for m in MC_METHOD_ORDER if any(r['method'] == m for r in records)]
+        f.write('\nPer method (net energy kWh: mean ± std, n episodes, ddof=1):\n')
+        for method in method_list:
             vals = [r['net_energy_kwh'] for r in records if r['method'] == method]
             if vals:
                 f.write('  %s: %.4f ± %.4f (n=%d)\n' % (
                     method, np.mean(vals), np.std(vals, ddof=1) if len(vals) > 1 else 0.0,
                     len(vals)))
         if paths_by_name:
-            from eval_utils import summarize_paired_mc
+            from eval_utils import summarize_paired_mc, summarize_paired_mc_gross
             paired = summarize_paired_mc(paths_by_name)
-            f.write('\nPaired deltas (same scenario_id per seed):\n')
+            gross = summarize_paired_mc_gross(paths_by_name)
+            f.write('\nPaired net deltas (same scenario_id per seed):\n')
             for label, stats in paired.get('paired_deltas', {}).items():
                 f.write('  %s: E[Δ]=%+.4f ± %.4f kWh (n=%d)\n' % (
                     label, stats['mean'], stats['std'], stats['count']))
+            if gross.get('gross_ratios'):
+                f.write('\nMean gross harvest ratios:\n')
+                r = gross['gross_ratios']
+                if 'learned_over_oracle_mean' in r:
+                    f.write('  learned/POA oracle = %.4f (%.1f%%)\n' % (
+                        r['learned_over_oracle_mean'], 100.0 * r['learned_over_oracle_mean']))
+                if 'fixed_over_oracle_mean' in r:
+                    f.write('  fixed/POA oracle = %.4f (%.1f%%)\n' % (
+                        r['fixed_over_oracle_mean'], 100.0 * r['fixed_over_oracle_mean']))
         f.write('\nSeason bars use season_calendar (month buckets), not env equinox labels.\n')
         f.write('Paired methods share seed; E[energy] and std use sample statistics (ddof=1).\n')
         f.write('\nAll rollouts: real PVTrackingEnv, pvlib power path, T=117 (5min native).\n')
@@ -391,12 +409,12 @@ def write_mc_report(outdir, args, dates, records, paths_by_name=None, eval_env_p
             learned = [r for r in records if r['method'] == 'learned_policy']
             if learned and learned[0].get('diffuse_fraction') is not None:
                 diffs = [r['diffuse_fraction'] for r in learned if r.get('diffuse_fraction') is not None]
-                gains = [r['mbpo_minus_sun_kwh'] for r in learned if r.get('mbpo_minus_sun_kwh') is not None]
+                gains = [r['mbpo_minus_oracle_kwh'] for r in learned if r.get('mbpo_minus_oracle_kwh') is not None]
                 f.write('\nNSRDB cloudy/diffuse diagnostics (learned policy episodes):\n')
                 f.write('  diffuse_fraction=sum(DHI)/sum(GHI): mean=%.3f std=%.3f\n' % (
                     np.mean(diffs), np.std(diffs, ddof=1) if len(diffs) > 1 else 0.0))
                 if gains:
-                    f.write('  MBPO-SAC minus sun_tracker (kWh): mean=%.4f std=%.4f\n' % (
+                    f.write('  MBPO-SAC minus POA oracle (kWh): mean=%.4f std=%.4f\n' % (
                         np.mean(gains), np.std(gains, ddof=1) if len(gains) > 1 else 0.0))
                 learned_sorted = sorted(
                     [r for r in learned if r.get('diffuse_fraction') is not None],
@@ -404,21 +422,21 @@ def write_mc_report(outdir, args, dates, records, paths_by_name=None, eval_env_p
                 if learned_sorted:
                     f.write('\n  Top diffuse/cloudy scenarios (learned policy, by sum(DHI)/sum(GHI)):\n')
                     for r in learned_sorted[:5]:
-                        f.write('    %s: diffuse=%.3f dni_frac=%.3f net=%.4f kWh gain_vs_sun=%+.4f\n' % (
+                        f.write('    %s: diffuse=%.3f dni_frac=%.3f net=%.4f kWh gain_vs_oracle=%+.4f\n' % (
                             r.get('scenario_id', r.get('date')),
                             r.get('diffuse_fraction', 0.0),
                             r.get('dni_fraction', 0.0),
                             r.get('net_energy_kwh', 0.0),
-                            r.get('mbpo_minus_sun_kwh', 0.0)))
+                            r.get('mbpo_minus_oracle_kwh', 0.0)))
                 learned_sorted_gain = sorted(
-                    [r for r in learned if r.get('mbpo_minus_sun_kwh') is not None],
-                    key=lambda r: r['mbpo_minus_sun_kwh'], reverse=True)
+                    [r for r in learned if r.get('mbpo_minus_oracle_kwh') is not None],
+                    key=lambda r: r['mbpo_minus_oracle_kwh'], reverse=True)
                 if learned_sorted_gain:
-                    f.write('\n  Top MBPO-SAC gains vs sun_tracker (kWh):\n')
+                    f.write('\n  Top MBPO-SAC gains vs POA oracle (kWh):\n')
                     for r in learned_sorted_gain[:5]:
                         f.write('    %s: gain=%+.4f diffuse=%.3f\n' % (
                             r.get('scenario_id', r.get('date')),
-                            r['mbpo_minus_sun_kwh'],
+                            r['mbpo_minus_oracle_kwh'],
                             r.get('diffuse_fraction', 0.0)))
     return path
 
@@ -454,8 +472,6 @@ def parse_args():
     p.add_argument('--no-pdf', action='store_true')
     p.add_argument('--run-standard-eval', action='store_true',
                    help='Also write standard evaluate_agent summaries/plots')
-    p.add_argument('--include-poa-oracle', action='store_true',
-                   help='Also run greedy POA oracle baseline (NSRDB eval only)')
     p.add_argument('--max-rollout-plots', type=int, default=4,
                    help='Combined rollout time-series plots for NSRDB/TMY MC eval')
     return p.parse_args()
@@ -504,15 +520,11 @@ def main():
     ref_env.close()
 
     records = []
-    aligned_by_method = {m: [] for m in METHODS}
+    methods = mc_method_list()
+    aligned_by_method = {m: [] for m in methods}
 
     if args.date_set in ('annual', 'nsrdb_multiyear'):
         mode_label = 'nsrdb' if args.date_set == 'nsrdb_multiyear' else 'annual'
-        methods = list(
-            NSRDB_METHODS if args.date_set == 'nsrdb_multiyear' and args.include_poa_oracle
-            else METHODS)
-        for m in methods:
-            aligned_by_method.setdefault(m, [])
         for idx in range(args.num_rollouts):
             seed = int(args.eval_seed_base) + idx
             print('[mc] %s rollout %d/%d seed=%d' % (
@@ -544,12 +556,12 @@ def main():
                     'dni_fraction': dni_frac,
                 })
                 aligned_by_method[method].append(path)
-        sun_by_seed = {
+        oracle_by_seed = {
             r['seed']: r['net_energy_kwh']
-            for r in records if r['method'] == 'sun_tracking'}
+            for r in records if r['method'] == 'poa_greedy_oracle'}
         for r in records:
-            if r['method'] == 'learned_policy' and r['seed'] in sun_by_seed:
-                r['mbpo_minus_sun_kwh'] = r['net_energy_kwh'] - sun_by_seed[r['seed']]
+            if r['method'] == 'learned_policy' and r['seed'] in oracle_by_seed:
+                r['mbpo_minus_oracle_kwh'] = r['net_energy_kwh'] - oracle_by_seed[r['seed']]
         rep_records = records
         validate_mc_rollout_paths(
             {m: aligned_by_method[m] for m in methods}, path_length, label=args.date_set)
@@ -632,23 +644,19 @@ def main():
             args.outdir,
             [r for r in records if r.get('replicate', 0) == 0],
             error='std', title_suffix=' (aligned single run)', file_tag='aligned')
-    plot_season_ratio_bars(args.outdir, rep_records, baseline='sun_tracking',
+    plot_season_ratio_bars(args.outdir, rep_records, baseline='poa_greedy_oracle',
                            error=args.error_bars)
+
+    paths_by_name = build_paths_by_name(aligned_by_method)
 
     if not args.no_csv:
         save_rollout_csv(
             os.path.join(args.outdir, 'rollouts'),
             aligned_by_method['learned_policy'], prefix='aligned_learned')
-        for bmethod in BASELINE_METHODS:
+        for bmethod in baseline_rollout_methods(paths_by_name):
             save_rollout_csv(
                 os.path.join(args.outdir, 'baseline_rollouts', bmethod),
                 aligned_by_method[bmethod], prefix='aligned')
-
-    paths_by_name = {
-        'learned_policy': aligned_by_method['learned_policy'],
-        'sun_tracking': aligned_by_method['sun_tracking'],
-        'fixed_no_motion': aligned_by_method['fixed_no_motion'],
-    }
 
     report_dates = dates or [args.date_set]
     write_mc_report(args.outdir, args, report_dates, records, paths_by_name=paths_by_name,
@@ -691,8 +699,9 @@ def main():
         max_path_length=path_length,
         eval_env_params=eval_env_params,
         baseline_paths_by_name={
-            'sun_tracking': aligned_by_method['sun_tracking'],
-            'fixed_no_motion': aligned_by_method['fixed_no_motion'],
+            k: aligned_by_method[k]
+            for k in ('poa_greedy_oracle', 'fixed_no_motion')
+            if aligned_by_method.get(k)
         },
         report_by_season=True)
 
@@ -701,7 +710,7 @@ def main():
         with PdfPages(pdf_path) as pdf:
             for fig_path in sorted([
                 os.path.join(args.outdir, 'season_energy_yield_mc_%s.png' % args.error_bars),
-                os.path.join(args.outdir, 'season_learned_vs_sun_tracking_ratio.png'),
+                os.path.join(args.outdir, 'season_learned_vs_poa_greedy_oracle_ratio.png'),
             ]):
                 if os.path.isfile(fig_path):
                     img = plt.imread(fig_path)

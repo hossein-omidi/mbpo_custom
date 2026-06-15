@@ -4,9 +4,10 @@ Verified in scripts/verify_pv_state_space.py against the bundled historical
 catalog (data/pv_weather/albuquerque_pvgis_tmy_utc_15min.csv).
 
 Power and cumulative energy for the agent and all baselines (sun_tracking,
-fixed_no_motion) come from PVTrackingEnv.step → pvlib get_total_irradiance
-(mbpo/env/pv_tracking.py::_power_from_orientation). Baselines only choose
-panel orientation; they do not bypass the env physics path.
+fixed_no_motion, optional POA oracle) come from PVTrackingEnv.step →
+mbpo.env.pvlib_physics.compute_poa_global → pvlib.irradiance.get_total_irradiance.
+Baselines only choose panel orientation; they do not bypass the env physics path.
+Sun tracker uses dual-axis zenith/az targets (not pvlib.tracking.singleaxis).
 """
 
 from mbpo.env.historical_weather import available_month_days, load_historical_weather_catalog

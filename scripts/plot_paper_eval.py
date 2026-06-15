@@ -2,7 +2,7 @@
 """Paper figures for Stage 3 annual-scenario MBPO-SAC evaluation.
 
 Expects frozen-policy rollouts on the real PVTrackingEnv with matched seeds across
-methods (learned_policy, sun_tracking, fixed_no_motion). Main evaluation protocol:
+methods (learned_policy, poa_greedy_oracle, fixed_no_motion). Main evaluation protocol:
 annual day sampling, irradiance_perturbation_std=0, no calendar hold-out.
 """
 
@@ -20,26 +20,27 @@ import numpy as np
 from examples.config.pv_tracking.verified_dates import SEASON_ORDER
 from eval_utils import SEASON_CALENDAR_ORDER
 from eval_utils import (
+    MC_METHOD_COLORS,
+    MC_METHOD_LABELS,
+    MC_METHOD_ORDER,
+    MC_REFERENCE_BASELINE,
     compute_total_energy_kwh,
     describe_eval_config,
     get_rollout_metadata,
     night_intervals_from_path,
+    ordered_methods_present,
     rollout_time_axis,
     rollout_xlabel,
     season_from_day_of_year,
 )
 
-METHODS = ('learned_policy', 'sun_tracking', 'fixed_no_motion')
-METHOD_LABELS = {
-    'learned_policy': 'MBPO-SAC (learned)',
-    'sun_tracking': 'Sun tracker (greedy zenith/az)',
-    'fixed_no_motion': 'Fixed mount (no motion)',
-}
-METHOD_COLORS = {
-    'learned_policy': '#1f77b4',
-    'sun_tracking': '#2ca02c',
-    'fixed_no_motion': '#ff7f0e',
-}
+METHODS = MC_METHOD_ORDER
+METHOD_LABELS = MC_METHOD_LABELS
+METHOD_COLORS = MC_METHOD_COLORS
+
+
+def _methods_in(paths_by_name):
+    return ordered_methods_present(paths_by_name)
 
 
 def episode_metrics(path):
@@ -134,7 +135,7 @@ def plot_annual_performance_bars(outdir, paths_by_name, error='std'):
     ]
     fig, axes = plt.subplots(2, 2, figsize=(11, 8))
     axes = axes.ravel()
-    methods = [m for m in METHODS if m in paths_by_name]
+    methods = _methods_in(paths_by_name)
 
     for ax, (key, ylabel) in zip(axes, metrics):
         x = np.arange(len(methods))
@@ -167,7 +168,7 @@ def plot_annual_performance_bars(outdir, paths_by_name, error='std'):
 
 def plot_energy_decomposition(outdir, paths_by_name, error='std'):
     """Gross − movement = net (stacked validation + grouped bars)."""
-    methods = [m for m in METHODS if m in paths_by_name]
+    methods = _methods_in(paths_by_name)
     x = np.arange(len(methods))
     gross_m, gross_g = [], []
     move_m, move_g = [], []
@@ -216,7 +217,7 @@ def plot_seasonal_comparison(outdir, paths_by_name, error='std'):
             get_rollout_metadata(p).get('season_calendar', episode_metrics(p)['season']) == s
             for paths in paths_by_name.values()
             for p in paths)]
-        methods = [m for m in METHODS if m in paths_by_name]
+        methods = _methods_in(paths_by_name)
         x = np.arange(len(seasons))
         width = 0.8 / max(len(methods), 1)
         fig, ax = plt.subplots(figsize=(10, 5))
@@ -285,7 +286,7 @@ def plot_weather_condition_comparison(outdir, paths_by_name, error='std'):
     if not labels_present:
         return None
 
-    methods = [m for m in METHODS if m in paths_by_name]
+    methods = _methods_in(paths_by_name)
     x = np.arange(len(labels_present))
     width = 0.8 / max(len(methods), 1)
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -323,7 +324,7 @@ def plot_return_process_evaluation(outdir, paths_by_name):
     Post-train protocol: independent episodes indexed by eval seed; bars show
     sample mean ± sample std (not SEM unless n is large).
     """
-    methods = [m for m in METHODS if m in paths_by_name]
+    methods = _methods_in(paths_by_name)
     if not methods:
         return None
 
@@ -418,9 +419,9 @@ def plot_cumulative_return_intraday(outdir, paths_by_name, field='cumulative_net
     return path
 
 
-def plot_baseline_sun_vs_fixed(outdir, paths_by_name, error='std'):
-    """Sun tracker vs fixed: net energy mean ± uncertainty (paired MC, pvlib path)."""
-    methods = [m for m in ('sun_tracking', 'fixed_no_motion') if m in paths_by_name]
+def plot_baseline_oracle_vs_fixed(outdir, paths_by_name, error='std'):
+    """POA oracle vs fixed: net energy mean ± uncertainty (paired MC, pvlib path)."""
+    methods = [m for m in (MC_REFERENCE_BASELINE, 'fixed_no_motion') if m in paths_by_name]
     if len(methods) < 2:
         return None
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
@@ -441,17 +442,19 @@ def plot_baseline_sun_vs_fixed(outdir, paths_by_name, error='std'):
         error, max(ns) if ns else 0))
     axes[0].grid(axis='y', linestyle='--', alpha=0.35)
 
-    n = min(len(paths_by_name['sun_tracking']), len(paths_by_name['fixed_no_motion']))
+    oracle_paths = paths_by_name[MC_REFERENCE_BASELINE]
+    fixed_paths = paths_by_name['fixed_no_motion']
+    n = min(len(oracle_paths), len(fixed_paths))
     deltas = []
     for i in range(n):
-        es = episode_metrics(paths_by_name['sun_tracking'][i])['net_energy_kwh']
-        ef = episode_metrics(paths_by_name['fixed_no_motion'][i])['net_energy_kwh']
-        deltas.append(es - ef)
+        eo = episode_metrics(oracle_paths[i])['net_energy_kwh']
+        ef = episode_metrics(fixed_paths[i])['net_energy_kwh']
+        deltas.append(eo - ef)
     deltas = np.asarray(deltas, dtype=np.float64)
     axes[1].hist(deltas, bins=min(15, max(5, len(deltas) // 2)),
-                 color=METHOD_COLORS['sun_tracking'], alpha=0.75, edgecolor='white')
+                 color=METHOD_COLORS[MC_REFERENCE_BASELINE], alpha=0.75, edgecolor='white')
     axes[1].axvline(float(np.mean(deltas)), color='black', linestyle='--',
-                    label='E[sun−fixed]=%.4f' % float(np.mean(deltas)))
+                    label='E[oracle−fixed]=%.4f' % float(np.mean(deltas)))
     if len(deltas) > 1:
         axes[1].axvline(float(np.mean(deltas) + np.std(deltas, ddof=1)),
                         color='#666666', linestyle=':', alpha=0.8)
@@ -459,13 +462,13 @@ def plot_baseline_sun_vs_fixed(outdir, paths_by_name, error='std'):
                         color='#666666', linestyle=':', alpha=0.8)
     axes[1].axvline(0.0, color='#999999', linewidth=0.8)
     axes[1].set_xlabel('Paired Δ net energy (kWh)')
-    axes[1].set_title('Sun tracker − fixed (same scenario per seed)')
+    axes[1].set_title('POA oracle − fixed (same scenario per seed)')
     axes[1].legend(fontsize=8)
     axes[1].grid(axis='y', linestyle='--', alpha=0.35)
 
     fig.suptitle('Baseline comparison — pvlib env.step, empirical weather MC', fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
-    path = os.path.join(outdir, 'baseline_sun_vs_fixed_mc.png')
+    path = os.path.join(outdir, 'baseline_oracle_vs_fixed_mc.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
     return path
@@ -477,21 +480,22 @@ def plot_daily_gain_distributions(outdir, paths_by_name):
     if not learned:
         return None
     n = len(learned)
-    gains = {'vs_fixed': [], 'vs_sun': []}
+    gains = {'vs_fixed': [], 'vs_oracle': []}
+    ref = MC_REFERENCE_BASELINE
     for i in range(n):
         ml = episode_metrics(learned[i])
         if 'fixed_no_motion' in paths_by_name and i < len(paths_by_name['fixed_no_motion']):
             mf = episode_metrics(paths_by_name['fixed_no_motion'][i])
             gains['vs_fixed'].append(ml['net_energy_kwh'] - mf['net_energy_kwh'])
-        if 'sun_tracking' in paths_by_name and i < len(paths_by_name['sun_tracking']):
-            ms = episode_metrics(paths_by_name['sun_tracking'][i])
-            gains['vs_sun'].append(ml['net_energy_kwh'] - ms['net_energy_kwh'])
+        if ref in paths_by_name and i < len(paths_by_name[ref]):
+            mo = episode_metrics(paths_by_name[ref][i])
+            gains['vs_oracle'].append(ml['net_energy_kwh'] - mo['net_energy_kwh'])
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     for ax, key, title in zip(
             axes,
-            ('vs_fixed', 'vs_sun'),
-            ('MBPO-SAC − Fixed', 'MBPO-SAC − Sun tracker')):
+            ('vs_fixed', 'vs_oracle'),
+            ('MBPO-SAC − Fixed', 'MBPO-SAC − POA oracle')):
         v = gains[key]
         if not v:
             ax.set_visible(False)
@@ -515,7 +519,7 @@ def plot_daily_gain_distributions(outdir, paths_by_name):
 def plot_movement_efficiency(outdir, paths_by_name):
     """Angular movement vs net energy scatter per method."""
     fig, ax = plt.subplots(figsize=(7, 5))
-    for method in METHODS:
+    for method in _methods_in(paths_by_name):
         if method not in paths_by_name:
             continue
         xs, ys = [], []
@@ -538,15 +542,15 @@ def plot_movement_efficiency(outdir, paths_by_name):
 
 
 def plot_representative_daily_trajectories(outdir, paths_by_name, top_k=2):
-    """Aligned same-day trajectories for methods with highest MBPO-SAC vs sun gain."""
+    """Aligned same-day trajectories for days with highest MBPO-SAC vs POA oracle gain."""
     learned = paths_by_name.get('learned_policy', [])
-    sun = paths_by_name.get('sun_tracking', [])
-    if not learned or not sun:
+    oracle = paths_by_name.get(MC_REFERENCE_BASELINE, [])
+    if not learned or not oracle:
         return []
 
     scores = []
-    for i in range(min(len(learned), len(sun))):
-        gain = episode_metrics(learned[i])['net_energy_kwh'] - episode_metrics(sun[i])['net_energy_kwh']
+    for i in range(min(len(learned), len(oracle))):
+        gain = episode_metrics(learned[i])['net_energy_kwh'] - episode_metrics(oracle[i])['net_energy_kwh']
         scores.append((gain, i))
     scores.sort(reverse=True)
     selected = [idx for _, idx in scores[:top_k]]
@@ -555,10 +559,10 @@ def plot_representative_daily_trajectories(outdir, paths_by_name, top_k=2):
     for rank, idx in enumerate(selected, 1):
         date = episode_metrics(learned[idx])['date']
         fig, axes = plt.subplots(7, 1, sharex=True, figsize=(11, 15))
-        fig.suptitle('Representative day %s — rollout %d (MBPO−sun gain=%.4f kWh)' % (
+        fig.suptitle('Representative day %s — rollout %d (MBPO−oracle gain=%.4f kWh)' % (
             date, idx + 1, scores[rank - 1][0]), fontsize=11)
 
-        for method in METHODS:
+        for method in _methods_in(paths_by_name):
             if method not in paths_by_name or idx >= len(paths_by_name[method]):
                 continue
             path = paths_by_name[method][idx]
@@ -573,7 +577,7 @@ def plot_representative_daily_trajectories(outdir, paths_by_name, top_k=2):
             for ax in axes:
                 ax.axvspan(lo, hi, color='#e8e8e8', alpha=0.4, zorder=0)
 
-        for method in METHODS:
+        for method in _methods_in(paths_by_name):
             if method not in paths_by_name or idx >= len(paths_by_name[method]):
                 continue
             path = paths_by_name[method][idx]
@@ -703,7 +707,7 @@ def plot_training_diagnostics(trial_dir, outdir):
 def write_paper_metrics_json(outdir, paths_by_name, eval_env_params, protocol_note):
     rows = build_episode_table(paths_by_name)
     summary = {}
-    for method in METHODS:
+    for method in _methods_in(paths_by_name):
         sub = [r for r in rows if r['method'] == method]
         if not sub:
             continue
@@ -758,6 +762,9 @@ def write_protocol_readme(outdir, eval_env_params, protocol_note, is_stress=Fals
         f.write('  movement_cost = sum step movement penalty\n')
         f.write('  net_energy_kwh = total_reward = gross - movement\n')
         f.write('Baselines use identical seeds, horizon T=117, and env contract.\n')
+        f.write('POA oracle: myopic 19×19 tilt/az grid per step (deterministic per scenario).\n')
+        f.write('MC reports use mean±σ over independent calendar scenarios.\n')
+        f.write('Oracle is reference baseline; not guaranteed to win every single day.\n')
     return path
 
 
@@ -807,7 +814,7 @@ def generate_paper_figures(
         _safe('weather_condition_comparison', plot_weather_condition_comparison,
               paper_dir, paths_by_name, error=error)
         _safe('daily_gain_distributions', plot_daily_gain_distributions, paper_dir, paths_by_name)
-        _safe('baseline_sun_vs_fixed', plot_baseline_sun_vs_fixed, paper_dir, paths_by_name, error=error)
+        _safe('baseline_oracle_vs_fixed', plot_baseline_oracle_vs_fixed, paper_dir, paths_by_name, error=error)
         _safe('movement_efficiency', plot_movement_efficiency, paper_dir, paths_by_name)
         outputs.extend(plot_representative_daily_trajectories(
             paper_dir, paths_by_name, top_k=top_representative_days) or [])

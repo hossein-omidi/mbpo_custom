@@ -45,6 +45,7 @@ from mbpo.env.pv_tracking import (
     PV_TIMEZONE,
 )
 from eval_utils import (
+    MC_REFERENCE_BASELINE,
     decode_pv_observation,
     make_baseline_rollout,
     normalize_angle_diff,
@@ -131,8 +132,8 @@ def make_nsrdb_env(manifest=None, observation_mode='physical'):
 
 
 def run_nsrdb_mc_baselines(n_rollouts, seed_base=42, path_length=117):
-    """Paired MC: sun tracker vs fixed on same NSRDB scenarios (pvlib via env.step)."""
-    paths = {'sun_tracking': [], 'fixed_no_motion': []}
+    """Paired MC: POA oracle vs fixed on same NSRDB scenarios (pvlib via env.step)."""
+    paths = {MC_REFERENCE_BASELINE: [], 'fixed_no_motion': []}
     for i in range(int(n_rollouts)):
         seed = int(seed_base) + i
         for method in paths:
@@ -146,29 +147,30 @@ def run_nsrdb_mc_baselines(n_rollouts, seed_base=42, path_length=117):
 
 
 def plot_nsrdb_mc_baseline_comparison(outdir, paths_by_name):
-    """Sun vs fixed net energy: mean ± 1σ over NSRDB scenario MC."""
-    methods = ('sun_tracking', 'fixed_no_motion')
+    """POA oracle vs fixed net energy: mean ± 1σ over NSRDB scenario MC."""
+    methods = (MC_REFERENCE_BASELINE, 'fixed_no_motion')
     if not all(m in paths_by_name for m in methods):
         return None
-    n = min(len(paths_by_name['sun_tracking']), len(paths_by_name['fixed_no_motion']))
-    sun_e = [float(np.sum(p['rewards'])) for p in paths_by_name['sun_tracking'][:n]]
+    oracle_paths = paths_by_name[MC_REFERENCE_BASELINE]
+    n = min(len(oracle_paths), len(paths_by_name['fixed_no_motion']))
+    oracle_e = [float(np.sum(p['rewards'])) for p in oracle_paths[:n]]
     fix_e = [float(np.sum(p['rewards'])) for p in paths_by_name['fixed_no_motion'][:n]]
-    deltas = np.asarray(sun_e, dtype=np.float64) - np.asarray(fix_e, dtype=np.float64)
+    deltas = np.asarray(oracle_e, dtype=np.float64) - np.asarray(fix_e, dtype=np.float64)
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     x = [0, 1]
-    means = [np.mean(sun_e), np.mean(fix_e)]
-    stds = [np.std(sun_e, ddof=1) if n > 1 else 0.0, np.std(fix_e, ddof=1) if n > 1 else 0.0]
-    axes[0].bar(x, means, yerr=stds, capsize=5, color=['#2ca02c', '#7f7f7f'], alpha=0.9)
+    means = [np.mean(oracle_e), np.mean(fix_e)]
+    stds = [np.std(oracle_e, ddof=1) if n > 1 else 0.0, np.std(fix_e, ddof=1) if n > 1 else 0.0]
+    axes[0].bar(x, means, yerr=stds, capsize=5, color=['#9467bd', '#7f7f7f'], alpha=0.9)
     axes[0].set_xticks(x)
-    axes[0].set_xticklabels(['Sun tracker', 'Fixed 30°/180°'])
+    axes[0].set_xticklabels(['POA oracle', 'Fixed 30°/180°'])
     axes[0].set_ylabel('Net energy (kWh)')
     axes[0].set_title('NSRDB scenario MC (n=%d, matched seeds)' % n)
     axes[0].grid(axis='y', alpha=0.3)
 
-    axes[1].hist(deltas, bins=min(12, max(4, n // 2)), color='#2ca02c', alpha=0.75)
+    axes[1].hist(deltas, bins=min(12, max(4, n // 2)), color='#9467bd', alpha=0.75)
     axes[1].axvline(float(np.mean(deltas)), color='k', ls='--',
-                    label='E[sun−fixed]=%.4f' % float(np.mean(deltas)))
+                    label='E[oracle−fixed]=%.4f' % float(np.mean(deltas)))
     if n > 1:
         axes[1].axvline(float(np.mean(deltas) + np.std(deltas, ddof=1)), color='#888888', ls=':')
         axes[1].axvline(float(np.mean(deltas) - np.std(deltas, ddof=1)), color='#888888', ls=':')
@@ -178,7 +180,7 @@ def plot_nsrdb_mc_baseline_comparison(outdir, paths_by_name):
     axes[1].legend(fontsize=8)
     axes[1].grid(axis='y', alpha=0.3)
 
-    path = os.path.join(outdir, 'nsrdb_mc_baseline_sun_vs_fixed.png')
+    path = os.path.join(outdir, 'nsrdb_mc_baseline_oracle_vs_fixed.png')
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -187,7 +189,7 @@ def plot_nsrdb_mc_baseline_comparison(outdir, paths_by_name):
 
 def format_nsrdb_mc_report(paths_by_name, n_rollouts):
     """Lines for report: probabilistic baseline comparison."""
-    ref = 'learned_policy' if 'learned_policy' in paths_by_name else 'sun_tracking'
+    ref = 'learned_policy' if 'learned_policy' in paths_by_name else MC_REFERENCE_BASELINE
     summary = summarize_paired_mc(paths_by_name, reference=ref)
     lines = [
         'NSRDB multi-year baseline MC (e ~ Uniform(manifest), pvlib env.step):',
