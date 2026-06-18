@@ -425,7 +425,7 @@ def summarize_pair_coverage(pairs):
 
     unique_counts = sorted(set(counts.values()))
     lines = [
-        'paired learned/sun rollouts: %d' % len(pairs),
+        'paired learned/oracle rollouts: %d' % len(pairs),
         'dates covered: %d' % len(counts),
         'per-date pair counts: %s' % ', '.join(
             '%s=%d' % (date, counts[date]) for date in sorted(counts.keys())),
@@ -541,7 +541,9 @@ def verify_paired_fairness(learned_rows, baseline_rows, movement_settings=None):
     lines.append(
         'same incremental action space; baselines decode obs and use env.step pvlib power '
         '(no oracle irradiance bypass).')
-    lines.append('Sun tracker: target_tilt=solar_zenith, target_az=solar_azimuth (strong heuristic).')
+    lines.append(
+        'POA oracle: per-step myopic argmax over a 19x19 tilt/azimuth grid '
+        '(same env.step pvlib power; reference upper bound).')
     lines.append('VERDICT: %s' % ('PASS — comparison is fair' if ok else 'FAIL — fix eval before interpreting metrics'))
     return ok, lines
 

@@ -193,11 +193,21 @@ def plot_energy_decomposition(outdir, paths_by_name, error='std'):
            label='Net energy', color='#3182bd', capsize=4, alpha=0.95)
     ax.bar(x + w / 2, move_m, w, bottom=net_m, yerr=_asym_yerr(move_g, error),
            label='Movement cost (stacked)', color='#bdbdbd', capsize=3, alpha=0.85)
+    # Movement cost is ~0.1% of harvest, so the stacked grey segment is not
+    # legible at energy scale. Annotate the true value in Wh above each bar so
+    # the decomposition is honest AND readable.
+    y_top = max(gross_m) if gross_m else 1.0
+    for xi, mv in zip(x, move_m):
+        ax.annotate('move %.2f Wh' % (mv * 1000.0),
+                    xy=(xi, y_top * 1.02), ha='center', va='bottom',
+                    fontsize=8, color='#555555')
+    ax.set_ylim(0, y_top * 1.12)
     ax.set_xticks(x)
     ax.set_xticklabels([METHOD_LABELS[m] for m in methods])
     ax.set_ylabel('kWh / cost units')
-    ax.set_title('Energy decomposition: gross − movement = net (mean ± %s)' % error)
-    ax.legend(loc='best')
+    ax.set_title('Energy decomposition: gross − movement = net (mean ± %s)\n'
+                 '(movement cost annotated in Wh; <0.4%% of harvest)' % error)
+    ax.legend(loc='upper right')
     ax.grid(axis='y', linestyle='--', alpha=0.35)
     fig.tight_layout()
     path = os.path.join(outdir, 'energy_decomposition.png')
@@ -768,6 +778,195 @@ def write_protocol_readme(outdir, eval_env_params, protocol_note, is_stress=Fals
     return path
 
 
+# ---------------------------------------------------------------------------
+# Advanced paper figures (grid / heatmap style). These ADD to the standard set
+# and do not modify any existing plotting function. All values come from the
+# same matched-seed env.step rollouts (pvlib get_total_irradiance); no new
+# physics or estimators are introduced.
+# ---------------------------------------------------------------------------
+
+def plot_per_scenario_ratio(outdir, paths_by_name):
+    """Per-scenario net-energy ratio vs POA oracle (sorted ladder).
+
+    Each point is one matched NSRDB scenario: ratio = method_net / oracle_net.
+    Reveals consistency of the learned policy and the few days it meets/beats
+    the myopic oracle — information the aggregate mean alone hides.
+    """
+    ref = MC_REFERENCE_BASELINE
+    learned = paths_by_name.get('learned_policy', [])
+    oracle = paths_by_name.get(ref, [])
+    if not learned or not oracle:
+        return None
+    fixed = paths_by_name.get('fixed_no_motion', [])
+    n = min(len(learned), len(oracle))
+
+    rows = []
+    for i in range(n):
+        o_net = episode_metrics(oracle[i])['net_energy_kwh']
+        if o_net <= 0:
+            continue
+        entry = {
+            'date': episode_metrics(learned[i])['date'],
+            'learned': episode_metrics(learned[i])['net_energy_kwh'] / o_net,
+        }
+        if i < len(fixed):
+            entry['fixed'] = episode_metrics(fixed[i])['net_energy_kwh'] / o_net
+        rows.append(entry)
+    if not rows:
+        return None
+
+    rows.sort(key=lambda r: r['learned'])
+    xs = np.arange(len(rows))
+    learned_r = np.array([r['learned'] for r in rows], dtype=np.float64)
+    fixed_r = np.array([r.get('fixed', np.nan) for r in rows], dtype=np.float64)
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.vlines(xs, np.minimum(learned_r, 1.0), np.maximum(learned_r, 1.0),
+              color='#cccccc', lw=0.8, zorder=1)
+    ax.scatter(xs, learned_r, s=44, color=METHOD_COLORS['learned_policy'],
+               zorder=3, label='MBPO-SAC / POA oracle')
+    if np.isfinite(fixed_r).any():
+        ax.scatter(xs, fixed_r, s=34, marker='v', alpha=0.8,
+                   color=METHOD_COLORS['fixed_no_motion'], zorder=2,
+                   label='Fixed / POA oracle')
+    ax.axhline(1.0, color=METHOD_COLORS[ref], ls='--', lw=1.5, label='POA oracle parity')
+    mean_l = float(np.mean(learned_r))
+    ax.axhline(mean_l, color=METHOD_COLORS['learned_policy'], ls=':', lw=1.2,
+               label='Mean learned ratio = %.3f' % mean_l)
+
+    wins = int(np.sum(learned_r >= 1.0))
+    ax.set_xticks(xs)
+    ax.set_xticklabels([r['date'] for r in rows], rotation=90, fontsize=6)
+    ax.set_ylabel('Net energy ratio vs POA oracle')
+    ax.set_xlabel('NSRDB scenario (sorted by MBPO-SAC / oracle ratio)')
+    ax.set_title('Per-scenario performance vs POA oracle '
+                 '(n=%d; learned ≥ oracle on %d day(s))' % (len(rows), wins))
+    ax.legend(loc='lower right', fontsize=8)
+    ax.grid(axis='y', ls='--', alpha=0.35)
+    fig.tight_layout()
+    path = os.path.join(outdir, 'per_scenario_ratio_vs_oracle.png')
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_hourly_power_gap_heatmap(outdir, paths_by_name):
+    """Heatmap of (POA oracle − MBPO-SAC) power [W] over scenario × UTC hour.
+
+    Diverging colour: red = oracle harvests more at that time, blue = learned
+    matches/exceeds. Localises WHEN in the day (and on which scenarios) the
+    learned policy leaves energy on the table — typically the morning/evening
+    high-incidence-angle ramps.
+    """
+    ref = MC_REFERENCE_BASELINE
+    learned = paths_by_name.get('learned_policy', [])
+    oracle = paths_by_name.get(ref, [])
+    if not learned or not oracle:
+        return None
+    n = min(len(learned), len(oracle))
+    lengths = [len(learned[i].get('infos', [])) for i in range(n)]
+    lengths += [len(oracle[i].get('infos', [])) for i in range(n)]
+    T = min(lengths) if lengths else 0
+    if T == 0:
+        return None
+
+    gap = np.full((n, T), np.nan)
+    net_oracle = []
+    dates = []
+    for i in range(n):
+        li = learned[i]['infos']
+        oi = oracle[i]['infos']
+        lp = np.array([float(li[t].get('power', np.nan)) for t in range(T)])
+        op = np.array([float(oi[t].get('power', np.nan)) for t in range(T)])
+        gap[i] = op - lp
+        net_oracle.append(episode_metrics(oracle[i])['net_energy_kwh'])
+        dates.append(episode_metrics(learned[i])['date'])
+
+    order = np.argsort(net_oracle)[::-1]
+    gap = gap[order]
+    dates = [dates[k] for k in order]
+    hours = np.asarray(rollout_time_axis(learned[0]), dtype=np.float64)[:T]
+
+    finite = np.abs(gap[np.isfinite(gap)])
+    vmax = float(np.percentile(finite, 98)) if finite.size else 1.0
+    vmax = max(vmax, 1e-6)
+
+    fig, ax = plt.subplots(figsize=(11, 7))
+    im = ax.imshow(gap, aspect='auto', cmap='RdBu_r', vmin=-vmax, vmax=vmax,
+                   interpolation='nearest')
+    tick_cols = np.linspace(0, T - 1, 6).astype(int)
+    ax.set_xticks(tick_cols)
+    ax.set_xticklabels(['%.0f' % hours[c] for c in tick_cols])
+    ax.set_yticks(np.arange(n))
+    ax.set_yticklabels(dates, fontsize=6)
+    ax.set_xlabel('UTC clock hour (post-step)')
+    ax.set_ylabel('NSRDB scenario (sorted by oracle net energy, high→low)')
+    ax.set_title('Power gap: POA oracle − MBPO-SAC [W]\n'
+                 'red = oracle harvests more, blue = learned matches/exceeds')
+    cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+    cb.set_label('Power deficit vs oracle (W)')
+    fig.tight_layout()
+    path = os.path.join(outdir, 'hourly_power_gap_heatmap.png')
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_orientation_strategy_heatmap(outdir, paths_by_name):
+    """2D occupancy of panel (azimuth, tilt) per policy — the control strategy.
+
+    Pooled over all matched steps/scenarios; colour = % of control steps spent
+    at that orientation. Contrasts the learned policy's smooth tracking band
+    against the oracle's myopic jumps to grid extremes.
+    """
+    ref = MC_REFERENCE_BASELINE
+    methods = [m for m in ('learned_policy', ref, 'fixed_no_motion')
+               if paths_by_name.get(m)]
+    methods = [m for m in methods if m in ('learned_policy', ref)]
+    if len(methods) < 2:
+        return None
+
+    az_edges = np.linspace(0, 360, 49)
+    tilt_edges = np.linspace(0, 90, 31)
+    hists = []
+    for method in methods:
+        az, tilt = [], []
+        for p in paths_by_name[method]:
+            for info in p.get('infos', []):
+                az.append(float(info.get('azimuth', np.nan)))
+                tilt.append(float(info.get('tilt', np.nan)))
+        az = np.asarray(az)
+        tilt = np.asarray(tilt)
+        ok = np.isfinite(az) & np.isfinite(tilt)
+        H, _, _ = np.histogram2d(az[ok], tilt[ok], bins=[az_edges, tilt_edges])
+        total = H.sum()
+        hists.append(H / total * 100.0 if total > 0 else H)
+    vmax = max((h.max() for h in hists), default=1.0)
+    vmax = max(vmax, 1e-6)
+
+    fig, axes = plt.subplots(1, len(methods), figsize=(6 * len(methods), 5),
+                             sharey=True)
+    if len(methods) == 1:
+        axes = [axes]
+    im = None
+    for ax, method, H in zip(axes, methods, hists):
+        im = ax.imshow(H.T, origin='lower', aspect='auto', cmap='magma',
+                       extent=[0, 360, 0, 90], vmin=0, vmax=vmax)
+        ax.set_title(METHOD_LABELS[method])
+        ax.set_xlabel('Panel azimuth (deg)')
+        ax.set_xticks([0, 90, 180, 270, 360])
+        ax.axvline(180, color='#66ccff', ls=':', lw=1.0, alpha=0.7)
+    axes[0].set_ylabel('Panel tilt (deg)')
+    cb = fig.colorbar(im, ax=axes, fraction=0.046, pad=0.02)
+    cb.set_label('% of control steps')
+    fig.suptitle('Panel orientation occupancy — where each policy points the panel '
+                 '(dotted = due south)', fontsize=12)
+    path = os.path.join(outdir, 'orientation_strategy_heatmap.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return path
+
+
 def generate_paper_figures(
         outdir,
         paths_by_name,
@@ -816,6 +1015,10 @@ def generate_paper_figures(
         _safe('daily_gain_distributions', plot_daily_gain_distributions, paper_dir, paths_by_name)
         _safe('baseline_oracle_vs_fixed', plot_baseline_oracle_vs_fixed, paper_dir, paths_by_name, error=error)
         _safe('movement_efficiency', plot_movement_efficiency, paper_dir, paths_by_name)
+        # Advanced grid / heatmap figures (added; existing plots unchanged).
+        _safe('per_scenario_ratio', plot_per_scenario_ratio, paper_dir, paths_by_name)
+        _safe('hourly_power_gap_heatmap', plot_hourly_power_gap_heatmap, paper_dir, paths_by_name)
+        _safe('orientation_strategy_heatmap', plot_orientation_strategy_heatmap, paper_dir, paths_by_name)
         outputs.extend(plot_representative_daily_trajectories(
             paper_dir, paths_by_name, top_k=top_representative_days) or [])
         p = plot_mc_timeseries_band(paper_dir, paths_by_name, field='power')

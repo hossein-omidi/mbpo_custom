@@ -39,7 +39,7 @@ params = build_nsrdb_params(
     CONFIG_VERSION,
     TRAINING_STAGE,
     algo_kwargs={
-        'n_epochs': 3000,
+        'n_epochs': 4000,
         'n_initial_exploration_steps': 10000,
         'real_ratio': 0.9,
         'discount': 1.0,
