@@ -3,12 +3,13 @@ import tensorflow as tf
 
 class FakeEnv:
 
-    def __init__(self, model, config, obs_low=None, obs_high=None):
+    def __init__(self, model, config, obs_low=None, obs_high=None, horizon=None):
         self.model = model
         self.config = config
         self._obs_low = obs_low
         self._obs_high = obs_high
-
+        if horizon is not None:
+            self.config.horizon = horizon
     '''
         x : [ batch_size, obs_dim + 1 ]
         means : [ num_models, batch_size, obs_dim + 1 ]
@@ -40,6 +41,7 @@ class FakeEnv:
         else:
             return_single = False
 
+        # obs includes tau as last dimension; act is action
         inputs = np.concatenate((obs, act), axis=-1)
         ensemble_model_means, ensemble_model_vars = self.model.predict(inputs, factored=True)
         ensemble_model_means[:,:,1:] += obs
@@ -62,6 +64,13 @@ class FakeEnv:
         log_prob, dev = self._get_logprob(samples, ensemble_model_means, ensemble_model_vars)
 
         rewards, next_obs = samples[:,:1], samples[:,1:]
+
+        # DETERMINISTIC TAU OVERRIDE: tau_next = tau - 1/H
+        # tau is the last dimension of obs/next_obs
+        tau = obs[:, -1:]
+        tau_next = tau - 1.0 / self.config.horizon
+        next_obs[:, -1:] = tau_next
+
         if hasattr(self.config, 'postprocess_next_obs'):
             next_obs = self.config.postprocess_next_obs(
                 next_obs, self._obs_low, self._obs_high)

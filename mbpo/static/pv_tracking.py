@@ -3,8 +3,9 @@ import pandas as pd
 from pvlib.location import Location
 
 # Observation layouts (must match mbpo/env/pv_tracking.py).
-LEGACY_OBS_DIM = 15
-PHYSICAL_OBS_DIM = 11
+# +1 for tau (remaining time fraction)
+LEGACY_OBS_DIM = 16
+PHYSICAL_OBS_DIM = 12
 
 LEGACY_CYCLIC_SLICES = (
     (1, 3),    # solar azimuth

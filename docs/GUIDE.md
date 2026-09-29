@@ -251,12 +251,81 @@ per-rollout PNGs/CSVs under the chosen `--outdir`.
 
 ---
 
-## 6. Troubleshooting
+## 7. Finite-Horizon Time-Aware MBPO (Theoretical Foundation)
 
-| Symptom | Action |
-|---------|--------|
-| `ImportError` on startup | `pip install -e .` inside `mbpo` env (train.sh self-heals) |
-| conda not found in scripts | `export CONDA_SH=<path-to>/conda.sh` before `train.sh`/`result.sh` |
-| preflight fails | read `verification/*/…report.txt`; re-run after fix |
-| stale ray processes after Ctrl-C | `ray stop` |
-| Regenerate NSRDB data | see §2 |
+This implementation uses a **finite-horizon MDP** formulation where the episode has a fixed
+horizon `H = 117` control steps (8 hours of 5-minute intervals, 12:00–21:45 UTC).
+
+### 7.1 Augmented State with Remaining Time
+
+The agent's state is augmented with `τ` (remaining time fraction):
+
+```
+observation = [physical_state_11_dims, τ]   # 12 total (physical) / 16 total (legacy)
+τ = remaining_steps / H   ∈ [0, 1]
+```
+
+At `t=0` (12:00): `τ = 1.0`; at `t=H` (21:45): `τ = 0` (terminal).
+
+### 7.2 Deterministic Time Evolution
+
+`τ` updates deterministically in both real and model rollouts:
+
+```
+τ_next = τ - 1/H
+d = 1 if τ == 1/H else 0   # terminal flag
+```
+
+The dynamics model **does not predict τ** — it only predicts `(s', r)`.
+FakeEnv overrides the model's output to enforce `τ_next = τ - 1/H`.
+
+### 7.3 SAC Bellman Target (Finite-Horizon)
+
+```
+y = r + γ (1 - d) [ min_i Q_φ_i'(s', τ-1, a') - α log π_θ(a' | s', τ-1) ]
+```
+
+The next-state value uses `τ-1`, not `τ`. Discount `γ = 1` (undiscounted).
+
+### 7.4 Configuration
+
+No new config flags needed — finite-horizon is the native formulation.
+All configs (`stage3_nsrdb`, `conf1`–`conf5`) automatically use `τ`-augmented observations.
+
+### 7.5 Key Implementation Files
+
+| Component | File | Change |
+|-----------|------|--------|
+| Environment obs | `mbpo/env/pv_tracking.py` | Appends `τ` to `_build_observation` |
+| Observation bounds | `mbpo/env/pv_tracking.py` | Adds `τ ∈ [0,1]` to bounds |
+| Static dims | `mbpo/static/pv_tracking.py` | `PHYSICAL_OBS_DIM = 12`, `LEGACY_OBS_DIM = 16` |
+| FakeEnv | `mbpo/models/fake_env.py` | Deterministic `τ` override in `step()` |
+| MBPO init | `mbpo/algorithms/mbpo.py` | Passes `horizon` to FakeEnv |
+| SAC | `softlearning/algorithms/sac.py` | Uses `next_observations_ph` (includes `τ-1`) |
+| Replay buffer | `softlearning/replay_pools/simple_replay_pool.py` | Stores `remaining_steps` (consistent with `τ`) |
+| Eval decoding | `scripts/eval_utils.py` | Handles 12-dim physical obs with `τ` |
+
+### 7.6 Verification
+
+```bash
+# Dry-run shows obs_space=(12,) for physical mode
+python -m softlearning.scripts.console_scripts run_example_dry examples.development \
+  --config=examples.config.pv_tracking.conf3 --gpus=0 --trial-gpus=0 --cpus=2 --trial-cpus=1
+
+# Preflight gate confirms finite-horizon alignment
+python scripts/verify_preflight.py --config examples.config.pv_tracking.conf3
+
+# State space verification includes τ
+python scripts/verify_pv_state_space.py --mode nsrdb
+```
+
+### 7.7 Mathematical Justification (Summary)
+
+1. **Markov Property**: Without `τ`, states with identical physics but different remaining time are aliased (violates Markov). See Pardo et al. "Time Limits in RL" (2018).
+2. **γ = 1 Valid**: Return `G = Σ r` is bounded by `H * r_max`.
+3. **Boundary Condition**: `V(s, 0) = 0` at `τ = 0` (no future reward).
+4. **Model Rollout Consistency**: Start states filtered by `remaining_steps > rollout_length` ensures `τ > k` throughout rollout.
+
+---
+
+## 8. Troubleshooting

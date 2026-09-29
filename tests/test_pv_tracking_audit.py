@@ -81,16 +81,16 @@ def test_physical_observation_uses_zenith_not_altitude():
 
 def test_azimuth_encoding_round_trip_matches_atan2_sin_cos_order():
     for angle in ROUNDTRIP_ANGLES_DEG:
-        obs = np.zeros(11, dtype=np.float32)
+        obs = np.zeros(12, dtype=np.float32)  # 11 physical + tau
         obs[1] = np.sin(np.deg2rad(angle))
         obs[2] = np.cos(np.deg2rad(angle))
         obs[8] = np.sin(np.deg2rad(angle))
         obs[9] = np.cos(np.deg2rad(angle))
+        obs[11] = 0.5  # tau
         decoded = decode_pv_observation(obs)
 
         assert abs(normalize_angle_diff(decoded['solar_azimuth_deg'], angle)) < 1e-5
         assert abs(normalize_angle_diff(decoded['panel_azimuth_deg'], angle)) < 1e-5
-
 
 def test_wrapped_azimuth_error_examples():
     assert normalize_angle_diff(10.0, 350.0) == pytest.approx(20.0)

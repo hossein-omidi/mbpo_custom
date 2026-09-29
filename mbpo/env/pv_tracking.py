@@ -545,29 +545,34 @@ class PVTrackingEnv(gym.Env):
 
     def _observation_bounds(self):
         if self.observation_mode == 'physical':
+            # Physical obs: 10 dims + tau = 11 total
             low = np.array([
                 0.0, -1.0, -1.0,
                 0.0, 0.0, 0.0,
                 -1.0,
                 0.0, -1.0, -1.0,
                 0.0,
+                0.0,  # tau in [0, 1]
             ], dtype=np.float32)
             high = np.array([
                 1.0, 1.0, 1.0,
                 1.0, 1.0, 1.0,
                 1.0,
                 1.0, 1.0, 1.0,
+                1.0,
                 1.0,
             ], dtype=np.float32)
         else:
+            # Legacy obs: 14 dims + tau = 15 total
             low = np.array([
                 0.0, -1.0, -1.0,
                 0.0, 0.0, 0.0,
                 -1.0,
                 0.0, -1.0, -1.0,
                 0.0,
-                -1.0, -1.0,
-                -1.0, -1.0,
+                0.0, 0.0,
+                0.0, 0.0,
+                0.0,  # tau in [0, 1]
             ], dtype=np.float32)
             high = np.array([
                 1.0, 1.0, 1.0,
@@ -577,6 +582,7 @@ class PVTrackingEnv(gym.Env):
                 1.0,
                 1.0, 1.0,
                 1.0, 1.0,
+                1.0,
             ], dtype=np.float32)
         return low, high
 
@@ -651,6 +657,11 @@ class PVTrackingEnv(gym.Env):
                 ],
                 dtype=np.float32,
             )
+
+        # Append finite-horizon time index tau = remaining_steps / H
+        H = self.num_action_steps
+        tau = (H - self.step_index) / float(H)
+        obs = np.append(obs, tau).astype(np.float32)
         return obs
 
     def reset(self, date=None, scenario_id=None):

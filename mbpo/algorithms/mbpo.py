@@ -104,11 +104,15 @@ class MBPO(RLAlgorithm):
         act_dim = np.prod(training_environment.action_space.shape)
         self._model = construct_model(obs_dim=obs_dim, act_dim=act_dim, hidden_dim=hidden_dim, num_networks=num_networks, num_elites=num_elites)
         self._static_fns = static_fns
+        horizon = getattr(
+            getattr(training_environment, 'unwrapped', training_environment),
+            'num_action_steps', 117)
         self.fake_env = FakeEnv(
             self._model,
             self._static_fns,
             obs_low=training_environment.observation_space.low,
             obs_high=training_environment.observation_space.high,
+            horizon=horizon,
         )
 
         self._rollout_schedule = rollout_schedule

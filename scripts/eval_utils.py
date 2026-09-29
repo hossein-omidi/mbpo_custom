@@ -57,6 +57,7 @@ PV_OBS_LABELS_PHYSICAL = (
     'panel_azimuth_sin',
     'panel_azimuth_cos',
     'cos_aoi',
+    'tau',
 )
 
 # Backward-compatible alias for legacy evaluation scripts.
@@ -67,6 +68,9 @@ def pv_obs_labels_for_vector(obs):
     dim = int(np.asarray(obs).reshape(-1).shape[0])
     if dim == len(PV_OBS_LABELS_PHYSICAL):
         return PV_OBS_LABELS_PHYSICAL
+    # Legacy dims: 14 (without tau) or 15 (with tau)
+    if dim in (LEGACY_OBS_DIM, LEGACY_OBS_DIM + 1):
+        return PV_OBS_LABELS_LEGACY
     return PV_OBS_LABELS_LEGACY
 
 
@@ -391,13 +395,16 @@ def decode_pv_observation(obs):
         'ghi_norm': float(obs[5]),
     }
     if obs.shape[0] == len(PV_OBS_LABELS_PHYSICAL):
+        # Physical obs with tau (11 dims) - tau is at index 11 (last)
         decoded['cos_aoi'] = float(obs[10])
+        decoded['tau'] = float(obs[11])
     else:
+        # Legacy obs with tau (15 dims)
         angle = np.mod(np.arctan2(obs[11], obs[12]), 2.0 * np.pi)
         decoded['time_of_day_hour'] = float(angle * 24.0 / (2.0 * np.pi))
         decoded['power_norm'] = float(obs[10])
-    return decoded
 
+    return decoded
 
 # Clock-hour bins in UTC on the daylight episode grid (12:00–21:45 UTC, NYC).
 # Use SOLAR_ALTITUDE_WINDOWS for sun-up / peak-sun physics.
