@@ -5,7 +5,7 @@ Uses the same PVTrackingEnv + pvlib path as training (no MBPO changes).
 
 Examples:
 
-  cd /home/user01/mbpo_custom && conda activate mbpo
+  cd <repo-root> && conda activate mbpo   # e.g. cd ~/projects/PVLIB_Paper/mbpo_custom
   python scripts/verify_pv_state_space.py
   python scripts/verify_pv_state_space.py --outdir verification/pv_state_space
 """

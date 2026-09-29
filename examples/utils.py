@@ -11,8 +11,8 @@ from softlearning.misc.utils import datetimestamp
 
 
 DEFAULT_UNIVERSE = 'gym'
-DEFAULT_DOMAIN = 'HalfCheetah'
-DEFAULT_TASK = 'v2'
+DEFAULT_DOMAIN = 'PVTracking'
+DEFAULT_TASK = 'v0'
 DEFAULT_ALGORITHM = 'MBPO'
 
 

@@ -2,7 +2,6 @@ from copy import deepcopy
 
 from ray import tune
 import numpy as np
-import pdb
 
 from softlearning.misc.utils import get_git_rev, deep_update
 
@@ -39,8 +38,6 @@ POLICY_PARAMS_FOR_DOMAIN.update({
 
 DEFAULT_MAX_PATH_LENGTH = 1000
 MAX_PATH_LENGTH_PER_DOMAIN = {
-    'Point2DEnv': 50,
-    'Pendulum': 200,
     'PVTracking': 117,
 }
 
@@ -57,55 +54,11 @@ ALGORITHM_PARAMS_ADDITIONAL = {
             'n_initial_exploration_steps': int(5000),
         }
     },
-    'SQL': {
-        'type': 'SQL',
-        'kwargs': {
-            'policy_lr': 3e-4,
-            'target_update_interval': 1,
-            'n_initial_exploration_steps': int(1e3),
-            'reward_scale': tune.sample_from(lambda spec: (
-                {
-                    'Swimmer': 30,
-                    'Hopper': 30,
-                    'HalfCheetah': 30,
-                    'Walker2d': 10,
-                    'Ant': 300,
-                    'Humanoid': 100,
-                    'Pendulum': 1,
-                }.get(
-                    spec.get('config', spec)
-                    ['environment_params']
-                    ['training']
-                    ['domain'],
-                    1.0
-                ),
-            )),
-        }
-    },
-    'MVE': {
-        'type': 'MVE',
-        'kwargs': {
-            'reparameterize': REPARAMETERIZE,
-            'lr': 3e-4,
-            'target_update_interval': 1,
-            'tau': 5e-3,
-            'target_entropy': 'auto',
-            'store_extra_policy_info': False,
-            'action_prior': 'uniform',
-            'n_initial_exploration_steps': int(5000),
-        }
-    },
 }
 
 DEFAULT_NUM_EPOCHS = 200
 
 NUM_EPOCHS_PER_DOMAIN = {
-    'Hopper': int(1e3),
-    'HalfCheetah': int(3e3),
-    'Walker2d': int(3e3),
-    'Ant': int(3e3),
-    'Humanoid': int(1e4),
-    'Pendulum': 10,
     # Production PV runs use examples/config/pv_tracking/0.py (see config n_epochs).
     # Keep domain default aligned so partial merges are not stuck at 50 epochs.
     'PVTracking': 300,
@@ -212,7 +165,6 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
                 'max_size': tune.sample_from(lambda spec: (
                     {
                         'SimpleReplayPool': int(1e6),
-                        'TrajectoryReplayPool': int(1e4),
                     }.get(
                         spec.get('config', spec)
                         ['replay_pool_params']

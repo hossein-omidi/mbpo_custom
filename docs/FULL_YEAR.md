@@ -10,11 +10,10 @@ conda env create -f environment/pv-env.yml
 conda activate mbpo
 pip install 'pvlib==0.10.4' 'tables==3.7.0' --no-deps
 pip install 'opencv-python-headless==4.2.0.34'
-pip install -e viskit
 pip install -e .
 ```
 
-NSRDB CSVs (New York City, 5-min, 2018–2024) live under `data/pv_weather/nsrdb/` with manifest `data/pv_weather/nsrdb/newyork_multiyear_manifest.json`. To rebuild from the official NSRDB API: `python NSRDB_test.py` then `python scripts/prepare_nsrdb_newyork_catalog.py` (see `data/pv_weather/nsrdb/README.md`).
+NSRDB CSVs (New York City, 5-min, 2018–2024) live under `data/pv_weather/nsrdb/` with manifest `data/pv_weather/nsrdb/newyork_multiyear_manifest.json`. To rebuild from the official NSRDB API: `python scripts/download_nsrdb_nyc.py` then `python scripts/prepare_nsrdb_newyork_catalog.py`.
 
 Optional env overrides (any machine):
 
@@ -34,10 +33,11 @@ python -c "from examples.config.pv_tracking.conf_registry import list_configs; l
 | Name | Role |
 |------|------|
 | **stage3_nsrdb** | Main reference (`stage3_multiyear_nsrdb_scenario.py`) |
-| **conf1** | Fast — shorter epochs, light MBPO (parallel run) |
-| **conf2** | Slow — long run, conservative MBPO (parallel run) |
-| **conf3** | Strong — stable MBPO, recommended production (parallel run) |
-| **conf4** | Noisy — irradiance/observation augmentation (parallel run) |
+| **conf1** | Simple-strong — compact nets, fixed 30°S pose, real_ratio=0.9 |
+| **conf2** | Slow — long run, conservative MBPO |
+| **conf3** | Strong — deep SAC + wide BNN, high real_ratio (recommended) |
+| **conf4** | Light-fast — 64-wide nets, short run (smoke/iteration) |
+| **conf5** | Advanced — deep+wide A/B variant of conf3 |
 
 ## Training (`train.sh`)
 

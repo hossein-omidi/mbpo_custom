@@ -13,7 +13,6 @@ setup(
     entry_points={
         'console_scripts': (
             'mbpo=softlearning.scripts.console_scripts:main',
-            'viskit=mbpo.scripts.console_scripts:main'
         )
     },
     requires=(),

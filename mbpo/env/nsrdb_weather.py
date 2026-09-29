@@ -31,7 +31,7 @@ from .nsrdb_iotools import read_nsrdb_csv_to_env_weather, to_env_weather_frame
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_NSRDB_DATA_DIR = REPO_ROOT / 'data' / 'pv_weather' / 'nsrdb'
 DEFAULT_MANIFEST_PATH = DEFAULT_NSRDB_DATA_DIR / 'newyork_multiyear_manifest.json'
-# Raw API downloads (NSRDB_test.py output; SAM CSVs in local standard time).
+# Raw API downloads (scripts/download_nsrdb_nyc.py output; SAM CSVs in local standard time).
 DEFAULT_WEATHER_DATASET_DIR = REPO_ROOT / 'nsrdb_newyork_5min'
 
 # New York City NSRDB grid cell (from SAM file header: 40.72, -74.01, elev 12 m).
@@ -479,11 +479,19 @@ def normalized_scenario_probabilities(scenarios):
     return probs / probs.sum()
 
 
+def _to_tz_aware(ts, tz):
+    """Convert ts to a tz-aware Timestamp at `tz`, handling already-aware inputs."""
+    ts = pd.Timestamp(ts)
+    if ts.tzinfo is None:
+        return ts.tz_localize(tz)
+    return ts.tz_convert(tz)
+
+
 def allowed_month_days(start_date, end_date, tz=DEFAULT_TZ):
     """Month-day pairs from a calendar range (label year ignored for NSRDB)."""
     days = pd.date_range(
-        start=pd.Timestamp(start_date, tz=tz),
-        end=pd.Timestamp(end_date, tz=tz),
+        start=_to_tz_aware(start_date, tz),
+        end=_to_tz_aware(end_date, tz),
         freq='D',
     )
     return {(int(d.month), int(d.day)) for d in days}

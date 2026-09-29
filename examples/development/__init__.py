@@ -11,11 +11,6 @@ def get_trainable_class(*args, **kwargs):
     return ExperimentRunner
 
 
-# def get_variant_spec(command_line_args, *args, **kwargs):
-#     from .variants import get_variant_spec
-#     variant_spec = get_variant_spec(command_line_args, *args, **kwargs)
-#     return variant_spec
-
 def get_params_from_file(filepath, params_name='params'):
 	import importlib
 	from dotmap import DotMap

@@ -9,20 +9,6 @@ def create_SAC_algorithm(variant, *args, **kwargs):
     return algorithm
 
 
-def create_SQL_algorithm(variant, *args, **kwargs):
-    from .sql import SQL
-
-    algorithm = SQL(*args, **kwargs)
-
-    return algorithm
-
-def create_MVE_algorithm(variant, *args, **kwargs):
-    from .mve_sac import MVESAC
-
-    algorithm = MVESAC(*args, **kwargs)
-
-    return algorithm
-
 def create_MBPO_algorithm(variant, *args, **kwargs):
     from mbpo.algorithms.mbpo import MBPO
 
@@ -33,7 +19,6 @@ def create_MBPO_algorithm(variant, *args, **kwargs):
 
 ALGORITHM_CLASSES = {
     'SAC': create_SAC_algorithm,
-    'SQL': create_SQL_algorithm,
     'MBPO': create_MBPO_algorithm,
 }
 

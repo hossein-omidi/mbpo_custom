@@ -2,7 +2,6 @@ from collections import defaultdict
 
 import numpy as np
 from gym.spaces import Box, Dict, Discrete
-import pdb
 
 from .flexible_replay_pool import FlexibleReplayPool
 

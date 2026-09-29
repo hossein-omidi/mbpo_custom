@@ -163,7 +163,7 @@ def find_stage3_trial(artifact_path=None, preferred_root=None):
         if latest:
             warn = (
                 'Using newest trial (not verified as Stage 3 config): %s\n'
-                '  Run ./scripts/run_stage3_fullyear.sh train for a fresh Stage 3 trial.'
+                '  Run ./train.sh <run_name> <conf> --verify for a fresh Stage 3 trial.'
                 % latest)
             return latest, warn
 
@@ -207,7 +207,7 @@ def resolve_trial_dir(path_or_latest=None, root=None):
     lines = ['No PV tracking trials found. Searched:']
     for r in roots:
         lines.append('  %s' % r)
-    lines.append('Run: ./scripts/run_stage3_fullyear.sh train')
+    lines.append('Run: ./train.sh <run_name> <conf> --verify')
     raise FileNotFoundError('\n'.join(lines))
 
 
@@ -219,14 +219,14 @@ def format_trial_hint(root=None):
     if trials:
         lines.append('  export TRIAL=%s' % trials[0])
     else:
-        lines.append('  (no trials yet — run ./scripts/run_stage3_fullyear.sh train)')
+        lines.append('  (no trials yet — run ./train.sh <run_name> <conf> --verify)')
     lines.append('Stage 3 trials are saved under:')
     lines.append('  %s' % STAGE3_RUNS_ROOT)
     return '\n'.join(lines)
 
 
 def trial_status_lines():
-    """Human-readable status for run_stage3_fullyear.sh status."""
+    """Human-readable status for result.sh <run_name> --status."""
     lines = [
         'PV tracking paths',
         '=' * 40,

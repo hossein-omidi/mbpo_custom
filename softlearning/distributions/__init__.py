@@ -1,1 +1,1 @@
-from .real_nvp_flow import ConditionalRealNVPFlow
+from .squash_bijector import SquashBijector

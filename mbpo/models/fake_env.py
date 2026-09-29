@@ -1,6 +1,5 @@
 import numpy as np
 import tensorflow as tf
-import pdb
 
 class FakeEnv:
 
@@ -80,33 +79,6 @@ class FakeEnv:
             terminals = terminals[0]
 
         info = {'mean': return_means, 'std': return_stds, 'log_prob': log_prob, 'dev': dev}
-        return next_obs, rewards, terminals, info
-
-    ## for debugging computation graph
-    def step_ph(self, obs_ph, act_ph, deterministic=False):
-        assert len(obs_ph.shape) == len(act_ph.shape)
-
-        inputs = tf.concat([obs_ph, act_ph], axis=1)
-        # inputs = np.concatenate((obs, act), axis=-1)
-        ensemble_model_means, ensemble_model_vars = self.model.create_prediction_tensors(inputs, factored=True)
-        # ensemble_model_means, ensemble_model_vars = self.model.predict(inputs, factored=True)
-        ensemble_model_means = tf.concat([ensemble_model_means[:,:,0:1], ensemble_model_means[:,:,1:] + obs_ph[None]], axis=-1)
-        # ensemble_model_means[:,:,1:] += obs_ph
-        ensemble_model_stds = tf.sqrt(ensemble_model_vars)
-        # ensemble_model_stds = np.sqrt(ensemble_model_vars)
-
-        if deterministic:
-            ensemble_samples = ensemble_model_means
-        else:
-            # ensemble_samples = ensemble_model_means + np.random.normal(size=ensemble_model_means.shape) * ensemble_model_stds
-            ensemble_samples = ensemble_model_means + tf.random.normal(tf.shape(ensemble_model_means)) * ensemble_model_stds
-
-        samples = ensemble_samples[0]
-
-        rewards, next_obs = samples[:,:1], samples[:,1:]
-        terminals = self.config.termination_ph_fn(obs_ph, act_ph, next_obs)
-        info = {}
-
         return next_obs, rewards, terminals, info
 
     def close(self):

@@ -1,26 +1,17 @@
+"""MBPO environment registration — PVTracking only."""
+
 import gym
 
 MBPO_ENVIRONMENT_SPECS = (
-	{
-        'id': 'AntTruncatedObs-v2',
-        'entry_point': (f'mbpo.env.ant:AntTruncatedObsEnv'),
-    },
-	{
-        'id': 'HumanoidTruncatedObs-v2',
-        'entry_point': (f'mbpo.env.humanoid:HumanoidTruncatedObsEnv'),
-    },
-	{
+    {
         'id': 'PVTracking-v0',
-        'entry_point': (f'mbpo.env.pv_tracking:PVTrackingEnv'),
+        'entry_point': 'mbpo.env.pv_tracking:PVTrackingEnv',
     },
 )
 
+
 def register_mbpo_environments():
-    for mbpo_environment in MBPO_ENVIRONMENT_SPECS:
-        gym.register(**mbpo_environment)
-
-    gym_ids = tuple(
-        environment_spec['id']
-        for environment_spec in  MBPO_ENVIRONMENT_SPECS)
-
-    return gym_ids
+    """Register PVTracking-v0 with gym."""
+    for spec in MBPO_ENVIRONMENT_SPECS:
+        gym.register(**spec)
+    return tuple(s['id'] for s in MBPO_ENVIRONMENT_SPECS)

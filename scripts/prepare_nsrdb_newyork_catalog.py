@@ -2,9 +2,9 @@
 """Install the official New York City NSRDB 5-min dataset and build the manifest.
 
 Source data: raw SAM CSVs downloaded from the NSRDB API (GOES CONUS PSM v4,
-5-min, 2018-2024) by NSRDB_test.py into nsrdb_newyork_5min/{year}/<id>/*.csv.
+5-min, 2018-2024) by scripts/download_nsrdb_nyc.py into nsrdb_newyork_5min/{year}/<id>/*.csv.
 
-IMPORTANT — timezone: the corrected download (NSRDB_test.py) requests utc=true,
+IMPORTANT — timezone: the corrected download (scripts/download_nsrdb_nyc.py) requests utc=true,
 so rows are stored natively in UTC (SAM header `Time Zone` = 0). The project
 loader (mbpo.env.nsrdb_iotools via pvlib read_psm3/read_nsrdb_psm4) honors the
 `Time Zone` header either way (it also converts older local-standard-time
@@ -130,7 +130,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--raw-dir', default=str(DEFAULT_WEATHER_DATASET_DIR),
-                   help='Folder with raw NSRDB API downloads (NSRDB_test.py output)')
+                   help='Folder with raw NSRDB API downloads (scripts/download_nsrdb_nyc.py output)')
     p.add_argument('--years', default='2018-2024')
     p.add_argument('--outdir', default=str(DEFAULT_NSRDB_DATA_DIR))
     p.add_argument('--manifest', default=str(DEFAULT_MANIFEST_PATH))
@@ -152,7 +152,7 @@ def main():
             if src is None:
                 raise SystemExit(
                     'No raw SAM CSV for year {} under {}. '
-                    'Run NSRDB_test.py first.'.format(year, args.raw_dir))
+                    'Run scripts/download_nsrdb_nyc.py first.'.format(year, args.raw_dir))
             shutil.copy2(src, dest)
             print('[copy] {} -> {}'.format(src, dest))
         print('[validate] year {}'.format(year))

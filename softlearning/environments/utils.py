@@ -3,7 +3,6 @@ from .adapters.gym_adapter import (
     GymAdapter,
 )
 
-import pdb
 
 ENVIRONMENTS = {
     'gym': GYM_ENVIRONMENTS,

@@ -7,7 +7,6 @@ from collections import OrderedDict
 from numbers import Number
 from itertools import count
 import gtimer as gt
-import pdb
 
 import numpy as np
 import tensorflow as tf
@@ -18,8 +17,6 @@ from softlearning.replay_pools.simple_replay_pool import SimpleReplayPool
 
 from mbpo.models.constructor import construct_model, format_samples_for_training
 from mbpo.models.fake_env import FakeEnv
-from mbpo.utils.writer import Writer
-from mbpo.utils.visualization import visualize_policy
 from mbpo.utils.logging import Progress
 import mbpo.utils.filesystem as filesystem
 
@@ -162,7 +159,6 @@ class MBPO(RLAlgorithm):
         self._last_Q_loss = np.nan
 
         self._log_dir = os.getcwd()
-        self._writer = Writer(self._log_dir)
 
         self._training_environment = training_environment
         self._evaluation_environment = evaluation_environment
@@ -289,7 +285,6 @@ class MBPO(RLAlgorithm):
                     
 
                     gt.stamp('epoch_rollout_model')
-                    # self._visualize_model(self._evaluation_environment, self._total_timestep)
                     self._training_progress.resume()
 
                 self._do_sampling(timestep=self._total_timestep)
@@ -597,19 +592,6 @@ class MBPO(RLAlgorithm):
             sum(steps_added), self._model_pool.size, self._model_pool._max_size, mean_rollout_length, rollout_stats['mean_model_dev'], self._n_train_repeat
         ))
         return rollout_stats
-
-    def _visualize_model(self, env, timestep):
-        ## save env state
-        state = env.unwrapped.state_vector()
-        qpos_dim = len(env.unwrapped.sim.data.qpos)
-        qpos = state[:qpos_dim]
-        qvel = state[qpos_dim:]
-
-        print('[ Visualization ] Starting | Epoch {} | Log dir: {}\n'.format(self._epoch, self._log_dir))
-        visualize_policy(env, self.fake_env, self._policy, self._writer, timestep)
-        print('[ Visualization ] Done')
-        ## set env state
-        env.unwrapped.set_state(qpos, qvel)
 
     def _training_batch(self, batch_size=None):
         batch_size = batch_size or self.sampler._batch_size
