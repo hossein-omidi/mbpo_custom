@@ -202,6 +202,7 @@ class ExperimentRunner(tune.Trainable):
             'algorithm': self.algorithm,
             'Qs': self.Qs,
             'policy_weights': self.policy.get_weights(),
+            'model_pool': self.algorithm._model_pool,
         }
 
     def _save(self, checkpoint_dir):
@@ -245,25 +246,24 @@ class ExperimentRunner(tune.Trainable):
         self.replay_pool.save_latest_experience(replay_pool_pickle_path)
 
     def _restore_replay_pool(self, current_checkpoint_dir):
-        experiment_root = os.path.dirname(current_checkpoint_dir)
-
-        experience_paths = [
-            self._replay_pool_pickle_path(checkpoint_dir)
-            for checkpoint_dir in sorted(glob.iglob(
-                os.path.join(experiment_root, 'checkpoint_*')))
-        ]
-
-        for experience_path in experience_paths:
-            try:
-                self.replay_pool.load_experience(experience_path)
-            except Exception as exc:
-                raise RuntimeError(
-                    'Failed to restore replay pool from {}. '
-                    'Older replay buffers may be incompatible with the current '
-                    'remaining_steps metadata required for exact PV rollout filtering. '
-                    'Retrain from scratch or disable replay-pool restore.'.format(
-                        experience_path)) from exc
-
+        # Only restore from the specific checkpoint being restored, not all checkpoints
+        experience_path = self._replay_pool_pickle_path(current_checkpoint_dir)
+        if not os.path.exists(experience_path):
+            raise RuntimeError(
+                'Replay pool file not found: {}. '
+                'Older replay buffers may be incompatible with the current '
+                'remaining_steps metadata required for exact PV rollout filtering. '
+                'Retrain from scratch or disable replay-pool restore.'.format(
+                    experience_path))
+        try:
+            self.replay_pool.load_experience(experience_path)
+        except Exception as exc:
+            raise RuntimeError(
+                'Failed to restore replay pool from {}. '
+                'Older replay buffers may be incompatible with the current '
+                'remaining_steps metadata required for exact PV rollout filtering. '
+                'Retrain from scratch or disable replay-pool restore.'.format(
+                    experience_path)) from exc
     def _restore(self, checkpoint_dir):
         assert isinstance(checkpoint_dir, str), checkpoint_dir
 
@@ -305,21 +305,13 @@ class ExperimentRunner(tune.Trainable):
             initial_exploration_policy=initial_exploration_policy,
             Qs=Qs,
             pool=replay_pool,
-            static_fns=static_fns,
-            sampler=sampler,
-            session=self._session)
-        self.algorithm.__setstate__(picklable['algorithm'].__getstate__())
+            static_fns=static_fns
+        )
+        model_pool = picklable.get('model_pool')
+        if model_pool is not None:
+            self.algorithm._model_pool = model_pool
 
         self._restore_tf_session_checkpoint(checkpoint_dir)
-        initialize_tf_variables(self._session, only_uninitialized=True)
-
-        # TODO(hartikainen): target Qs should either be checkpointed or pickled.
-        for Q, Q_target in zip(self.algorithm._Qs, self.algorithm._Q_targets):
-            Q_target.set_weights(Q.get_weights())
-
-        if hasattr(self.algorithm, '_model') and hasattr(self.algorithm._model, 'load'):
-            self._restore_model(checkpoint_dir)
-
         self._built = True
 
     def _restore_model(self, checkpoint_dir):

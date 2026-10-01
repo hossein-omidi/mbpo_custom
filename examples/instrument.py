@@ -182,6 +182,9 @@ def run_example_local(example_module_name, example_argv, local_mode=False):
         local_mode=local_mode,
         include_webui=example_args.include_webui,
         temp_dir=example_args.temp_dir,
+        # Memory limits for 8GB node: cap object store + redis to leave headroom
+        object_store_memory=500 * 1024 * 1024,   # 500 MB
+        redis_max_memory=200 * 1024 * 1024,      # 200 MB
     )
     tune.run_experiments(
         experiments,

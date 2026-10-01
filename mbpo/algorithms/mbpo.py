@@ -980,4 +980,18 @@ class MBPO(RLAlgorithm):
         if hasattr(self, '_alpha_optimizer'):
             saveables['_alpha_optimizer'] = self._alpha_optimizer
 
+        if hasattr(self, '_model_pool'):
+            saveables['_model_pool'] = self._model_pool
+
         return saveables
+
+    def __getstate__(self):
+        state = super(MBPO, self).__getstate__()
+        if hasattr(self, '_model_pool'):
+            state['_model_pool'] = self._model_pool
+        return state
+
+    def __setstate__(self, state):
+        super(MBPO, self).__setstate__(state)
+        if '_model_pool' in state:
+            self._model_pool = state['_model_pool']

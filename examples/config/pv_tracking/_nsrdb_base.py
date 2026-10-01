@@ -2,6 +2,7 @@
 
 import importlib
 import os
+from softlearning.misc.utils import deep_update
 
 from examples.config.pv_tracking._paths import default_log_dir
 
@@ -133,7 +134,6 @@ def default_nsrdb_algo_kwargs(**overrides):
     kw.update(overrides)
     return kw
 
-
 def build_nsrdb_params(
         config_version,
         training_stage,
@@ -141,7 +141,9 @@ def build_nsrdb_params(
         train_env_kwargs=None,
         eval_env_kwargs=None,
         policy_params_kwargs=None,
-        q_params_kwargs=None):
+        q_params_kwargs=None,
+        run_params_kwargs=None,
+        replay_pool_params_kwargs=None):
     """Assemble full params dict for NSRDB training."""
     params = dict(_base.params)
     params['config_version'] = config_version
@@ -155,4 +157,8 @@ def build_nsrdb_params(
         params['policy_params'] = {'kwargs': dict(policy_params_kwargs)}
     if q_params_kwargs:
         params['Q_params'] = {'kwargs': dict(q_params_kwargs)}
+    if run_params_kwargs:
+        params['run_params'] = deep_update(params.get('run_params', {}), run_params_kwargs)
+    if replay_pool_params_kwargs:
+        params['replay_pool_params'] = deep_update(params.get('replay_pool_params', {}), replay_pool_params_kwargs)
     return params
