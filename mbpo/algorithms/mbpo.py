@@ -161,13 +161,38 @@ class MBPO(RLAlgorithm):
         self._last_real_ratio = self._real_ratio
         self._last_model_rollout_stats = {}
         self._last_Q_loss = np.nan
-
-        self._log_dir = os.getcwd()
+        self._train_steps_this_epoch = 0
+        self._num_train_steps = 0
+        self._mbpo_training_started = False
 
         self._training_environment = training_environment
         self._evaluation_environment = evaluation_environment
         self._policy = policy
 
+        self._Qs = Qs
+        self._Q_targets = tuple(tf.keras.models.clone_model(Q) for Q in Qs)
+
+        self._pool = pool
+        self._plotter = plotter
+        self._tf_summaries = tf_summaries
+
+        self._policy_lr = lr
+        self._Q_lr = lr
+
+        self._reward_scale = reward_scale
+        self._target_entropy = (
+            -np.prod(self._training_environment.action_space.shape)
+            if target_entropy == 'auto'
+            else target_entropy)
+        print('[ MBPO ] Target entropy: {}'.format(self._target_entropy))
+
+        self._discount = discount
+        self._tau = tau
+        self._target_update_interval = target_update_interval
+        self._action_prior = action_prior
+
+        self._log_dir = os.getcwd()
+        self._mbpo_training_started = False
         self._Qs = Qs
         self._Q_targets = tuple(tf.keras.models.clone_model(Q) for Q in Qs)
 

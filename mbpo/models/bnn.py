@@ -46,8 +46,16 @@ class BNN:
 
         print('[ BNN ] Initializing model: {} | {} networks | {} elites'.format(params['name'], params['num_networks'], params['num_elites']))
         if params.get('sess', None) is None:
-            config = tf.ConfigProto()
-            # config.gpu_options.allow_growth = True
+            config = tf.ConfigProto(
+                allow_soft_placement=True,
+                log_device_placement=False,
+                intra_op_parallelism_threads=1,
+                inter_op_parallelism_threads=1,
+            )
+            config.gpu_options.allow_growth = True
+            config.gpu_options.per_process_gpu_memory_fraction = 0.2
+            config.intra_op_parallelism_threads = 1
+            config.inter_op_parallelism_threads = 1
             self._sess = tf.Session(config=config)
         else:
             self._sess = params.get('sess')

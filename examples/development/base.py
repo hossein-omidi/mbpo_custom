@@ -164,12 +164,12 @@ def get_variant_spec_base(universe, domain, task, policy, algorithm, env_params)
             'kwargs': {
                 'max_size': tune.sample_from(lambda spec: (
                     {
-                        'SimpleReplayPool': int(200000),  # capped at 200k for 8GB node
+                        'SimpleReplayPool': int(50000),  # capped at 50k for 8GB node
                     }.get(
                         spec.get('config', spec)
                         ['replay_pool_params']
                         ['type'],
-                        int(200000))
+                        int(50000))
                 )),
             }
         },

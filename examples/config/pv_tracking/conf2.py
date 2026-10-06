@@ -63,7 +63,7 @@ params = build_nsrdb_params(
     },
     replay_pool_params_kwargs={
         'kwargs': {
-            'max_size': 200000,  # capped at 200k for 8GB node
+            'max_size': 50000,  # capped at 50k for 8GB node
         }
     },
 )
