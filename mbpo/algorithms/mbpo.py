@@ -292,10 +292,6 @@ class MBPO(RLAlgorithm):
                 if (samples_now >= start_samples + self._epoch_length
                     and self.ready_to_train):
                     break
-
-                self._timestep_before_hook()
-                gt.stamp('timestep_before_hook')
-
                 if self._timestep % self._model_train_freq == 0 and self._real_ratio < 1.0:
                     self._training_progress.pause()
                     print('[ MBPO ] log_dir: {} | ratio: {}'.format(self._log_dir, self._real_ratio))
@@ -309,20 +305,24 @@ class MBPO(RLAlgorithm):
                     
                     self._set_rollout_length()
                     self._reallocate_model_pool()
+                    import gc
+                    gc.collect()
                     model_rollout_metrics = self._rollout_model(rollout_batch_size=self._rollout_batch_size, deterministic=self._deterministic)
                     model_metrics.update(model_rollout_metrics)
+                    gc.collect()
                     
-
                     gt.stamp('epoch_rollout_model')
                     self._training_progress.resume()
-
+                
                 self._do_sampling(timestep=self._total_timestep)
                 gt.stamp('sample')
-
+                
                 if self.ready_to_train:
                     self._do_training_repeats(timestep=self._total_timestep)
+                    import gc
+                    gc.collect()
                 gt.stamp('train')
-
+                
                 self._timestep_after_hook()
                 gt.stamp('timestep_after_hook')
 
@@ -445,6 +445,12 @@ class MBPO(RLAlgorithm):
         rollouts_per_epoch = self._rollout_batch_size * self._epoch_length / self._model_train_freq
         model_steps_per_epoch = int(self._rollout_length * rollouts_per_epoch)
         new_pool_size = self._model_retain_epochs * model_steps_per_epoch
+        # Cap model pool size to prevent OOM
+        max_model_pool_size = 10000
+        if new_pool_size > max_model_pool_size:
+            print('[ MBPO ] Capping model pool size from {:.2e} to {}'.format(
+                new_pool_size, max_model_pool_size))
+            new_pool_size = max_model_pool_size
 
         if not hasattr(self, '_model_pool'):
             print('[ MBPO ] Initializing new model pool with size {:.2e}'.format(
