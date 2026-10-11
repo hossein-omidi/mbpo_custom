@@ -214,18 +214,8 @@ class ExperimentRunner(tune.Trainable):
         }
 
     def _save(self, checkpoint_dir):
-        """Implements the checkpoint logic.
-
-        TODO(hartikainen): This implementation is currently very hacky. Things
-        that need to be fixed:
-          - Figure out how serialize/save tf.keras.Model subclassing. The
-            current implementation just dumps the weights in a pickle, which
-            is not optimal.
-          - Try to unify all the saving and loading into easily
-            extendable/maintainable interfaces. Currently we use
-            `tf.train.Checkpoint` and `pickle.dump` in very unorganized way
-            which makes things not so usable.
-        """
+        """Save full training state - Issue #2 fix.
+        Saves full replay pool instead of just incremental experiences."""
         os.makedirs(checkpoint_dir, exist_ok=True)
         pickle_path = self._pickle_path(checkpoint_dir)
         with open(pickle_path, 'wb') as f:
@@ -236,7 +226,8 @@ class ExperimentRunner(tune.Trainable):
             pickle.dump(self.policy.get_weights(), f)
 
         if self._variant['run_params'].get('checkpoint_replay_pool', False):
-            self._save_replay_pool(checkpoint_dir)
+            # Fix Issue #2: Save FULL replay pool, not just incremental
+            self._save_full_replay_pool(checkpoint_dir)
 
         if hasattr(self.algorithm, '_model') and hasattr(self.algorithm._model, 'save'):
             try:
@@ -247,7 +238,6 @@ class ExperimentRunner(tune.Trainable):
         self._save_tf_session_checkpoint(checkpoint_dir)
 
         return os.path.join(checkpoint_dir, '')
-
     def _save_replay_pool(self, checkpoint_dir):
         replay_pool_pickle_path = self._replay_pool_pickle_path(
             checkpoint_dir)
@@ -273,6 +263,7 @@ class ExperimentRunner(tune.Trainable):
                 'Retrain from scratch or disable replay-pool restore.'.format(
                     experience_path)) from exc
     def _restore(self, checkpoint_dir):
+        """Restore full training state including all counters and model - Issue #1, #2, #3, #4 fixes."""
         assert isinstance(checkpoint_dir, str), checkpoint_dir
 
         checkpoint_dir = checkpoint_dir.rstrip('/')
@@ -291,11 +282,11 @@ class ExperimentRunner(tune.Trainable):
             get_replay_pool_from_variant(self._variant, training_environment))
 
         if self._variant['run_params'].get('checkpoint_replay_pool', False):
-            self._restore_replay_pool(checkpoint_dir)
+            # Fix Issue #2: Load FULL replay pool, not just incremental
+            self._restore_full_replay_pool(checkpoint_dir)
 
         sampler = self.sampler = picklable['sampler']
         Qs = self.Qs = picklable['Qs']
-        # policy = self.policy = picklable['policy']
         policy = self.policy = (
             get_policy_from_variant(self._variant, training_environment, Qs))
         self.policy.set_weights(picklable['policy_weights'])
@@ -305,6 +296,7 @@ class ExperimentRunner(tune.Trainable):
         domain = self._variant['environment_params']['training']['domain']
         static_fns = mbpo.static[domain.lower()]
 
+        # Fix Issue #1: Pass sampler and session explicitly
         self.algorithm = get_algorithm_from_variant(
             variant=self._variant,
             training_environment=training_environment,
@@ -313,15 +305,36 @@ class ExperimentRunner(tune.Trainable):
             initial_exploration_policy=initial_exploration_policy,
             Qs=Qs,
             pool=replay_pool,
-            static_fns=static_fns
+            static_fns=static_fns,
+            sampler=sampler,
+            session=self._session
         )
+        
+        # Fix Issue #4: Transfer epoch and training counters
+        if hasattr(picklable['algorithm'], '_epoch'):
+            self.algorithm._epoch = picklable['algorithm']._epoch
+            self.algorithm._timestep = picklable['algorithm']._timestep
+            self.algorithm._num_train_steps = picklable['algorithm']._num_train_steps
+            self.algorithm._mbpo_training_started = getattr(
+                picklable['algorithm'], '_mbpo_training_started', False)
+        
+        # Transfer model pool if it exists
         model_pool = picklable.get('model_pool')
         if model_pool is not None:
             self.algorithm._model_pool = model_pool
 
         self._restore_tf_session_checkpoint(checkpoint_dir)
+        initialize_tf_variables(self._session, only_uninitialized=True)
+        
+        # Fix Issue #3: Restore BNN model explicitly
+        if hasattr(self.algorithm, '_model') and hasattr(self.algorithm._model, 'load'):
+            try:
+                self.algorithm._model.load(checkpoint_dir)
+                print('[ ExperimentRunner ] Restored dynamics model from {}'.format(checkpoint_dir))
+            except Exception as e:
+                print('[ ExperimentRunner ] Warning: failed to restore algorithm model: {}'.format(e))
+        
         self._built = True
-
     def _restore_model(self, checkpoint_dir):
         if hasattr(self.algorithm, '_model') and hasattr(self.algorithm._model, 'load'):
             try:
