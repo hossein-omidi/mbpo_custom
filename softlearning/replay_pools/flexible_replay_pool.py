@@ -120,6 +120,7 @@ class FlexibleReplayPool(ReplayPool):
         }
 
     def save_latest_experience(self, pickle_path):
+        """Save only new experiences since last save (incompatible with full restore)."""
         latest_samples = self.last_n_batch(self._samples_since_save)
 
         with gzip.open(pickle_path, 'wb') as f:
@@ -128,6 +129,7 @@ class FlexibleReplayPool(ReplayPool):
         self._samples_since_save = 0
 
     def load_experience(self, experience_path):
+        """Load latest experiences (incompatible with full restore) - use load_replay_pool_state for full restore."""
         with gzip.open(experience_path, 'rb') as f:
             latest_samples = pickle.load(f)
 
@@ -137,6 +139,27 @@ class FlexibleReplayPool(ReplayPool):
             assert data.shape[0] == num_samples, data.shape
 
         self.add_samples(latest_samples)
+        self._samples_since_save = 0
+
+    def save_replay_pool_state(self, pickle_path):
+        """Save the FULL replay pool state (all samples up to current size) - Issue #2 fix."""
+        all_samples = self.return_all_samples()
+        with gzip.open(pickle_path, 'wb') as f:
+            pickle.dump(all_samples, f)
+
+    def load_replay_pool_state(self, pickle_path):
+        """Load the FULL replay pool state - Issue #2 fix."""
+        with gzip.open(pickle_path, 'rb') as f:
+            all_samples = pickle.load(f)
+
+        key = list(all_samples.keys())[0]
+        num_samples = all_samples[key].shape[0]
+        for field_name, data in all_samples.items():
+            assert data.shape[0] == num_samples, data.shape
+
+        # Directly set the fields from the full state
+        self.fields = all_samples
+        self._size = num_samples
         self._samples_since_save = 0
 
     def return_all_samples(self):
