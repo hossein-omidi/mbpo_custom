@@ -239,11 +239,17 @@ class ExperimentRunner(tune.Trainable):
 
         return os.path.join(checkpoint_dir, '')
     def _save_replay_pool(self, checkpoint_dir):
+        """Save FULL replay pool state (not just incremental) - Issue #2 fix."""
         replay_pool_pickle_path = self._replay_pool_pickle_path(
             checkpoint_dir)
-        self.replay_pool.save_latest_experience(replay_pool_pickle_path)
+        self.replay_pool.save_replay_pool_state(replay_pool_pickle_path)
 
     def _restore_replay_pool(self, current_checkpoint_dir):
+        """Restore FULL replay pool state - Issue #2 fix.
+        
+        Uses load_replay_pool_state to restore the complete replay buffer,
+        not just incremental experiences.
+        """
         # Only restore from the specific checkpoint being restored, not all checkpoints
         experience_path = self._replay_pool_pickle_path(current_checkpoint_dir)
         if not os.path.exists(experience_path):
@@ -254,7 +260,7 @@ class ExperimentRunner(tune.Trainable):
                 'Retrain from scratch or disable replay-pool restore.'.format(
                     experience_path))
         try:
-            self.replay_pool.load_experience(experience_path)
+            self.replay_pool.load_replay_pool_state(experience_path)
         except Exception as exc:
             raise RuntimeError(
                 'Failed to restore replay pool from {}. '
