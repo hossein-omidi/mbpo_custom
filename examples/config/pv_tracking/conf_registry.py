@@ -36,6 +36,16 @@ CONFIGS = {
         'conf5.py',
         'NSRDB advanced — deep SAC + wide BNN, high real_ratio (A/B vs conf3)',
     ),
+    'conf_compact': (
+        'examples.config.pv_tracking.conf_compact',
+        'conf_compact.py',
+        'NSRDB compact — 5D state, 64-wide nets, fast training',
+    ),
+    'conf_sac': (
+        'examples.config.pv_tracking.conf_sac',
+        'conf_sac.py',
+        'NSRDB SAC-only baseline — 5D state, fair comparison with MBPO',
+    ),
 }
 
 

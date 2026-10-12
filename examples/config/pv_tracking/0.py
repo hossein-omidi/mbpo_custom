@@ -3,9 +3,9 @@
 #
 # Bump CONFIG_VERSION when changing default hyperparameters below.
 
-CONFIG_VERSION = 'pv_tracking_mbpo_skeleton_2026-06-06'
-TRAINING_STAGE = 'base'
+from ray import tune
 
+CONFIG_VERSION = 'pv_tracking_mbpo_skeleton_2026-06-06'
 params = {
     'type': 'MBPO',
     'universe': 'gym',
@@ -63,4 +63,18 @@ params = {
         'movement_penalty': 0.0,
     },
     'evaluation_environment_kwargs': {},
+    'replay_pool_params': {
+        'type': 'SimpleReplayPool',
+        'kwargs': {
+            'max_size': tune.sample_from(lambda spec: (
+                {
+                    'SimpleReplayPool': int(50000),  # capped at 50k for 8GB node
+                }.get(
+                    spec.get('config', spec)
+                    ['replay_pool_params']
+                    ['type'],
+                    int(50000))
+            )),
+        },
+    },
 }

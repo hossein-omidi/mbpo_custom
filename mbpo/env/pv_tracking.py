@@ -46,7 +46,7 @@ from .nsrdb_weather import (
 logger = logging.getLogger(__name__)
 
 # Observation layouts (must stay in sync with mbpo/static/pv_tracking.py).
-OBSERVATION_MODES = ('legacy', 'physical')
+OBSERVATION_MODES = ('legacy', 'physical', 'compact')
 WEATHER_SOURCES = ('clearsky', 'historical', 'nsrdb_multiyear')
 WEATHER_SCENARIO_MODES = ('pvgis_tmy', 'nsrdb_multiyear', 'clearsky')
 
@@ -80,6 +80,15 @@ PHYSICAL_OBS_LABELS = (
     'panel_azimuth_sin',
     'panel_azimuth_cos',
     'cos_aoi',
+    'tau',
+)
+
+COMPACT_OBS_LABELS = (
+    'solar_zenith_norm',
+    'ghi_norm',
+    'rel_azimuth_sin',
+    'panel_tilt_norm',
+    'tau',
 )
 
 IRRADIANCE_NORM = 2000.0
@@ -227,9 +236,11 @@ class PVTrackingEnv(gym.Env):
         self.log_observations = bool(log_observations)
         self._obs_log_steps_remaining = 0
         self.obs_feature_names = (
-            PHYSICAL_OBS_LABELS
-            if observation_mode == 'physical'
-            else LEGACY_OBS_LABELS
+            COMPACT_OBS_LABELS
+            if observation_mode == 'compact'
+            else (PHYSICAL_OBS_LABELS
+                  if observation_mode == 'physical'
+                  else LEGACY_OBS_LABELS)
         )
         self.fixed_eval_dates = None
         self.excluded_dates = None
@@ -544,47 +555,95 @@ class PVTrackingEnv(gym.Env):
         return max(len(self.times) - 1, 1)
 
     def _observation_bounds(self):
-        if self.observation_mode == 'physical':
-            # Physical obs: 10 dims + tau = 11 total
+        """Return observation bounds based on observation_mode."""
+        if self.observation_mode == 'compact':
+            # Compact 5-component observation bounds
+            # [solar_zenith_norm, ghi_norm, rel_azimuth_sin, panel_tilt_norm, tau]
             low = np.array([
-                0.0, -1.0, -1.0,
-                0.0, 0.0, 0.0,
-                -1.0,
-                0.0, -1.0, -1.0,
-                0.0,
-                0.0,  # tau in [0, 1]
+                0.0,      # solar_zenith_norm [0,1]
+                0.0,      # ghi_norm [0,1]
+                -1.0,     # rel_azimuth_sin [-1,1]
+                0.0,      # panel_tilt_norm [0,1]
+                0.0,      # tau [0,1]
             ], dtype=np.float32)
             high = np.array([
-                1.0, 1.0, 1.0,
-                1.0, 1.0, 1.0,
-                1.0,
-                1.0, 1.0, 1.0,
-                1.0,
-                1.0,
+                1.0,      # solar_zenith_norm [0,1]
+                1.0,      # ghi_norm [0,1]
+                1.0,      # rel_azimuth_sin [-1,1]
+                1.0,      # panel_tilt_norm [0,1]
+                1.0,      # tau [0,1]
             ], dtype=np.float32)
+            return low, high
+        elif self.observation_mode == 'physical':
+            # Physical 12D observation bounds
+            low = np.array([
+                0.0,      # 0. solar_zenith_norm [0,1]
+                -1.0,     # 1. solar_azimuth_sin [-1,1]
+                -1.0,     # 2. solar_azimuth_cos [-1,1]
+                0.0,      # 3. dni_norm [0,1]
+                0.0,      # 4. dhi_norm [0,1]
+                0.0,      # 5. ghi_norm [0,1]
+                -1.0,     # 6. temperature_norm [-1,1]
+                0.0,      # 7. panel_tilt_norm [0,1]
+                -1.0,     # 8. panel_azimuth_sin [-1,1]
+                -1.0,     # 9. panel_azimuth_cos [-1,1]
+                0.0,      # 10. cos_aoi [0,1]
+                0.0,      # 11. tau [0,1]
+            ], dtype=np.float32)
+            high = np.array([
+                1.0,      # 0. solar_zenith_norm [0,1]
+                1.0,      # 1. solar_azimuth_sin [-1,1]
+                1.0,      # 2. solar_azimuth_cos [-1,1]
+                1.0,      # 3. dni_norm [0,1]
+                1.0,      # 4. dhi_norm [0,1]
+                1.0,      # 5. ghi_norm [0,1]
+                1.0,      # 6. temperature_norm [-1,1]
+                1.0,      # 7. panel_tilt_norm [0,1]
+                1.0,      # 8. panel_azimuth_sin [-1,1]
+                1.0,      # 9. panel_azimuth_cos [-1,1]
+                1.0,      # 10. cos_aoi [0,1]
+                1.0,      # 11. tau [0,1]
+            ], dtype=np.float32)
+            return low, high
         else:
-            # Legacy obs: 14 dims + tau = 15 total
+            # Legacy 16D observation bounds (or 15D without tau)
             low = np.array([
-                0.0, -1.0, -1.0,
-                0.0, 0.0, 0.0,
-                -1.0,
-                0.0, -1.0, -1.0,
-                0.0,
-                0.0, 0.0,
-                0.0, 0.0,
-                0.0,  # tau in [0, 1]
+                0.0,      # 0. solar_zenith_norm [0,1]
+                -1.0,     # 1. solar_azimuth_sin [-1,1]
+                -1.0,     # 2. solar_azimuth_cos [-1,1]
+                0.0,      # 3. dni_norm [0,1]
+                0.0,      # 4. dhi_norm [0,1]
+                0.0,      # 5. ghi_norm [0,1]
+                -1.0,     # 6. temperature_norm [-1,1]
+                0.0,      # 7. panel_tilt_norm [0,1]
+                -1.0,     # 8. panel_azimuth_sin [-1,1]
+                -1.0,     # 9. panel_azimuth_cos [-1,1]
+                0.0,      # 10. power_norm [0,1]
+                -1.0,     # 11. time_of_day_sin [-1,1]
+                -1.0,     # 12. time_of_day_cos [-1,1]
+                -1.0,     # 13. day_of_year_sin [-1,1]
+                -1.0,     # 14. day_of_year_cos [-1,1]
+                0.0,      # 15. tau [0,1]
             ], dtype=np.float32)
             high = np.array([
-                1.0, 1.0, 1.0,
-                1.0, 1.0, 1.0,
-                1.0,
-                1.0, 1.0, 1.0,
-                1.0,
-                1.0, 1.0,
-                1.0, 1.0,
-                1.0,
+                1.0,      # 0. solar_zenith_norm [0,1]
+                1.0,      # 1. solar_azimuth_sin [-1,1]
+                1.0,      # 2. solar_azimuth_cos [-1,1]
+                1.0,      # 3. dni_norm [0,1]
+                1.0,      # 4. dhi_norm [0,1]
+                1.0,      # 5. ghi_norm [0,1]
+                1.0,      # 6. temperature_norm [-1,1]
+                1.0,      # 7. panel_tilt_norm [0,1]
+                1.0,      # 8. panel_azimuth_sin [-1,1]
+                1.0,      # 9. panel_azimuth_cos [-1,1]
+                1.0,      # 10. power_norm [0,1]
+                1.0,      # 11. time_of_day_sin [-1,1]
+                1.0,      # 12. time_of_day_cos [-1,1]
+                1.0,      # 13. day_of_year_sin [-1,1]
+                1.0,      # 14. day_of_year_cos [-1,1]
+                1.0,      # 15. tau [0,1]
             ], dtype=np.float32)
-        return low, high
+            return low, high
 
     def _cos_angle_of_incidence(self, solar_zenith, solar_azimuth, tilt, azimuth):
         incidence_deg = float(aoi(
@@ -615,53 +674,96 @@ class PVTrackingEnv(gym.Env):
             area=self.area,
             efficiency=self.efficiency,
         )
-
     def _build_observation(self, solar_zenith, solar_azimuth, weather, power):
+        """Build observation based on observation_mode.
+        
+        Compact state space (5 components):
+        1. solar_zenith_norm: solar zenith angle normalized to [0,1]
+        2. ghi_norm: global horizontal irradiance normalized to [0,1]
+        3. relative_azimuth_sin: sin(panel_azimuth - solar_azimuth)
+        4. panel_tilt_norm: panel tilt normalized to [0,1]
+        5. tau: remaining time fraction [0,1]
+        
+        This 5D state captures all information needed for optimal tracking:
+        cos_aoi = cos(zenith)*cos(tilt) + sin(zenith)*sin(tilt)*cos(rel_az)
+        irradiance level from ghi_norm
+        time horizon from tau
+        """
+        if self.observation_mode == 'compact':
+            return self._build_compact_observation(solar_zenith, solar_azimuth, weather, power)
+        elif self.observation_mode == 'physical':
+            return self._build_physical_observation(solar_zenith, solar_azimuth, weather, power)
+        else:
+            return self._build_legacy_observation(solar_zenith, solar_azimuth, weather, power)
+
+    def _build_compact_observation(self, solar_zenith, solar_azimuth, weather, power):
         solar_azimuth_rad = np.deg2rad(solar_azimuth)
         panel_azimuth_rad = np.deg2rad(self.azimuth)
+        relative_azimuth_rad = panel_azimuth_rad - solar_azimuth_rad
+        
+        # Compact 5-component observation
+        obs = np.array([
+            solar_zenith_norm_from_deg(solar_zenith),           # 1. solar zenith [0,1]
+            float(np.clip(weather['ghi'] / IRRADIANCE_NORM, 0.0, 1.0)),  # 2. GHI norm [0,1]
+            float(np.sin(panel_azimuth_rad - solar_azimuth_rad)),       # 3. rel azimuth sin [-1,1]
+            panel_tilt_norm_from_deg(self.tilt),                  # 4. panel tilt [0,1]
+            (self.num_action_steps - self.step_index) / float(self.num_action_steps)  # 5. tau [0,1]
+        ], dtype=np.float32)
+        
+        return obs
 
-        def _norm_irradiance(value):
-            return float(np.clip(value / IRRADIANCE_NORM, 0.0, 1.0))
+    def _build_physical_observation(self, solar_zenith, solar_azimuth, weather, power):
+        """Physical 12D observation with tau."""
+        cos_aoi = self._cos_angle_of_incidence(solar_zenith, solar_azimuth, self.tilt, self.azimuth)
+        solar_azimuth_rad = np.deg2rad(solar_azimuth)
+        panel_azimuth_rad = np.deg2rad(self.azimuth)
+        
+        obs = np.array([
+            solar_zenith_norm_from_deg(solar_zenith),           # 0. solar zenith norm
+            np.sin(solar_azimuth_rad),                          # 1. solar azimuth sin
+            np.cos(solar_azimuth_rad),                          # 2. solar azimuth cos
+            float(np.clip(weather['dni'] / IRRADIANCE_NORM, 0.0, 1.0)),  # 3. DNI norm
+            float(np.clip(weather['dhi'] / IRRADIANCE_NORM, 0.0, 1.0)),  # 4. DHI norm
+            float(np.clip(weather['ghi'] / IRRADIANCE_NORM, 0.0, 1.0)),  # 5. GHI norm
+            float(np.clip(weather['temperature'] / TEMPERATURE_NORM, -1.0, 1.0)),  # 6. temperature norm
+            panel_tilt_norm_from_deg(self.tilt),                  # 7. panel tilt norm
+            np.sin(panel_azimuth_rad),                          # 8. panel azimuth sin
+            np.cos(panel_azimuth_rad),                          # 9. panel azimuth cos
+            float(cos_aoi),                                     # 10. cos angle of incidence
+            (self.num_action_steps - self.step_index) / float(self.num_action_steps)  # 11. tau [0,1]
+        ], dtype=np.float32)
+        
+        return obs
 
-        def _norm_temperature(value):
-            return float(np.clip(value / TEMPERATURE_NORM, -1.0, 1.0))
-
-        shared = [
-            solar_zenith_norm_from_deg(solar_zenith),
-            float(np.sin(solar_azimuth_rad)),
-            float(np.cos(solar_azimuth_rad)),
-            _norm_irradiance(weather['dni']),
-            _norm_irradiance(weather['dhi']),
-            _norm_irradiance(weather['ghi']),
-            _norm_temperature(weather['temperature']),
-            panel_tilt_norm_from_deg(self.tilt),
-            float(np.sin(panel_azimuth_rad)),
-            float(np.cos(panel_azimuth_rad)),
-        ]
-
-        if self.observation_mode == 'physical':
-            cos_aoi = self._cos_angle_of_incidence(
-                solar_zenith, solar_azimuth, self.tilt, self.azimuth)
-            obs = np.array(shared + [cos_aoi], dtype=np.float32)
-        else:
-            time_of_day = self.current_time.hour + self.current_time.minute / 60.0
-            time_angle = 2.0 * np.pi * time_of_day / 24.0
-            day_angle = 2.0 * np.pi * float(self.current_time.dayofyear) / 365.0
-            obs = np.array(
-                shared + [
-                    float(power / POWER_NORM),
-                    float(np.sin(time_angle)),
-                    float(np.cos(time_angle)),
-                    float(np.sin(day_angle)),
-                    float(np.cos(day_angle)),
-                ],
-                dtype=np.float32,
-            )
-
-        # Append finite-horizon time index tau = remaining_steps / H
-        H = self.num_action_steps
-        tau = (H - self.step_index) / float(H)
-        obs = np.append(obs, tau).astype(np.float32)
+    def _build_legacy_observation(self, solar_zenith, solar_azimuth, weather, power):
+        """Legacy 16D observation with time-of-day and day-of-year sin/cos."""
+        cos_aoi = self._cos_angle_of_incidence(solar_zenith, solar_azimuth, self.tilt, self.azimuth)
+        solar_azimuth_rad = np.deg2rad(solar_azimuth)
+        panel_azimuth_rad = np.deg2rad(self.azimuth)
+        current_time = self.times[self.step_index]
+        time_of_day_hour = float(current_time.hour + current_time.minute / 60.0)
+        time_angle = 2.0 * np.pi * time_of_day_hour / 24.0
+        day_of_year_angle = 2.0 * np.pi * current_time.dayofyear / 365.25
+        
+        obs = np.array([
+            solar_zenith_norm_from_deg(solar_zenith),           # 0. solar zenith norm
+            np.sin(solar_azimuth_rad),                          # 1. solar azimuth sin
+            np.cos(solar_azimuth_rad),                          # 2. solar azimuth cos
+            float(np.clip(weather['dni'] / IRRADIANCE_NORM, 0.0, 1.0)),  # 3. DNI norm
+            float(np.clip(weather['dhi'] / IRRADIANCE_NORM, 0.0, 1.0)),  # 4. DHI norm
+            float(np.clip(weather['ghi'] / IRRADIANCE_NORM, 0.0, 1.0)),  # 5. GHI norm
+            float(np.clip(weather['temperature'] / TEMPERATURE_NORM, -1.0, 1.0)),  # 6. temperature norm
+            panel_tilt_norm_from_deg(self.tilt),                  # 7. panel tilt norm
+            np.sin(panel_azimuth_rad),                          # 8. panel azimuth sin
+            np.cos(panel_azimuth_rad),                          # 9. panel azimuth cos
+            float(power / POWER_NORM),                          # 10. power norm
+            np.sin(time_angle),                                 # 11. time of day sin
+            np.cos(time_angle),                                 # 12. time of day cos
+            np.sin(day_of_year_angle),                          # 13. day of year sin
+            np.cos(day_of_year_angle),                          # 14. day of year cos
+            (self.num_action_steps - self.step_index) / float(self.num_action_steps)  # 15. tau [0,1]
+        ], dtype=np.float32)
+        
         return obs
 
     def reset(self, date=None, scenario_id=None):

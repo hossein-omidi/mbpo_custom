@@ -63,7 +63,13 @@ from eval_utils import (
 
 def _load_config(path):
     path = os.path.expanduser(path)
-    spec = importlib.util.spec_from_file_location('pv_config', path)
+    # Handle module path (e.g., examples.config.pv_tracking.conf_compact) vs file path
+    if path.endswith('.py'):
+        spec = importlib.util.spec_from_file_location('pv_config', path)
+    else:
+        # Convert module path to file path
+        module_path = path.replace('.', '/') + '.py'
+        spec = importlib.util.spec_from_file_location('pv_config', module_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.params

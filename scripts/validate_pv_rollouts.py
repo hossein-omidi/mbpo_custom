@@ -17,6 +17,7 @@ from mbpo.static.pv_tracking import (
     StaticFns,
     LEGACY_OBS_DIM,
     PHYSICAL_OBS_DIM,
+    COMPACT_OBS_DIM,
     cyclic_slices_for_obs,
     observation_mode_from_obs,
 )
@@ -25,7 +26,13 @@ from mbpo.env.pv_tracking import DEFAULT_START_HOUR
 
 def get_config(config_path):
     config_path = os.path.expanduser(config_path)
-    spec = importlib.util.spec_from_file_location('pv_tracking_config', config_path)
+    # Handle module path (e.g., examples.config.pv_tracking.conf_compact) vs file path
+    if config_path.endswith('.py'):
+        spec = importlib.util.spec_from_file_location('pv_tracking_config', config_path)
+    else:
+        # Convert module path to file path
+        module_path = config_path.replace('.', '/') + '.py'
+        spec = importlib.util.spec_from_file_location('pv_tracking_config', module_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return getattr(module, 'params'), module
@@ -376,6 +383,10 @@ def main():
         assert obs.shape == (PHYSICAL_OBS_DIM,), (
             'physical mode expects {}-D obs, got {}'.format(PHYSICAL_OBS_DIM, obs.shape))
         assert observation_mode_from_obs(obs) == 'physical'
+    elif obs_mode == 'compact':
+        assert obs.shape == (COMPACT_OBS_DIM,), (
+            'compact mode expects {}-D obs, got {}'.format(COMPACT_OBS_DIM, obs.shape))
+        assert observation_mode_from_obs(obs) == 'compact'
     else:
         assert obs.shape == (LEGACY_OBS_DIM,), (
             'legacy mode expects {}-D obs, got {}'.format(LEGACY_OBS_DIM, obs.shape))
@@ -441,7 +452,16 @@ def validate_reward_power_decoupling(env):
     expected = float(info['energy_kwh']) - float(info['movement_cost'])
     assert abs(reward - expected) < 1e-6
     assert float(info['ghi_wm2']) >= 0.0
-    assert float(next_obs[5]) <= 1.0 + 1e-5
+    mode = observation_mode_from_obs(obs)
+    if mode == 'compact':
+        # ghi_norm at index 1
+        assert float(next_obs[1]) <= 1.0 + 1e-5
+    elif mode == 'physical':
+        # ghi_norm at index 5
+        assert float(next_obs[5]) <= 1.0 + 1e-5
+    else:
+        # legacy ghi_norm at index 5
+        assert float(next_obs[5]) <= 1.0 + 1e-5
     print('  reward uses raw weather/power; ghi_norm clipped in obs: OK')
 
 

@@ -650,4 +650,49 @@ def write_manifest(
         payload['meta'] = extra_meta
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2)
-    return str(path)
+
+def get_eval_environment(variant, eval_protocol='inherit', fixed_eval_dates=None, eval_weather_source=None):
+    """Create evaluation environment from variant spec.
+    
+    Args:
+        variant: dict with 'environment_params' containing 'training' and 'evaluation' keys
+        eval_protocol: 'inherit' (use training env params with eval overrides) or 'config' (use eval kwargs directly)
+        fixed_eval_dates: optional fixed date string for eval (e.g., '2020-06-21')
+        eval_weather_source: optional weather source override ('clearsky', 'nsrdb_multiyear', etc.)
+    Returns:
+        env: PVTrackingEnv instance
+        eval_params: dict with evaluation environment parameters
+    """
+    from softlearning.environments.utils import get_environment_from_params
+    from mbpo.env.pv_tracking import PVTrackingEnv
+    from scripts.eval_utils import apply_pv_utc_schedule, apply_eval_protocol
+    
+    env_params = variant.get('environment_params', {})
+    train_env_kwargs = env_params.get('training', {}).get('kwargs', {})
+    eval_env_kwargs = env_params.get('evaluation', {}).get('kwargs', {})
+    
+    # Determine evaluation protocol
+    if eval_protocol == 'inherit':
+        # Merge eval kwargs over training kwargs (eval overrides training)
+        eval_kwargs = dict(train_env_kwargs)
+        eval_kwargs.update(eval_env_kwargs)
+    else:
+        eval_kwargs = eval_env_kwargs
+    
+    # Apply fixed eval dates if provided
+    if fixed_eval_dates is not None:
+        eval_kwargs['fixed_eval_scenarios'] = [fixed_eval_dates]
+        eval_kwargs['randomize_scenario'] = False
+        eval_kwargs['randomize_initial_orientation'] = False
+    
+    # Apply weather source override if provided
+    if eval_weather_source is not None:
+        eval_kwargs['weather_source'] = eval_weather_source
+    
+    # Apply eval protocol to force UTC grid
+    eval_kwargs = apply_eval_protocol(eval_kwargs, eval_protocol)
+    
+    # Create environment
+    env = PVTrackingEnv(**eval_kwargs)
+    
+    return env, {'kwargs': eval_kwargs}

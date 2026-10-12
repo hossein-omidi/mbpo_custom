@@ -37,7 +37,13 @@ def eval_settings_from_config(params):
 
 def load_config(path):
     path = os.path.abspath(path)
-    spec = importlib.util.spec_from_file_location('cfg', path)
+    # Handle module path (e.g., examples.config.pv_tracking.conf_compact) vs file path
+    if path.endswith('.py'):
+        spec = importlib.util.spec_from_file_location('cfg', path)
+    else:
+        # Convert module path to file path
+        module_path = path.replace('.', '/') + '.py'
+        spec = importlib.util.spec_from_file_location('cfg', module_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.params

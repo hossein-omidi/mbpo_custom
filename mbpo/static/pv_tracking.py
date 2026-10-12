@@ -3,7 +3,8 @@ import pandas as pd
 from pvlib.location import Location
 
 # Observation layouts (must match mbpo/env/pv_tracking.py).
-# +1 for tau (remaining time fraction)
+# Compact 5-component state space (5 components including tau)
+COMPACT_OBS_DIM = 5
 LEGACY_OBS_DIM = 16
 PHYSICAL_OBS_DIM = 12
 
@@ -19,6 +20,7 @@ PHYSICAL_CYCLIC_SLICES = (
     (8, 10),   # panel azimuth
 )
 
+COMPACT_CYCLIC_SLICES = ()  # compact 5D has no sin/cos pairs
 # Match PVTrackingEnv defaults (used only for solar-time decoding in StaticFns).
 DEFAULT_LATITUDE = 40.72
 DEFAULT_LONGITUDE = -74.01
@@ -45,17 +47,19 @@ def observation_mode_from_obs(obs):
         return 'legacy'
     if dim == PHYSICAL_OBS_DIM:
         return 'physical'
+    if dim == COMPACT_OBS_DIM:
+        return 'compact'
     raise ValueError(
-        'Unsupported PV observation dimension {} (expected {} legacy or {} physical).'.format(
-            dim, LEGACY_OBS_DIM, PHYSICAL_OBS_DIM))
-
+        'Unsupported PV observation dimension {} (expected {} legacy, {} physical, or {} compact).'.format(
+            dim, LEGACY_OBS_DIM, PHYSICAL_OBS_DIM, COMPACT_OBS_DIM))
 
 def cyclic_slices_for_obs(obs):
     mode = observation_mode_from_obs(obs)
     if mode == 'physical':
         return PHYSICAL_CYCLIC_SLICES
+    if mode == 'compact':
+        return COMPACT_CYCLIC_SLICES
     return LEGACY_CYCLIC_SLICES
-
 
 def _angular_error_deg(a, b):
     return np.abs((a - b + 180.0) % 360.0 - 180.0)
@@ -83,21 +87,49 @@ class StaticFns:
 
     @staticmethod
     def time_angle_from_obs(obs):
-        """Raw atan2(sin, cos) for legacy time-of-day indices (range (-pi, pi])."""
+        """Raw atan2(sin, cos) for time-of-day indices.
+        
+        Compact: time angle computed from tau (index 4) and episode timing
+        Legacy: indices (11,12) for time sin/cos
+        Physical: indices (1,2) for solar azimuth sin/cos, no time angle
+        """
         obs = np.asarray(obs)
-        if obs.ndim == 1:
-            return np.arctan2(obs[11], obs[12])
-        return np.arctan2(obs[:, 11], obs[:, 12])
+        mode = observation_mode_from_obs(obs)
+        if mode == 'legacy':
+            if obs.ndim == 1:
+                return np.arctan2(obs[11], obs[12])
+            return np.arctan2(obs[:, 11], obs[:, 12])
+        if mode == 'physical':
+            # Physical obs has no time angle encoded
+            raise ValueError("Physical observation mode has no time angle")
+        if mode == 'compact':
+            # Compact obs: tau at index 4 (0-indexed), compute time from remaining steps
+            if obs.ndim == 1:
+                tau = obs[4]
+            else:
+                tau = obs[:, 4]
+            # tau = remaining_steps / H, so remaining_steps = tau * H
+            # current_step = H - remaining_steps = H * (1 - tau)
+            # time_of_day = start_hour + current_step * step_hours
+            # time_angle = 2*pi * time_of_day / 24
+            from mbpo.env.pv_tracking import DEFAULT_EPISODE_STEPS, DEFAULT_START_HOUR, DEFAULT_STEP_HOURS
+            H = DEFAULT_EPISODE_STEPS
+            current_step = H * (1.0 - tau)
+            time_of_day = DEFAULT_START_HOUR + current_step * DEFAULT_STEP_HOURS
+            time_angle = 2.0 * np.pi * time_of_day / 24.0
+            return time_angle
+        raise ValueError("Unknown observation mode")
 
     @staticmethod
     def time_of_day_from_obs(obs):
-        """Decode time-of-day in hours [0, 24) from legacy observations."""
+        """Time of day in hours (UTC) from observation.
+        
+        Compact: computed from tau
+        Legacy: from time sin/cos at indices (11,12)
+        Physical: raises ValueError (no time encoded)
+        """
         angle = StaticFns.time_angle_from_obs(obs)
-        angle = np.mod(angle, 2.0 * np.pi)
-        hours = angle * 24.0 / (2.0 * np.pi)
-        if np.ndim(hours) == 0:
-            return float(hours)
-        return hours
+        return angle * 24.0 / (2.0 * np.pi)
 
     @staticmethod
     def time_of_day_from_solar_obs(
@@ -105,23 +137,11 @@ class StaticFns:
             latitude=DEFAULT_LATITUDE,
             longitude=DEFAULT_LONGITUDE,
             tz=DEFAULT_TZ,
-            reference_date=DEFAULT_REFERENCE_DATE,
             start_hour=DEFAULT_START_HOUR,
             num_actions=DEFAULT_NUM_ACTIONS,
-            step_hours=DEFAULT_STEP_HOURS):
-        """Estimate wall-clock hour from solar zenith/azimuth (physical obs only).
-
-        Approximate helper only. In physical mode the policy observation does not
-        include clock time, so this reconstruction matches against a fixed
-        reference-date solar grid and can drift across seasons. Prefer exact
-        replay metadata such as `remaining_steps` for rollout-horizon filtering.
-
-        Used for diagnostics / fallback checks when clock time is not in the
-        observation.
-        Matches the fixed daily schedule (UTC start_time, env freq) by searching
-        the episode hour grid on a reference date at the env's lat/lon.
-        """
-        obs = np.asarray(obs, dtype=np.float64)
+            step_hours=DEFAULT_STEP_HOURS,
+            reference_date=DEFAULT_REFERENCE_DATE):
+        """Reconstruct time from solar geometry (physical obs)."""
         single = obs.ndim == 1
         if single:
             obs = obs.reshape(1, -1)

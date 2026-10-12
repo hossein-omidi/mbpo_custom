@@ -31,7 +31,7 @@ NSRDB_VALIDATION_SCENARIO_IDS = [
 ]
 
 NSRDB_CONF_NAMES = frozenset({
-    'stage3_nsrdb', 'conf1', 'conf2', 'conf3', 'conf4', 'conf5',
+    'stage3_nsrdb', 'conf1', 'conf2', 'conf3', 'conf4', 'conf5', 'conf_compact', 'conf_sac',
 })
 
 
