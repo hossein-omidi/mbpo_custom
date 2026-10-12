@@ -24,6 +24,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+
 def run_training(config_name, run_name, epochs, cpus, trial_cpus, outdir):
     """Run a single training job and return the trial directory."""
     cmd = [
@@ -39,24 +40,9 @@ def run_training(config_name, run_name, epochs, cpus, trial_cpus, outdir):
         # Override epochs via config modification or env var
         pass  # epochs controlled by config
     
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=3600*6)
+    result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3600*6)
     return result.returncode == 0
 
-def evaluate_checkpoint(config_name, checkpoint_path, outdir, num_rollouts=100):
-    """Evaluate a checkpoint using the evaluation script."""
-    cmd = [
-        'bash', '-c',
-        f'source ~/miniconda3/etc/profile.d/conda.sh && '
-        f'conda activate mbpo && '
-        f'cd {os.getcwd()} && '
-        f'python scripts/evaluate_fullyear_mc.py {checkpoint_path} '
-        f'--outdir {outdir} '
-        f'--date-set nsrdb_multiyear '
-        f'--num-rollouts {num_rollouts} '
-        f'--policy-mode deterministic'
-    ]
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=3600)
-    return result.returncode == 0
 
 def collect_metrics(run_dir):
     """Extract key metrics from a training run."""
@@ -74,6 +60,7 @@ def collect_metrics(run_dir):
         'final_alpha': df.tail(10)['alpha'].mean() if 'alpha' in df.columns else None,
         'epochs_completed': df['epoch'].iloc[-1] if 'epoch' in df.columns else None,
     }
+
 
 def main():
     parser = argparse.ArgumentParser(description='Compare MBPO vs SAC on PV tracking')
@@ -118,6 +105,10 @@ def main():
         print("DRY RUN - would run training but exiting now")
         return
     
+    # Extract short config names from module paths
+    mbpo_short = args.mbpo_config.split('.')[-1]
+    sac_short = args.sac_config.split('.')[-1]
+    
     # Run MBPO with multiple seeds
     print("\n=== Running MBPO ===")
     for seed_idx in range(args.n_seeds):
@@ -125,13 +116,14 @@ def main():
         print(f"\nStarting MBPO seed {seed_idx}...")
         
         success = run_training(
-            args.mbpo_config, run_name, args.epochs, 
+            mbpo_short, run_name, args.epochs, 
             args.cpus, args.trial_cpus, args.outdir
         )
         
         if success:
             # Find the latest trial directory
-            trial_dirs = sorted(Path('runs') / run_name / 'checkpoints' / 'PVTracking' / 'pv_tracking').glob('seed:*')
+            base_dir = Path('runs') / run_name / 'checkpoints' / 'PVTracking' / 'pv_tracking'
+            trial_dirs = list(base_dir.glob('seed:*')) if base_dir.exists() else []
             if trial_dirs:
                 latest_trial = max(trial_dirs, key=lambda d: d.stat().st_mtime)
                 metrics = collect_metrics(latest_trial)
@@ -150,12 +142,13 @@ def main():
         print(f"\nStarting SAC seed {seed_idx}...")
         
         success = run_training(
-            args.sac_config, run_name, args.epochs,
+            sac_short, run_name, args.epochs,
             args.cpus, args.trial_cpus, args.outdir
         )
         
         if success:
-            trial_dirs = sorted(Path('runs') / run_name / 'checkpoints' / 'PVTracking' / 'pv_tracking').glob('seed:*')
+            base_dir = Path('runs') / run_name / 'checkpoints' / 'PVTracking' / 'pv_tracking'
+            trial_dirs = list(base_dir.glob('seed:*')) if base_dir.exists() else []
             if trial_dirs:
                 latest_trial = max(trial_dirs, key=lambda d: d.stat().st_mtime)
                 metrics = collect_metrics(latest_trial)
@@ -185,6 +178,7 @@ def main():
     
     print(f"\nResults saved to {results_path}")
     print("Comparison complete!")
+
 
 if __name__ == '__main__':
     main()

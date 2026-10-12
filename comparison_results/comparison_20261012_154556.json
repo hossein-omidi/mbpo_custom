@@ -1,0 +1,11 @@
+{
+  "mbpo": [],
+  "sac": [],
+  "metadata": {
+    "timestamp": "20261012_154556",
+    "mbpo_config": "examples.config.pv_tracking.conf_compact",
+    "sac_config": "examples.config.pv_tracking.conf_sac",
+    "n_seeds": 1,
+    "epochs": 10
+  }
+}
