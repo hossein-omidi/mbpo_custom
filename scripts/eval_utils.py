@@ -124,7 +124,7 @@ def decode_pv_observation(obs):
     """Decode normalized PVTracking observation to physical units.
     
     Supports three observation modes:
-    - compact (5D): [zenith_norm, ghi_norm, rel_azimuth_sin, tilt_norm, tau]
+    - compact (6D): [dni_norm, dhi_norm, power_norm, panel_tilt_norm, panel_azimuth_norm, tau]
     - physical (12D): physical obs with tau (12 dims)
     - legacy (15D): legacy obs with tau (15 dims)
     """
@@ -132,52 +132,31 @@ def decode_pv_observation(obs):
     obs = np.asarray(obs, dtype=np.float64).reshape(-1)
     
     if obs.shape[0] == COMPACT_OBS_DIM:
-        # Compact 5D: [zenith_norm, ghi_norm, rel_azimuth_sin, tilt_norm, tau]
-        zenith_norm = float(np.clip(obs[0], 0.0, 1.0))
-        ghi_norm = float(np.clip(obs[1], 0.0, 1.0))
-        rel_azimuth_sin = float(np.clip(obs[2], -1.0, 1.0))
+        # Compact 6D: [DNI_norm, DHI_norm, power_norm, panel_tilt_norm, panel_azimuth_norm, tau]
+        dni_norm = float(np.clip(obs[0], 0.0, 1.0))
+        dhi_norm = float(np.clip(obs[1], 0.0, 1.0))
+        power_norm = float(np.clip(obs[2], 0.0, 1.0))
         tilt_norm = float(np.clip(obs[3], 0.0, 1.0))
-        tau = float(np.clip(obs[4], 0.0, 1.0))
+        azimuth_norm = float(np.clip(obs[4], -1.0, 1.0))
+        tau = float(np.clip(obs[5], 0.0, 1.0))
         
-        # Compute solar position from tau (remaining time fraction)
-        # tau = remaining_steps / H, so remaining_steps = tau * H
-        # current_step = H - remaining_steps = H * (1 - tau)
-        # time_of_day = start_hour + current_step * step_hours
-        from mbpo.env.pv_tracking import DEFAULT_EPISODE_STEPS, DEFAULT_START_HOUR, DEFAULT_STEP_HOURS
-        H = DEFAULT_EPISODE_STEPS
-        current_step = H * (1.0 - tau)
-        time_of_day = DEFAULT_START_HOUR + current_step * DEFAULT_STEP_HOURS
-        
-        # Compute solar position from time and location
-        from pvlib.solarposition import get_solarposition
-        from pvlib.location import Location
-        import pandas as pd
-        # Use a reference date (the actual date doesn't matter for solar position relative to noon)
-        # Use a date in the middle of the year for solar position
-        ref_date = pd.Timestamp('2020-06-21').tz_localize('UTC')
-        ref_time = ref_date + pd.Timedelta(hours=time_of_day)
-        location = Location(latitude=40.72, longitude=-74.01, tz='UTC', altitude=12)
-        solar_pos = get_solarposition(ref_time, location.latitude, location.longitude)
-        solar_zenith = float(solar_pos['zenith'].iloc[0])
-        solar_azimuth = float(solar_pos['azimuth'].iloc[0])
-        
-        zenith_norm = float(np.clip(obs[0], 0.0, 1.0))
-        ghi_norm = float(np.clip(obs[1], 0.0, 1.0))
-        rel_azimuth_sin = float(np.clip(obs[2], -1.0, 1.0))
-        tilt_norm = float(np.clip(obs[3], 0.0, 1.0))
-        tau = float(np.clip(obs[4], 0.0, 1.0))
+        # Recover physical values
+        dni = dni_norm * 2000.0
+        dhi = dhi_norm * 2000.0
+        power = power_norm * 2000.0  # POWER_NORM = 2000
+        tilt_deg = panel_tilt_deg_from_norm(tilt_norm)
+        azimuth_deg = (azimuth_norm + 1.0) * 180.0  # reverse: (gamma%360)/180 - 1 -> azimuth_norm
+        # azimuth_deg in [0, 360]
         
         decoded = {
-            'solar_zenith_deg': solar_zenith,
-            'solar_zenith_norm': zenith_norm,
-            'ghi_norm': float(np.clip(obs[1], 0.0, 1.0)),
-            'rel_azimuth_sin': float(np.clip(obs[2], -1.0, 1.0)),
-            'rel_azimuth_deg': float(np.rad2deg(np.arcsin(np.clip(obs[2], -1.0, 1.0)))),
-            'panel_tilt_deg': panel_tilt_deg_from_norm(obs[3]),
-            'panel_tilt_norm': float(np.clip(obs[3], 0.0, 1.0)),
-            'tau': float(np.clip(obs[4], 0.0, 1.0)),
-            'solar_azimuth_deg': solar_azimuth,
-            'panel_azimuth_deg': (solar_azimuth - float(np.rad2deg(np.arcsin(np.clip(obs[2], -1.0, 1.0))))) % 360.0,
+            'dni_wm2': dni,
+            'dhi_wm2': dhi,
+            'power_w': power,
+            'panel_tilt_deg': tilt_deg,
+            'panel_tilt_norm': tilt_norm,
+            'panel_azimuth_deg': azimuth_deg % 360.0,
+            'panel_azimuth_norm': azimuth_norm,
+            'tau': tau,
         }
         return decoded
     
@@ -260,10 +239,27 @@ def make_baseline_rollout(env, baseline_type, path_length, seed=None):
     step = 0
     while step < path_length and not done:
         decoded = decode_pv_observation(obs)
-        solar_zenith = decoded['solar_zenith_deg']
-        solar_azimuth = decoded['solar_azimuth_deg']
-        current_tilt = decoded['panel_tilt_deg']
-        current_azimuth = decoded['panel_azimuth_deg']
+        mode = observation_mode_from_obs(obs)
+        
+        if mode == 'compact':
+            # For compact mode, we don't have solar position in observation
+            # Get it from the underlying environment
+            solar_zenith = underlying._current_weather().get('solar_zenith')
+            if solar_zenith is None:
+                # Compute from current time
+                current_time = underlying.current_time
+                solar_pos = underlying._solar_position(current_time)
+                solar_zenith = solar_pos.zenith
+                solar_azimuth = solar_pos.azimuth
+            else:
+                solar_azimuth = underlying._current_weather().get('solar_azimuth', 0)
+            current_tilt = decoded['panel_tilt_deg']
+            current_azimuth = decoded['panel_azimuth_deg']
+        else:
+            solar_zenith = decoded['solar_zenith_deg']
+            solar_azimuth = decoded['solar_azimuth_deg']
+            current_tilt = decoded['panel_tilt_deg']
+            current_azimuth = decoded['panel_azimuth_deg']
 
         if baseline_type == 'fixed_no_motion':
             # True fixed mount: zero incremental action → Δtilt=Δaz=0 → movement_cost=0.

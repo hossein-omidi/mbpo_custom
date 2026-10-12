@@ -3,11 +3,10 @@ import pandas as pd
 from pvlib.location import Location
 
 # Observation layouts (must match mbpo/env/pv_tracking.py).
-# Compact 5-component state space (5 components including tau)
-COMPACT_OBS_DIM = 5
+# Compact 6-component state space (6 components including tau)
+COMPACT_OBS_DIM = 6
 LEGACY_OBS_DIM = 16
 PHYSICAL_OBS_DIM = 12
-
 LEGACY_CYCLIC_SLICES = (
     (1, 3),    # solar azimuth
     (8, 10),   # panel azimuth
@@ -103,15 +102,14 @@ class StaticFns:
             # Physical obs has no time angle encoded
             raise ValueError("Physical observation mode has no time angle")
         if mode == 'compact':
-            # Compact obs: tau at index 4 (0-indexed), compute time from remaining steps
+            # Compact 6D: tau at index 5 (0-indexed), compute time from remaining steps
             if obs.ndim == 1:
-                tau = obs[4]
+                tau = obs[5]
             else:
-                tau = obs[:, 4]
+                tau = obs[:, 5]
             # tau = remaining_steps / H, so remaining_steps = tau * H
             # current_step = H - remaining_steps = H * (1 - tau)
             # time_of_day = start_hour + current_step * step_hours
-            # time_angle = 2*pi * time_of_day / 24
             from mbpo.env.pv_tracking import DEFAULT_EPISODE_STEPS, DEFAULT_START_HOUR, DEFAULT_STEP_HOURS
             H = DEFAULT_EPISODE_STEPS
             current_step = H * (1.0 - tau)

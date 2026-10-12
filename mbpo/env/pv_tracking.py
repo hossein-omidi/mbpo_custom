@@ -84,10 +84,11 @@ PHYSICAL_OBS_LABELS = (
 )
 
 COMPACT_OBS_LABELS = (
-    'solar_zenith_norm',
-    'ghi_norm',
-    'rel_azimuth_sin',
+    'dni_norm',
+    'dhi_norm',
+    'power_norm',
     'panel_tilt_norm',
+    'panel_azimuth_norm',
     'tau',
 )
 
@@ -557,21 +558,28 @@ class PVTrackingEnv(gym.Env):
     def _observation_bounds(self):
         """Return observation bounds based on observation_mode."""
         if self.observation_mode == 'compact':
-            # Compact 5-component observation bounds
-            # [solar_zenith_norm, ghi_norm, rel_azimuth_sin, panel_tilt_norm, tau]
+            # Compact 6-component observation bounds
+            # [DNI_norm, DHI_norm, power_norm, panel_tilt_norm, panel_azimuth_norm, tau]
+            # DNI/DHI: [0, 2000] -> [0, 1]
+            # Power: [0, POWER_NORM] -> [0, 1]
+            # Tilt: [0, 90] -> [0, 1]
+            # Azimuth: [0, 360] -> [-1, 1] via (az/180 - 1)
+            # Tau: [0, 1]
             low = np.array([
-                0.0,      # solar_zenith_norm [0,1]
-                0.0,      # ghi_norm [0,1]
-                -1.0,     # rel_azimuth_sin [-1,1]
-                0.0,      # panel_tilt_norm [0,1]
-                0.0,      # tau [0,1]
+                0.0,      # 0. DNI norm [0,1]
+                0.0,      # 1. DHI norm [0,1]
+                0.0,      # 2. power norm [0,1]
+                0.0,      # 3. panel tilt norm [0,1]
+                -1.0,     # 4. panel azimuth norm [-1,1]
+                0.0,      # 5. tau [0,1]
             ], dtype=np.float32)
             high = np.array([
-                1.0,      # solar_zenith_norm [0,1]
-                1.0,      # ghi_norm [0,1]
-                1.0,      # rel_azimuth_sin [-1,1]
-                1.0,      # panel_tilt_norm [0,1]
-                1.0,      # tau [0,1]
+                1.0,      # 0. DNI norm [0,1]
+                1.0,      # 1. DHI norm [0,1]
+                1.0,      # 2. power norm [0,1]
+                1.0,      # 3. panel tilt norm [0,1]
+                1.0,      # 4. panel azimuth norm [-1,1]
+                1.0,      # 5. tau [0,1]
             ], dtype=np.float32)
             return low, high
         elif self.observation_mode == 'physical':
@@ -677,17 +685,17 @@ class PVTrackingEnv(gym.Env):
     def _build_observation(self, solar_zenith, solar_azimuth, weather, power):
         """Build observation based on observation_mode.
         
-        Compact state space (5 components):
-        1. solar_zenith_norm: solar zenith angle normalized to [0,1]
-        2. ghi_norm: global horizontal irradiance normalized to [0,1]
-        3. relative_azimuth_sin: sin(panel_azimuth - solar_azimuth)
-        4. panel_tilt_norm: panel tilt normalized to [0,1]
-        5. tau: remaining time fraction [0,1]
+        Compact state space (6 components):
+        1. DNI_norm: direct normal irradiance normalized to [0,1] (DNI/2000)
+        2. DHI_norm: diffuse horizontal irradiance normalized to [0,1] (DHI/2000)
+        3. power_norm: current PV power normalized [0,1] (P/(2000*A*eta))
+        4. panel_tilt_norm: panel tilt normalized to [0,1] (beta/90)
+        5. panel_azimuth_norm: panel azimuth normalized to [-1,1] ((gamma%360)/180 - 1)
+        6. tau: remaining time fraction [0,1] ((H-t)/H)
         
-        This 5D state captures all information needed for optimal tracking:
-        cos_aoi = cos(zenith)*cos(tilt) + sin(zenith)*sin(tilt)*cos(rel_az)
-        irradiance level from ghi_norm
-        time horizon from tau
+        This 6D state captures all information needed for optimal tracking
+        without explicit solar position - the agent learns from irradiance
+        and power feedback directly.
         """
         if self.observation_mode == 'compact':
             return self._build_compact_observation(solar_zenith, solar_azimuth, weather, power)
@@ -697,17 +705,22 @@ class PVTrackingEnv(gym.Env):
             return self._build_legacy_observation(solar_zenith, solar_azimuth, weather, power)
 
     def _build_compact_observation(self, solar_zenith, solar_azimuth, weather, power):
-        solar_azimuth_rad = np.deg2rad(solar_azimuth)
-        panel_azimuth_rad = np.deg2rad(self.azimuth)
-        relative_azimuth_rad = panel_azimuth_rad - solar_azimuth_rad
+        # Compact 6-component observation: [DNI, DHI, P, tilt, azimuth, tau]
+        # All normalized for neural network training
+        dni_norm = float(np.clip(weather['dni'] / IRRADIANCE_NORM, 0.0, 1.0))
+        dhi_norm = float(np.clip(weather['dhi'] / IRRADIANCE_NORM, 0.0, 1.0))
+        power_norm = float(np.clip(power / POWER_NORM, 0.0, 1.0))
+        tilt_norm = panel_tilt_norm_from_deg(self.tilt)  # beta/90
+        azimuth_norm = (self.azimuth % 360.0) / 180.0 - 1.0  # (gamma%360)/180 - 1 -> [-1, 1]
+        tau = (self.num_action_steps - self.step_index) / float(self.num_action_steps)
         
-        # Compact 5-component observation
         obs = np.array([
-            solar_zenith_norm_from_deg(solar_zenith),           # 1. solar zenith [0,1]
-            float(np.clip(weather['ghi'] / IRRADIANCE_NORM, 0.0, 1.0)),  # 2. GHI norm [0,1]
-            float(np.sin(panel_azimuth_rad - solar_azimuth_rad)),       # 3. rel azimuth sin [-1,1]
-            panel_tilt_norm_from_deg(self.tilt),                  # 4. panel tilt [0,1]
-            (self.num_action_steps - self.step_index) / float(self.num_action_steps)  # 5. tau [0,1]
+            dni_norm,      # 0. DNI/2000
+            dhi_norm,      # 1. DHI/2000
+            power_norm,    # 2. P/(2000*A*eta)
+            tilt_norm,     # 3. beta/90
+            azimuth_norm,  # 4. (gamma%360)/180 - 1
+            tau,           # 5. (H-t)/H
         ], dtype=np.float32)
         
         return obs

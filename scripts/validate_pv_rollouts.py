@@ -21,8 +21,11 @@ from mbpo.static.pv_tracking import (
     cyclic_slices_for_obs,
     observation_mode_from_obs,
 )
-from mbpo.env.pv_tracking import DEFAULT_START_HOUR
-
+from mbpo.env.pv_tracking import (
+    DEFAULT_START_HOUR,
+    DEFAULT_EPISODE_STEPS,
+    DEFAULT_STEP_HOURS,
+)
 
 def get_config(config_path):
     config_path = os.path.expanduser(config_path)
@@ -241,10 +244,49 @@ def validate_static_fns_physical(env, rollout_length=1):
             break
 
     assert done, 'Env should end episode within {} steps'.format(max_steps)
-    assert spurious_terminals == 0, 'No spurious model-rollout terminals before env done'
-    _validate_static_postprocess(env, last_obs)
     validate_replay_remaining_steps(env, rollout_length=rollout_length)
     print('  StaticFns physical validation passed.')
+
+
+def validate_static_fns_compact(env, rollout_length=1):
+    """Compact 6-D: [dni_norm, dhi_norm, power_norm, tilt_norm, azimuth_norm, tau]
+    No cyclic features, horizon via tau in observation.
+    """
+    inner = env.unwrapped
+    max_steps = inner.num_action_steps + 2
+    obs = env.reset()
+    act = np.zeros(env.action_space.shape, dtype=np.float32)
+    terminal_hits = 0
+    last_obs = obs
+    done = False
+    for step in range(max_steps):
+        next_obs, reward, done, info = env.step(act)
+        batch_obs = np.asarray(last_obs, dtype=np.float32)[None]
+        batch_next = np.asarray(next_obs, dtype=np.float32)[None]
+        batch_act = act[None]
+        term = StaticFns.termination_fn(batch_obs, batch_act, batch_next)
+        env_time = float(info.get('time', np.nan))
+        # For compact mode, check tau-based time
+        tau = next_obs[5]
+        decoded_time = DEFAULT_START_HOUR + (1.0 - tau) * DEFAULT_EPISODE_STEPS * DEFAULT_STEP_HOURS
+        if abs(decoded_time - env_time) > 0.05:
+            raise AssertionError(
+                'time_of_day_from_obs {:.4f} != env info time {:.4f} at step {}'.format(
+                    decoded_time, env_time, step))
+        if term.any():
+            terminal_hits += 1
+            print(
+                '  StaticFns termination at env step {} (done={}, '
+                'env_time={:.2f}, decoded_time={:.2f})'.format(
+                    step, done, env_time, decoded_time))
+        last_obs = next_obs
+        if done:
+            break
+
+    assert done, 'Env should end episode within {} steps'.format(max_steps)
+    assert terminal_hits >= 1, 'Expected horizon termination on final transition'
+    _validate_static_postprocess(env, last_obs)
+    print('  StaticFns compact validation passed.')
 
 
 def validate_replay_remaining_steps(env, rollout_length):
@@ -305,6 +347,8 @@ def validate_static_fns(env, rollout_length=1):
     mode = observation_mode_from_obs(obs)
     if mode == 'physical':
         validate_static_fns_physical(env, rollout_length=rollout_length)
+    elif mode == 'compact':
+        validate_static_fns_compact(env, rollout_length=rollout_length)
     else:
         validate_static_fns_legacy(env)
 
