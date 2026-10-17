@@ -1,0 +1,23 @@
+{
+  "actuator_power_w": 30.0,
+  "area": 1.0,
+  "efficiency": 0.18,
+  "freq": "5min",
+  "gym_version": "0.26.2",
+  "horizon": 117,
+  "max_delta_azimuth": 10.0,
+  "max_delta_tilt": 5.0,
+  "movement_cost_mode": "legacy",
+  "movement_penalty": 0.0,
+  "observation_mode": "compact",
+  "periods": 118,
+  "pvlib_version": "0.13.1",
+  "site_altitude": 12.0,
+  "site_latitude": 40.72,
+  "site_longitude": -74.01,
+  "slew_rate_azimuth_deg_s": 2.0,
+  "slew_rate_tilt_deg_s": 1.5,
+  "start_time": "12:00",
+  "tz": "UTC",
+  "weather_source": "nsrdb_multiyear"
+}

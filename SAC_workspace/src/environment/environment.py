@@ -1,122 +1,104 @@
-"""
-environment.py — SAC environment wrapper using same pvlib+NSRDB simulator.
+"""Minimal adapter over the unmodified NSRDB/pvlib PVTrackingEnv.
 
-This module wraps the existing MBPO PVTrackingEnv (which uses pvlib for
-solar geometry and NSRDB for weather data) to provide a clean SAC interface.
-The MDP settings (state space, action space, reward, dynamics) are identical.
+Normalized actions stay [-1,1]^2. Degrees and rewards are computed by the
+original environment, not approximated or transformed inside this adapter.
 """
-
+from __future__ import annotations
 import numpy as np
-import logging
-from typing import Dict, Tuple, Optional
-
-# Import MBPO's environment directly (same simulator, same physics)
-from mbpo.env.pv_tracking import PVTrackingEnv, DEFAULT_START_TIME, DEFAULT_PERIODS, DEFAULT_FREQ, DEFAULT_EPISODE_STEPS
-from mbpo.static.pv_tracking import COMPACT_OBS_DIM, COMPACT_OBS_LABELS
-
-logger = logging.getLogger(__name__)
+import pandas as pd
+from importlib import metadata
+from SAC_workspace.src.representation.representation import encode
 
 
 class SACEnvironment:
-    """
-    SAC environment wrapper using the exact same pvlib+NSRDB simulator as MBPO.
-
-    Key properties (identical to MBPO conf_sac / conf_compact):
-    - State space: 6D compact [DNI/2000, DHI/2000, P/(2000·A·η), β/90°, (γ/180-1), (H-t)/H]
-    - Action space: 2D continuous [delta_tilt, delta_azimuth] with max bounds
-    - Episode horizon: 117 steps (5-minute intervals, 12:00-21:45 UTC)
-    - Reward: Same as MBPO (power - movement_penalty)
-    - Simulator: Same pvlib Location + NSRDB weather scenarios
-    """
-
-    def __init__(self, observation_mode: str = 'compact', seed: int = None,
-                 **env_kwargs):
-        # Initialize with same parameters as MBPO conf_sac/conf_compact
-        default_kwargs = {
-            'latitude': 40.72,
-            'longitude': -74.01,
-            'altitude': 12.0,
-            'tz': 'UTC',
-            'start_date': '2020-01-01',
-            'end_date': '2020-12-31',
-            'start_time': DEFAULT_START_TIME,
-            'periods': DEFAULT_PERIODS,
-            'freq': DEFAULT_FREQ,
-            'efficiency': 0.18,
-            'area': 1.0,
-            'max_delta_tilt': 5.0,
-            'max_delta_azimuth': 10.0,
-            'randomize_day': True,
-            'randomize_initial_orientation': True,
-            'weather_source': 'clearsky',
-            'randomize_scenario': False,
-            'movement_penalty': 0.0,  # Same as SAC baseline
-            'irradiance_perturbation_std': 0.0,
-            'observation_noise_std': 0.0,
-            'observation_mode': observation_mode,
-        }
-        # Merge user kwargs with defaults (user takes precedence)
-        for k, v in env_kwargs.items():
-            default_kwargs[k] = v
-
-        self.env = PVTrackingEnv(**default_kwargs)
-        self.observation_mode = observation_mode
-        self.state_dim = COMPACT_OBS_DIM if observation_mode == 'compact' else 16
-        self.action_dim = 2  # [delta_tilt, delta_azimuth]
-        self.max_steps = DEFAULT_EPISODE_STEPS  # 117
-
-    def reset(self) -> np.ndarray:
-        """Reset environment and return initial 6D compact observation."""
-        obs = self.env.reset()
-        return self._normalize_obs(obs)
-
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
-        """Take action and return (next_obs, reward, done, info) with same MDP."""
-        # Action is already in environment format
-        next_obs_raw, reward, done, info = self.env.step(action)
-        next_obs = self._normalize_obs(next_obs_raw)
-        return next_obs, float(reward), bool(done), info
-
-    def _normalize_obs(self, obs: np.ndarray) -> np.ndarray:
-        """Normalize observation to 6D compact format."""
-        if self.observation_mode == 'compact':
-            # Should already be 6D
-            return np.clip(np.array(obs, dtype=np.float32), -1.0, 5.0)[:6]
-        else:
-            # Convert to compact (same logic as representation module)
-            from SAC_workspace.src.representation.representation import StateEncoder
-            encoder = StateEncoder('compact')
-            return encoder.encode(obs, self.observation_mode)
-
-    def get_observation_space_info(self) -> Dict:
-        """Get observation space details matching MBPO."""
-        return {
-            'state_dim': self.state_dim,
-            'observation_mode': self.observation_mode,
-            'feature_names': list(COMPACT_OBS_LABELS),
-            'bounds_low': np.array([-1.0, -1.0, -1.0, -1.0, -1.0, 0.0]),  # Approximate
-            'bounds_high': np.array([5.0, 5.0, 5.0, 2.0, 2.0, 2.0]),  # Approximate
+    def __init__(self, env_kwargs: dict):
+        from mbpo.env.pv_tracking import PVTrackingEnv
+        if env_kwargs.get('observation_mode') != 'compact':
+            raise ValueError('Must use compact mode for reference parity')
+        self.env = PVTrackingEnv(**dict(env_kwargs))
+        self.action_space = self.env.action_space
+        self.observation_space = self.env.observation_space
+        self.horizon = int(self.env.num_action_steps)
+        if self.horizon != 117 or self.observation_space.shape != (6,) or self.action_space.shape != (2,):
+            raise ValueError('Resolved MDP does not match compact 117-step reference')
+        if not np.array_equal(np.asarray(self.action_space.low), np.array([-1, -1])) or not np.array_equal(np.asarray(self.action_space.high), np.array([1, 1])):
+            raise ValueError('Unexpected reference action bounds')
+        self.steps = 0
+        # Record the effective PVTrackingEnv parameters, including defaults
+        # omitted by the reference config. This catches upstream physics drift.
+        source = self.env
+        location = source.location
+        def value(name):
+            return getattr(source, name, None)
+        def library_version(name):
+            try:
+                return metadata.version(name)
+            except metadata.PackageNotFoundError:
+                return None
+        self.resolved_mdp = {
+            'pvlib_version': library_version('pvlib'),
+            'gym_version': library_version('gym'),
+            'site_latitude': getattr(location, 'latitude', None),
+            'site_longitude': getattr(location, 'longitude', None),
+            'site_altitude': getattr(location, 'altitude', None),
+            'tz': str(location.tz),
+            'start_time': value('start_time'), 'periods': value('periods'),
+            'freq': str(value('freq')),
+            'weather_source': value('weather_source'),
+            'area': value('area'), 'efficiency': value('efficiency'),
+            'max_delta_tilt': value('max_delta_tilt'),
+            'max_delta_azimuth': value('max_delta_azimuth'),
+            'movement_penalty': value('movement_penalty'),
+            'movement_cost_mode': value('movement_cost_mode'),
+            'actuator_power_w': value('actuator_power_w'),
+            'slew_rate_tilt_deg_s': value('slew_rate_tilt_deg_s'),
+            'slew_rate_azimuth_deg_s': value('slew_rate_azimuth_deg_s'),
+            'observation_mode': value('observation_mode'),
+            'horizon': self.horizon,
         }
 
-    def get_action_space_info(self) -> Dict:
-        """Get action space details matching MBPO."""
-        return {
-            'action_dim': self.action_dim,
-            'action_bounds_low': np.array([-5.0, -10.0]),  # max_delta_tilt, max_delta_azimuth
-            'action_bounds_high': np.array([5.0, 10.0]),
-            'description': 'delta_tilt (deg/step), delta_azimuth (deg/step)',
-        }
+    def seed(self, seed: int) -> None:
+        self.env.seed(seed)
 
-    def get_episode_length(self) -> int:
-        """Get episode horizon length."""
-        return self.max_steps
+    def reset(self, scenario_id: str | None = None) -> np.ndarray:
+        self.steps = 0
+        observation = encode(self.env.reset(scenario_id=scenario_id))
+        if not np.isclose(observation[5], 1., atol=1e-6):
+            raise RuntimeError('Finite-horizon observation must begin with tau=1')
+        if str(self.env.location.tz).upper() != 'UTC':
+            raise RuntimeError('Reference pvlib/NSRDB experiment must use UTC')
+        return observation
+
+    def step(self, action):
+        a = np.asarray(action, dtype=np.float32)
+        if a.shape != (2,) or not np.isfinite(a).all():
+            raise ValueError(f'Action must be finite shape (2,), got {a}')
+        if (np.abs(a) > 1.00001).any():
+            raise ValueError('Policy generated action outside [-1,1]^2')
+        obs, reward, done, info = self.env.step(np.clip(a, -1., 1.))
+        self.steps += 1
+        if self.steps > self.horizon or (self.steps == self.horizon) != bool(done):
+            raise RuntimeError('Episode horizon or terminal signal disagrees with reference')
+        observation = encode(obs)
+        tau_expected = (self.horizon - self.steps) / self.horizon
+        if not np.isclose(observation[5], tau_expected, atol=1e-6):
+            raise RuntimeError('PVTrackingEnv compact tau feature does not match step count')
+        if not np.isclose(reward, float(info['energy_kwh']) - float(info['movement_cost']), atol=1e-9):
+            raise RuntimeError('Step reward differs from the reference net-energy definition')
+        expected_time = self.env.times[self.steps]
+        actual_time = pd.Timestamp(info['timestamp_utc_iso'])
+        if (actual_time != expected_time or str(info['timezone']).upper() != 'UTC'
+                or expected_time.utcoffset().total_seconds() != 0):
+            raise RuntimeError(f'Solar step UTC timestamp mismatch: {actual_time!s} != {expected_time!s}')
+        if (self.env.weather_source == 'nsrdb_multiyear'
+                and (info['weather_resampling'] != 'none_native_5min'
+                     or not np.isclose(info['control_interval_minutes'], 5., atol=1e-6))):
+            raise RuntimeError('NSRDB scenario is not using the reference native 5-minute grid')
+        return observation, float(reward), bool(done), info
+
+    @property
+    def unwrapped(self):
+        return self.env
 
     def close(self):
-        """Close environment."""
-        pass
-
-
-# Convenience class that directly uses the MBPO environment with minimal wrapper
-class DirectPVEnv(SACEnvironment):
-    """Direct wrapper with zero overhead — uses same env instance."""
-    pass
+        self.env.close()

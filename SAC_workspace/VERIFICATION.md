@@ -1,135 +1,71 @@
-# SAC Workspace — Mathematical Verification & MBPO Integration
+# Standalone PV SAC — independent audit, revision 2 (2026-10-15)
 
-## Objective
-Create a completely independent, model-free SAC workspace that:
-1. Uses the exact same MDP as MBPO (6D compact state, same action/reward, same pvlib simulator)
-2. Implements mathematically rigorous SAC (twin critics, target networks, entropy tuning)
-3. Is fully modular and separate from MBPO algorithms
+This replaces the first patch set. Use only the **v2** ZIPs in order; they are
+self-contained replacements for the earlier `SAC_workspace` files.
 
----
+## Verification performed in the audit container
 
-## 1. MDP Parity Verification
+- Syntax compilation of the complete new workspace.
+- **14 unittest cases discovered; 12 passed, 2 deliberately skipped** because
+  the original cloned repository and complete NSRDB/pvlib environment are not
+  available in this container. A skip is not a successful physical test.
+- Configuration extraction tested with a synthetic source fixture that
+  independently reconstructs **training and evaluation** overrides.
+- Tanh log-density independently checked against PyTorch `TanhTransform`;
+  soft Bellman terminal masking, 100x reward scale, exact Polyak updates,
+  temperature floor, action bounds, and replay-ring serialization checked.
+- End-to-end simulated 117-step environment integration: real-transition-only
+  training, 37 gradient updates, checkpoint save/restore, matching scenario and
+  timestamp comparison, all four benchmarking methods, metrics CSV and plots.
+- Scientific semantics: instantaneous sun-pointing is displayed as gross
+  energy only. Feasible controllers are compared on net energy. Multiple seeds
+  with an identical fixed evaluation start pose are rejected to avoid false
+  independent replication.
 
-### State Space (Identical to MBPO conf_sac / conf_compact)
-```
-SAC 6D Compact: [DNI/2000, DHI/2000, P/(2000·A·η), β/90°, (γ%360°)/180°-1, (H-t)/H]
-MBPO 6D:      [dni_norm, dhi_norm, power_norm, tilt_norm, azimuth_norm, tau]
-```
-- `DNI/2000`: DNI ∈ [0, 1000] W/m² → [0, 0.5] (normalized by 2000 for safety margin)
-- `DHI/2000`: DHI ∈ [0, 1000] W/m² → [0, 0.5]
-- `P/(2000·A·η)`: Power ∈ [0, 360] W (with A=1, η=0.18) → normalized by 2000
-- `β/90°`: Tilt ∈ [0, 90°] → [0, 1]
-- `(γ%360)/180-1`: Azimuth ∈ [0, 360°) → [-1, 1]
-- `(H-t)/H`: Horizon remaining ∈ [0, 1] for H=117 steps
+## Unverified until executed inside the full repository
 
-### Action Space (Identical)
-```
-SAC Action: [delta_tilt, delta_azimuth] ∈ [-5, 5] × [-10, 10] deg/step
-MBPO:      Same max_delta_tilt=5.0, max_delta_azimuth=10.0
-```
+- The original `PVTrackingEnv` and the native NSRDB PSM4 year files under the
+  site's actual local pvlib/Gym installation. Run `test_real_pv_parity.py` and
+  require it to **pass, not skip**.
+- Manifest site, dates and grid; `01_setup_config` checks these and refuses
+  to fall back to clear-sky data.
+- Full 2,000-episode training stability and convergence, empirical energy
+  advantage, annual/cross-season uncertainty estimates, and independent
+  held-out generalization. No scientific gain is claimed from mock outputs.
+- Perfect bit-for-bit GPU determinism across distinct drivers/hardware.
 
-### Reward Function (Identical)
-```
-reward = power_output - movement_penalty * movement_cost
-```
-Same reward formula as MBPO (see `mbpo/env/pv_tracking.py`).
+## Original repository libraries reused directly
 
-### Environment / Simulator (Identical)
-```
-SAC Environment: SACEnvironment wraps PVTrackingEnv
-PVTrackingEnv:    Uses pvlib Location + NSRDB scenarios + pvlib_physics
-Physics:          Same solar_zenith, solar_azimuth, POA calculations
-Weather:          Same NSRDB multiyear scenarios (weather_scenario_mode='nsrdb_multiyear')
-```
+- `mbpo.env.pv_tracking.PVTrackingEnv`: observation, control bounds, motion,
+  episode transition, reward and telemetry.
+- `mbpo.env.pvlib_physics.dual_axis_tracking_targets` and
+  `compute_panel_power_w`: dual-axis geometry and exactly matched POA/power.
+- `mbpo.env.nsrdb_weather.load_scenario_manifest`: scenario ID resolution.
+- AST-only reading of `examples/config/pv_tracking/_nsrdb_base.py` and
+  `conf_compact.py`: no Ray or TensorFlow imports.
 
----
+## Execute inside your local repository root
 
-## 2. SAC Mathematical Formulation (Verified)
-
-### Component Definitions (from `sac_agent.py`)
-1. **Policy (Actor)**: π_φ(a|s) = Normal(μ(s; φ), σ(s; φ))
-2. **Twin Critics**: Q_θ1(s,a), Q_θ2(s,a) — independent networks
-3. **Target Critics**: Q̄_θ1, Q̄_θ2 — polyak-averaged: Q̄ ← τQ + (1-τ)Q̄
-
-### SAC Update Equations (Mathematically Valid)
-
-**Value Target (using min of twin targets for stability):**
-```
-V(s') = min(Q̄1(s', a'), Q̄2(s', a')) - α · log π(a'|s')
+```sh
+python -m unittest discover -s SAC_workspace/tests -p "test_*.py" -v
+python -m SAC_workspace.workflows.01_setup_config
+python -m SAC_workspace.workflows.02_environment_replay
+python -m SAC_workspace.workflows.03_train --run-dir SAC_workspace/runs/new_smoke --seed 0 --epochs 2
 ```
 
-**Bellman Target for Q:**
-```
-Q_target(s, a) = r + γ · (1 - done) · V(s')
-```
+A 2-episode smoke run is below the 8,000-step initial exploration threshold;
+use a **new** run folder for full training. The physical parity test may be
+slower because it constructs the original NSRDB environment twice.
 
-**Q-Loss (MSE):**
-```
-L_Q = E[(Q(s,a) - Q_target)²]  (for both Q1 and Q2 independently)
-```
+Full evaluation once a trained checkpoint exists:
 
-**Policy Loss (maximize Q with entropy regularization):**
-```
-J(φ) = E[s~D, a~π][min(Q1(s,a), Q2(s,a)) - α · log π(a|s)]
+```sh
+python -m SAC_workspace.workflows.04_evaluate --checkpoint SAC_workspace/runs/sac_seed0/latest.pt --outdir SAC_workspace/evaluation/seed0
+python -m SAC_workspace.workflows.04_evaluate --checkpoint SAC_workspace/runs/sac_seed0/latest.pt --all-scenarios --outdir SAC_workspace/evaluation/full_nsrdb
 ```
 
-**Entropy Temperature Update:**
-```
-L_α = -α · E[a~π][log π(a|s) + H_target]
-```
-
-All updates use gradient descent with gradient clipping (norm ≤ 1.0) for stability.
-
----
-
-## 3. Module Structure (Independent from MBPO)
-
-```
-SAC_workspace/src/
-├── representation/representation.py   # State encoding (6D → physical/legacy conversion)
-├── environment/environment.py         # SACEnvironment (wraps same PVTrackingEnv)
-├── agents/sac_agent.py              # SACAgent (actor, twin critics, targets, replay)
-├── training/trainer.py               # SACTrainer (pure model-free loop)
-├── evaluation/evaluation.py          # SACEvaluator (benchmark vs oracle)
-```
-
-No imports from `mbpo/algorithms/` — completely decoupled from MBPO training code.
-Only imports from `mbpo/env/` (simulator) and `mbpo/static/` (constants) for exact parity.
-
----
-
-## 4. Notebook Sections (Documented Workflow)
-
-1. **Setup & Config**: Same hyperparameters (hidden_dim=256, lr=3e-4, γ=0.99, τ=0.005)
-2. **Environment & Replay Buffer**: Initialize SACEnvironment + ReplayBuffer (100K capacity)
-3. **Agent Training**: Execute SAC loop — no rollouts, only real environment transitions stored
-4. **Evaluation & Benchmarking**: Compare SAC metrics against pvlib-based oracle
-
----
-
-## 5. Benchmark Comparison Setup
-
-The evaluation compares:
-- **SAC Policy**: Trained with pure SAC on same 6D state, same simulator
-- **Physical Oracle**: Theoretical optimal tracking (panel = solar position at each step)
-- **Baseline Metrics**: Mean reward, mean power output, relative performance
-
-Both SAC and Oracle use the same `pvlib` solar geometry (`Location.solarposition`) and same weather scenarios (`NSRDB_MANIFEST`).
-
----
-
-## Verification Checklist
-
-| Requirement | Status | Evidence |
-|---|---|---|
-| Same 6D state space | ✅ | `COMPACT_OBS_DIM = 6` used in representation |
-| Same action/reward | ✅ | Same `max_delta_tilt=5`, same reward formula |
-| Same pvlib simulator | ✅ | `SACEnvironment` wraps `PVTrackingEnv` |
-| Pure SAC (no model) | ✅ | `SACAgent` uses only replay buffer, no rollouts |
-| Twin critics | ✅ | `TwinQNetwork` with independent Q1, Q2 |
-| Target networks | ✅ | `target_twin_critic` with polyak (τ=0.005) |
-| Entropy tuning | ✅ | `automatic_entropy_tuning=True`, learnable log_α |
-| Mathematical rigor | ✅ | All SAC equations documented in sac_agent.py |
-| Independent workspace | ✅ | No imports from `mbpo/algorithms/` |
-| Jupyter notebook | ✅ | `notebooks/sac_training_analysis.ipynb` |
-| Benchmark comparison | ✅ | `SACEvaluator` compares SAC vs Oracle |
+Do not interpret the five reference scenarios as unseen holdout cases;
+the training NSRDB distribution includes them. For sound manuscript claims,
+report actual source versions, evaluate multiple independent trained seeds
+in separate runs, use sufficient distinct weather scenarios, and show
+paired statistics.
