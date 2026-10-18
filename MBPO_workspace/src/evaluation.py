@@ -100,7 +100,7 @@ def ideal_instantaneous_poa(cfg, fixed_path, env=None):
 
 
 def evaluate(cfg:MBPOConfig, mbpo_checkpoint, sac_checkpoint, scenarios=None,
-             seeds=(42,),device='cpu',include_poa=True):
+             seeds=(42,),device='cpu',include_poa=True,include_classical=True):
     from mbpo.env.nsrdb_weather import load_scenario_manifest
     known={s['scenario_id'] for s in load_scenario_manifest(cfg.sac.manifest)['scenarios']}
     if scenarios is None: scenarios=reference_scenario_ids(cfg.sac)
@@ -124,9 +124,11 @@ def evaluate(cfg:MBPOConfig, mbpo_checkpoint, sac_checkpoint, scenarios=None,
                 p_sac=run_episode(cfg.sac,'sac',sid,seed,agent=sac,env=env)
                 p_mbpo=run_episode(cfg.sac,'sac',sid,seed,agent=mbpo,env=env)
                 p_mbpo['method']='mbpo'
-                dual=run_episode(cfg.sac,'dual_axis_slew_limited',sid,seed,env=env)
-                ideal=ideal_instantaneous_dual_axis(cfg.sac,fixed,env=env)
-                group=(p_mbpo,p_sac,fixed,dual,ideal)
+                group=(p_mbpo,p_sac,fixed)
+                if include_classical:
+                    dual=run_episode(cfg.sac,'dual_axis_slew_limited',sid,seed,env=env)
+                    ideal=ideal_instantaneous_dual_axis(cfg.sac,fixed,env=env)
+                    group=group+(dual,ideal)
                 if include_poa:group=group+(ideal_instantaneous_poa(cfg.sac,fixed,env=env),)
                 expected=[i['timestamp_utc_iso'] for i in fixed['infos']]
                 for p in group:
@@ -142,15 +144,17 @@ def evaluate(cfg:MBPOConfig, mbpo_checkpoint, sac_checkpoint, scenarios=None,
     return paths
 
 
-def paired_summary(paths):
+def paired_summary(paths, plan=None):
     keys=defaultdict(dict)
     for p in paths:
         key=(p['scenario_id'],int(p['seed']))
         if p['method'] in keys[key]:raise ValueError('Duplicate evaluation method for a scenario')
         keys[key][p['method']]=p
     for key, group in keys.items():
-        expected=set(METHODS) if 'poa_instant_ideal' in group else set(METHODS)-{'poa_instant_ideal'}
-        if set(group)!=expected:raise ValueError(f'Missing paired methods for {key}')
+        allowed=[{'mbpo','sac','fixed_no_motion'},
+                 {'mbpo','sac','fixed_no_motion','poa_instant_ideal'},
+                 set(METHODS),set(METHODS)-{'poa_instant_ideal'}]
+        if set(group) not in allowed:raise ValueError(f'Missing paired methods for {key}')
     out={'protocol':('Paired by NSRDB scenario, seed, initial pose and post-step UTC timestamps; '
            'real PVTrackingEnv; 117 transitions; no model-generated actions in evaluation'),
          'scenario_count':len({k[0] for k in keys}),
@@ -162,35 +166,76 @@ def paired_summary(paths):
                   'Training and evaluation scenarios may overlap; do not claim a held-out result '
                   'without a disjoint training protocol.']}
     available=[m for m in METHODS if m in next(iter(keys.values()))]
+    if plan is not None:
+        from SAC_workspace.src.evaluation.statistical_inference import (
+            day_summary_from_paths, stratified_point_estimate,
+            build_valid_statistical_summary)
+        verified=build_valid_statistical_summary(
+            paths,plan,method_names=tuple(
+                m for m in available if m in ('mbpo','sac','fixed_no_motion','poa_instant_ideal')))
+        out['sampling_protocol']=plan['protocol']
+        out['sampling_uncertainty']=verified['uncertainty']
+        out['notes'].append('Population-weighted point estimates; no naive day-bootstrap CI for one-per-bin sampling.')
     for method in available:
         records=[g[method] for g in keys.values()]
         gross=np.asarray([p['gross_energy_kwh'] for p in records],float)
         net=np.asarray([p['net_energy_kwh'] for p in records if p['net_energy_kwh'] is not None],float)
         movement=np.asarray([p['movement_cost_kwh'] for p in records if p['movement_cost_kwh'] is not None],float)
+        if plan is not None:
+            day_gross=day_summary_from_paths(records,method,'gross_energy_kwh')
+            mu_gross=stratified_point_estimate(day_gross,plan)
+            day_net=(day_summary_from_paths(records,method,'net_energy_kwh')
+                     if len(net) else None)
+            mu_net=stratified_point_estimate(day_net,plan) if day_net is not None else None
+            day_move=(day_summary_from_paths(records,method,'movement_cost_kwh')
+                      if len(movement) else None)
+            mu_move=stratified_point_estimate(day_move,plan) if day_move is not None else None
+            day_net_values=list(day_net.values()) if day_net is not None else []
+            descriptive_sd=float(np.std(day_net_values,ddof=1)) if len(day_net_values)>1 else None
+        else:
+            mu_gross=float(gross.mean());mu_net=float(net.mean()) if len(net) else None
+            mu_move=float(movement.mean()) if len(movement) else None
+            descriptive_sd=float(net.std(ddof=1)) if len(net)>1 else None
         out['methods'][method]={'count':len(records),
-          'mean_gross_kwh':float(gross.mean()),
-          'mean_net_kwh':float(net.mean()) if len(net) else None,
-          'std_net_kwh':float(net.std(ddof=1)) if len(net)>1 else None,
-          'mean_movement_cost_kwh':float(movement.mean()) if len(movement) else None}
+          'mean_gross_kwh':mu_gross,'mean_net_kwh':mu_net,
+          'std_net_kwh':descriptive_sd,
+          'std_interpretation':'unweighted sampled-day descriptive SD; not the standard error' if plan is not None else 'sample descriptive SD; not the standard error',
+          'mean_movement_cost_kwh':mu_move}
     comparisons=[('mbpo','sac'),('mbpo','dual_axis_slew_limited'),
                  ('mbpo','fixed_no_motion'),('sac','dual_axis_slew_limited'),
                  ('sac','fixed_no_motion')]
+    comparisons=[(a,b) for a,b in comparisons if a in available and b in available]
     for lhs,rhs in comparisons:
         clustered=defaultdict(list);ratios=[]
         for (sid,_),g in keys.items():
             left=g[lhs]['net_energy_kwh'];right=g[rhs]['net_energy_kwh']
             clustered[sid].append(left-right)
             if right>1e-10:ratios.append(100.*(left-right)/right)
-        mean,lo,hi=_ci_clustered(clustered)
-        out['paired_net_kwh'][f'{lhs}_minus_{rhs}']={
-            'mean_difference_kwh':mean,'bootstrap_ci_95pct_kwh':[lo,hi],
-            'mean_percent_gain':float(np.mean(ratios)) if ratios else None}
+        if plan is None:
+            mean,lo,hi=_ci_clustered(clustered)
+            out['paired_net_kwh'][f'{lhs}_minus_{rhs}']={
+                'mean_difference_kwh':mean,'bootstrap_ci_95pct_kwh':[lo,hi],
+                'mean_percent_gain':float(np.mean(ratios)) if ratios else None}
+        else:
+            from SAC_workspace.src.evaluation.statistical_inference import (
+                day_summary_from_paths, stratified_point_estimate)
+            a=day_summary_from_paths(paths,lhs,'net_energy_kwh')
+            b=day_summary_from_paths(paths,rhs,'net_energy_kwh')
+            differences={sid:a[sid]-b[sid] for sid in a}
+            mu=stratified_point_estimate(differences,plan)
+            denominator=stratified_point_estimate(b,plan)
+            out['paired_net_kwh'][f'{lhs}_minus_{rhs}']={
+                'mean_difference_kwh':mu,
+                'bootstrap_ci_95pct_kwh':[None,None],
+                'ci_status':'not estimated: one sampled day per temporal bin',
+                'mean_percent_gain':None,
+                'ratio_of_weighted_means_percent':100.*mu/denominator if denominator>1e-10 else None}
     return out
 
 
-def write_outputs(paths,outdir):
+def write_outputs(paths,outdir,plan=None):
     out=Path(outdir);out.mkdir(parents=True,exist_ok=True)
-    stats=paired_summary(paths)
+    stats=paired_summary(paths,plan=plan)
     def clean(x):
         if isinstance(x,dict):return {k:clean(v) for k,v in x.items()}
         if isinstance(x,list):return [clean(v) for v in x]

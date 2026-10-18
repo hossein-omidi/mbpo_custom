@@ -81,3 +81,32 @@ verification/
 
 !mbpo/env/
 !mbpo/env/**
+
+# SAC/MBPO modern runtime outputs (never upload large generated artifacts)
+/SAC_workspace/runs/
+/SAC_workspace/evaluation/
+/MBPO_workspace/runs/
+/MBPO_workspace/evaluation/
+/checkpoints/
+/figures/
+/plots/
+/ray_results/
+/tb_logs/
+**/events.out.tfevents.*
+
+# Binary model/checkpoint outputs (retain CSV/JSON source metadata when appropriate)
+*.pt
+*.pth
+*.ckpt
+*.ckpt.*
+*.h5
+*.hdf5
+
+# Raw local NSRDB files under external download folder
+/nsrdb_newyork_5min/
+
+# Local virtual environments / machine settings
+.env
+.env.*
+!.env.example
+.ruff_cache/

@@ -15,7 +15,12 @@ def main():
     add_selection_arguments(ap)
     ap.add_argument('--device', default='cpu')
     ap.add_argument('--training-csv', default=None)
+    ap.add_argument('--representation-config',default='MBPO_workspace/representation_config.json')
     args=ap.parse_args()
+    import json
+    profile=json.loads(Path(args.representation_config).read_text())
+    if 'poa_instant_ideal' not in profile.get('active_methods',[]):
+        ap.error('POA-only representation must enable poa_instant_ideal')
     cfg=load_config()
     from mbpo.env.nsrdb_weather import load_scenario_manifest
     from SAC_workspace.src.evaluation.scenario_sampling import resolve_cli_selection,save_selection
@@ -28,9 +33,37 @@ def main():
         save_selection(plan,args.outdir)
         print(f'Selected {plan["selected_count"]} of {plan["population_count"]} NSRDB days '
               f'from {plan["year_month_strata_count"]} year-month groups, protocol={plan["protocol"]}')
-    paths=evaluate(cfg,args.checkpoint,scenario_ids=scenario_ids,seeds=args.seeds,device=args.device)
-    stats=write_outputs(paths,args.outdir)
-    plot_results(paths,args.outdir,args.training_csv)
+    paths=evaluate(cfg,args.checkpoint,scenario_ids=scenario_ids,seeds=args.seeds,device=args.device,include_classical=False)
+    # Preserve original evaluation implementation but exclude classical tracker plots.
+    # POA uses the exact recorded weather; no additional env stepping.
+    from MBPO_workspace.src.evaluation import ideal_instantaneous_poa
+    from SAC_workspace.src.environment.environment import SACEnvironment
+    ref_env=SACEnvironment(cfg.eval_env)
+    try:
+        fixed_paths=[p for p in paths if p['method']=='fixed_no_motion']
+        oracles=[ideal_instantaneous_poa(cfg,p,env=ref_env) for p in fixed_paths]
+    finally:
+        ref_env.close()
+    paths=[p for p in paths if p['method'] in ('sac','fixed_no_motion')]+oracles
+    # The existing SAC summary expects all legacy controllers.
+    # Use the shared flexible paired summary, which accepts this POA-only set.
+    # Convert the SAC-only results to direct episode-level files without pretending MBPO is present.
+    import csv
+    Path(args.outdir).mkdir(parents=True,exist_ok=True)
+    with (Path(args.outdir)/'poa_only_episodes.csv').open('w',newline='') as f:
+        w=csv.DictWriter(f,fieldnames=['scenario_id','seed','method','gross_energy_kwh','net_energy_kwh','movement_cost_kwh'])
+        w.writeheader()
+        for row in paths:w.writerow({k:row.get(k) for k in w.fieldnames})
+    stats={'methods':{}}
+    for method in ('sac','fixed_no_motion','poa_instant_ideal'):
+        pp=[p for p in paths if p['method']==method]
+        if pp:
+            import numpy as np
+            stats['methods'][method]={'mean_net_kwh':float(np.mean([p['net_energy_kwh'] for p in pp])) if method!='poa_instant_ideal' else None,
+                                      'mean_gross_kwh':float(np.mean([p['gross_energy_kwh'] for p in pp]))}
+    if plan is not None:
+        from MBPO_workspace.src.verified_figures import render_verified
+        render_verified(paths,plan,Path(args.outdir)/'verified')
     if plan is not None:
         from SAC_workspace.src.evaluation.stratified_statistics import render_statistical_report
         report=render_statistical_report(Path(args.outdir)/'stratified',plan,paths=paths)
