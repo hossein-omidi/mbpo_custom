@@ -86,6 +86,16 @@ def ideal_instantaneous_poa(cfg, fixed_path, env=None):
             candidates=[0.,90.,float(res.x)]
             tilt=max(candidates,key=value)
             power=float(value(tilt));energy=power*hours/1000.
+            # An unconstrained gross-power oracle must dominate the feasible
+            # fixed orientation under IDENTICAL recorded weather. Catch
+            # optimizer/model regressions before publishing an upper bound.
+            fixed_power=fixed_path.get('power')
+            if fixed_power is not None:
+                if len(fixed_power) != len(infos):
+                    raise ValueError('Incomplete paired fixed-power measurements')
+                reference=float(fixed_power[len(p['power'])])
+                if not np.isfinite(reference) or power + max(1e-5,1e-7*abs(reference)) < reference:
+                    raise RuntimeError('POA gross oracle fell below paired fixed power')
             p['power'].append(power);p['energy'].append(energy)
             p['reward'].append(energy);p['cost'].append(0.)
             p['tilt'].append(float(tilt));p['azimuth'].append(float(az))

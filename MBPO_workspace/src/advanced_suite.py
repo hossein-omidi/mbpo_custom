@@ -152,9 +152,15 @@ def _read_eval(folder):
             raise ValueError('Incorrect cumulative energy')
         if method=='poa_instant_ideal' and np.isfinite([r['net_step_kwh'] for r in rr]).any():
             raise ValueError('POA oracle has no feasible net-energy measurement')
-        if method in FEASIBLE and np.isfinite([r['net_step_kwh'] for r in rr]).all():
-            if not np.allclose([r['net_step_kwh'] for r in rr],
-                               [r['energy_kwh']-r['movement_cost_kwh'] for r in rr],atol=1e-6):
+        if method in FEASIBLE:
+            net=np.asarray([r['net_step_kwh'] for r in rr],dtype=float)
+            # Basic historical CSVs omit the entire net-step column; in that
+            # case we can reconstruct it exactly from gross minus movement.
+            # A partly populated column is damaged data, not a valid fallback.
+            if np.isfinite(net).any() and not np.isfinite(net).all():
+                raise ValueError('Partly missing/nonfinite net step rewards: '+str((sid,seed,method)))
+            if np.isfinite(net).all() and not np.allclose(
+                    net,[r['energy_kwh']-r['movement_cost_kwh'] for r in rr],atol=1e-6):
                 raise ValueError('Invalid step reward')
         key=(sid,seed)
         keys[key][method]=rr
@@ -168,8 +174,15 @@ def _read_eval(folder):
             for method, rr in methods.items():
                 for field in ('solar_zenith_deg','solar_azimuth_deg','dni_wm2','dhi_wm2','ghi_wm2'):
                     a=np.array([r[field] for r in rr]);b=np.array([r[field] for r in reference])
-                    if np.isfinite(a).all() and np.isfinite(b).all() and not np.allclose(a,b,atol=1e-5):
-                        raise ValueError('Nonpaired recorded weather / solar geometry: '+str((key,method,field)))
+                    # If a rich export contains the field, it must be complete for
+                    # both paired methods; missing values are not weather evidence.
+                    if np.isfinite(a).any() != np.isfinite(b).any():
+                        raise ValueError('Inconsistent weather field coverage: '+str((key,method,field)))
+                    if np.isfinite(a).any():
+                        if not np.isfinite(a).all() or not np.isfinite(b).all():
+                            raise ValueError('Partially missing weather / solar geometry: '+str((key,method,field)))
+                        if not np.allclose(a,b,atol=1e-5):
+                            raise ValueError('Nonpaired recorded weather / solar geometry: '+str((key,method,field)))
     by_day=defaultdict(set)
     for sid,seed in keys:by_day[sid].add(seed)
     if len({tuple(sorted(v)) for v in by_day.values()})!=1:
@@ -401,23 +414,35 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
             monthly('gross_energy_kwh','14_monthly_gross_poa.png',VISIBLE,'Mean gross kWh / window',
                     'Gross PV energy including ideal unconstrained POA')
 
-            fig,ax=plt.subplots(figsize=(10.5,5.2));shown=0
-            for m in VISIBLE:
-                metric='gross_energy_kwh' if m=='poa_instant_ideal' else 'net_energy_kwh'
-                ys=[]
-                for season,months_ in [('winter',(12,1,2)),('spring',(3,4,5)),
-                                       ('summer',(6,7,8)),('fall',(9,10,11))]:
-                    ids=[d for d in weights if int(d[5:7]) in months_]
-                    vals=np.array([feat(d,m,metric) for d in ids],float)
-                    ws=np.array([weights[d] for d in ids],float)
-                    ys.append(float(np.average(vals,weights=ws)) if len(ids) and np.isfinite(vals).all() else np.nan)
-                if np.isfinite(ys).any():
-                    ax.plot(['winter','spring','summer','fall'],ys,marker='o',lw=2,label=LABELS[m]);shown+=1
-            if shown:
-                ax.set(ylabel='Mean kWh per 117-step window',title='Seasonal weighted mean: POA gross, feasible policies net (different metrics)')
-                ax.legend(fontsize=8);ax.grid(alpha=.2)
-                save(fig,'21_seasonal_weighted_energy.png')
-            else:plt.close(fig);omitted.append('21_seasonal_weighted_energy.png: insufficient energy metrics')
+            # Scientific separation: POA oracle has GROSS only; a common net-energy
+            # plot must NEVER include it. Both charts use the same sampled days and
+            # exact calendar-bin population weights, not raw counts of episodes.
+            seasons=[('winter',(12,1,2)),('spring',(3,4,5)),
+                     ('summer',(6,7,8)),('fall',(9,10,11))]
+            for metric,methods,filename,heading in (
+                ('gross_energy_kwh',VISIBLE,'21_seasonal_weighted_energy.png',
+                 'Seasonal gross PV energy: all policies and instantaneous POA reference'),
+                ('net_energy_kwh',FEASIBLE,'27_seasonal_weighted_net_energy.png',
+                 'Seasonal feasible net PV energy: POA oracle excluded')):
+                fig,ax=plt.subplots(figsize=(10.5,5.2));shown=0
+                for method in methods:
+                    ys=[]
+                    for season,months_ in seasons:
+                        ids=[d for d in weights if int(d[5:7]) in months_]
+                        vals=np.array([feat(d,method,metric) for d in ids],float)
+                        ws=np.array([weights[d] for d in ids],float)
+                        ys.append(float(np.average(vals,weights=ws)) if len(ids) and np.isfinite(vals).all() else np.nan)
+                    # A partially measured method has NO publishable seasonal series.
+                    if np.isfinite(ys).all():
+                        ax.plot([x[0] for x in seasons],ys,marker='o',lw=2,label=LABELS[method]);shown+=1
+                    else:
+                        omitted.append(filename+': incomplete '+method+' '+metric+' coverage')
+                if shown==len(methods):
+                    ax.set(ylabel='Weighted mean '+('gross' if metric.startswith('gross') else 'net')+
+                           ' energy (kWh / 117-step window)',title=heading+' (no sampling CI)')
+                    ax.legend(fontsize=8);ax.grid(alpha=.2);save(fig,filename)
+                else:
+                    plt.close(fig);omitted.append(filename+': incomplete comparable method coverage')
 
             # Weather groups are assigned after sampling: descriptive ONLY.
             groups_by_weather=defaultdict(list)

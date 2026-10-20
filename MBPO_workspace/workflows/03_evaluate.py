@@ -3,7 +3,6 @@ import argparse
 from pathlib import Path
 from MBPO_workspace.src.config import load_config
 from MBPO_workspace.src.evaluation import evaluate,write_outputs
-from MBPO_workspace.src.plots import make_figures
 
 
 def main():
@@ -23,6 +22,13 @@ def main():
     p.add_argument('--representation-config', default='MBPO_workspace/representation_config.json',
                    help='JSON profile controlling visible comparisons without deleting legacy trackers')
     args=p.parse_args()
+    # A requested training history is part of the scientific provenance.
+    # Fail before expensive NSRDB evaluation rather than silently omitting
+    # its diagnostic figures due to a mistyped path.
+    for flag, value in (('--mbpo-training-csv', args.mbpo_training_csv),
+                        ('--sac-training-csv', args.sac_training_csv)):
+        if value is not None and not Path(value).is_file():
+            p.error(f'{flag}: file not found: {value}')
     import json
     profile=json.loads(Path(args.representation_config).read_text())
     enabled=set(profile['active_methods'])
@@ -53,7 +59,7 @@ def main():
     from MBPO_workspace.src.advanced_suite import export_detail
     export_detail(paths,args.outdir)
     figs=[]
-    advanced={'plots': []}
+    advanced={'figures': [], 'skipped': []}
     if plan is not None:
         from MBPO_workspace.src.verified_figures import render_verified
         verified=render_verified(paths,plan,Path(args.outdir)/'verified')
@@ -72,6 +78,7 @@ def main():
               len(advanced['skipped']), 'under',Path(args.outdir,'advanced_suite').resolve())
     for k,v in stats['methods'].items():
         print(f'{k:26s} net={v["mean_net_kwh"]} gross={v["mean_gross_kwh"]:.6f} kWh')
-    print('Paired report:',Path(args.outdir).resolve(),'; figures:',len(figs),'; additional paper figures:',len(advanced['plots']))
+    print('Paired report:',Path(args.outdir).resolve(),'; verified figures:',len(figs),
+          '; advanced figures:',len(advanced['figures']), '; advanced skips:',len(advanced['skipped']))
 
 if __name__=='__main__':main()

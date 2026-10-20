@@ -31,13 +31,21 @@ def render_verified(paths,plan,outdir):
         ax.set_xticks(xs,[LABELS[x] for x in names]);ax.set(ylabel='Mean energy (kWh / 117-step window)',title='Finite-manifest weighted mean; POA oracle gross-only')
         ax.text(.01,.98,'No confidence bars: one sampled date per stratum cannot estimate design variance.',transform=ax.transAxes,va='top',fontsize=8)
         ax.grid(axis='y',alpha=.2);save(fig,'01_weighted_mean_energy.png')
-        fig,ax=plt.subplots(figsize=(9,5))
-        for m in names:
-            metric='gross_energy_kwh' if m=='poa_instant_ideal' else 'net_energy_kwh'
-            v=day_summary_from_paths(paths,m,metric)
-            ax.boxplot(list(v.values()),positions=[names.index(m)],widths=.5,showmeans=True)
-        ax.set_xticks(range(len(names)),[LABELS[x] for x in names]);ax.set(ylabel='kWh / 117-step window',title='Observed day distribution (box = quartiles, line = median, triangle = mean)')
-        ax.grid(axis='y',alpha=.2);save(fig,'02_day_distribution_boxplot.png')
+        # Distribution plots MUST compare one physical metric at a time.
+        # Boxplot means are unweighted descriptive means, never population CIs.
+        for metric,methods,filename,heading in (
+            ('gross_energy_kwh',names,'02_day_distribution_boxplot.png',
+             'Observed sampled-day GROSS PV energy (unweighted descriptive boxplots)'),
+            ('net_energy_kwh',[m for m in names if m!='poa_instant_ideal'],
+             '05_feasible_net_energy_boxplot.png',
+             'Observed sampled-day feasible NET energy (no POA oracle)')):
+            fig,ax=plt.subplots(figsize=(9,5))
+            for index,m in enumerate(methods):
+                values=day_summary_from_paths(paths,m,metric)
+                ax.boxplot(list(values.values()),positions=[index],widths=.5,showmeans=True)
+            ax.set_xticks(range(len(methods)),[LABELS[x] for x in methods])
+            ax.set(ylabel='kWh / 117-step window',title=heading)
+            ax.grid(axis='y',alpha=.2);save(fig,filename)
         fig,ax=plt.subplots(figsize=(9,5));pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion')]
         for j,(a,b) in enumerate(pairs):
             if a not in names or b not in names:continue
