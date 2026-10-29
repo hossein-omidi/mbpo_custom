@@ -31,9 +31,12 @@ class ReferenceScenarioAndIdealReuseTests(unittest.TestCase):
             self.assertEqual(evaluation.resolve_scenario_ids(cfg),
                              ['2018-02-15','2019-05-15'])
             source.assert_called_once()
-        self.assertEqual(evaluation.resolve_scenario_ids(cfg,['2024-06-21']),['2024-06-21'])
-        with self.assertRaisesRegex(ValueError,'Duplicate'):
-            evaluation.resolve_scenario_ids(cfg,['2024-06-21','2024-06-21'])
+        cfg_user = SimpleNamespace(eval_env={'fixed_eval_scenarios': ['2024-06-21']})
+        self.assertEqual(evaluation.resolve_scenario_ids(cfg_user), ['2024-06-21'])
+        cfg_dup = SimpleNamespace(
+            eval_env={'fixed_eval_scenarios': ['2024-06-21', '2024-06-21']})
+        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+            evaluation.resolve_scenario_ids(cfg_dup)
 
     def test_ideal_uses_recorded_weather_without_stepping_env(self):
         import sys
@@ -51,6 +54,7 @@ class ReferenceScenarioAndIdealReuseTests(unittest.TestCase):
         envpkg=types.ModuleType('mbpo.env');envpkg.__path__=[]
         fake_env=types.SimpleNamespace(horizon=2,unwrapped=types.SimpleNamespace(area=1.2,efficiency=.18))
         fixed={'scenario_id':'2018-02-15','seed':42,'initial_pose':[30,180],
+               'energy':[0.0, 0.0],
                'infos':[{'solar_zenith_deg':35.,'solar_azimuth_deg':155.,'dni_wm2':600.,
                          'ghi_wm2':500.,'dhi_wm2':80.,'interval_hours':5./60.,
                          'timestamp_utc_iso':'2018-02-15T12:05:00+00:00'},

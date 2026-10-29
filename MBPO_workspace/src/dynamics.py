@@ -205,7 +205,10 @@ class StructuredFakeEnv:
         nxt[:,:3]=np.clip(states[:,:3]+delta,0.,1.)
         requested_tilt_delta=actions[:,0]*self.max_delta_tilt
         requested_az_delta=actions[:,1]*self.max_delta_azimuth
-        nxt[:,3]=np.clip(states[:,3]*90.+requested_tilt_delta,0.,90.)/90.
+        old_tilt_deg=states[:,3]*90.
+        executed_tilt_deg=np.clip(old_tilt_deg+requested_tilt_delta,0.,90.)
+        executed_tilt_delta=executed_tilt_deg-old_tilt_deg
+        nxt[:,3]=executed_tilt_deg/90.
         nxt[:,4]=((states[:,4]+1.)*180.+requested_az_delta)%360./180.-1.
         nxt[:,5]=np.maximum(states[:,5]-1./self.horizon,0.)
         terminal=(nxt[:,5]<=1e-7)
@@ -220,7 +223,7 @@ class StructuredFakeEnv:
                   slew_rate_tilt_deg_s=self.slew_rate_tilt_deg_s,
                   slew_rate_azimuth_deg_s=self.slew_rate_azimuth_deg_s,
                   scale=self.movement_penalty)
-                  for dt,da in zip(requested_tilt_delta,requested_az_delta)],dtype=np.float32)
+                  for dt,da in zip(executed_tilt_delta,requested_az_delta)],dtype=np.float32)
         else:
             movement=self.movement_penalty*(np.abs(requested_tilt_delta)/self.max_delta_tilt
                               + np.abs(requested_az_delta)/self.max_delta_azimuth)

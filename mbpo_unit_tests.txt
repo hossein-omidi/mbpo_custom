@@ -1,0 +1,49 @@
+test_csv_2d_3d_pdf_and_offline_recreation (test_advanced_reporting.ScientificReportingTests.test_csv_2d_3d_pdf_and_offline_recreation) ... ok
+test_reject_false_feasible_ideal_or_unpaired_scenario (test_advanced_reporting.ScientificReportingTests.test_reject_false_feasible_ideal_or_unpaired_scenario) ... ok
+test_reject_nonchronological_or_bad_action (test_advanced_reporting.ScientificReportingTests.test_reject_nonchronological_or_bad_action) ... ok
+test_legacy_rich_csv_is_reused_offline (test_advanced_suite_v5.AdvancedSuiteTests.test_legacy_rich_csv_is_reused_offline) ... ok
+test_old_basic_csv_runs_no_fabricated_actions (test_advanced_suite_v5.AdvancedSuiteTests.test_old_basic_csv_runs_no_fabricated_actions) ... ok
+test_paired_utc_and_missing_method_rejected (test_advanced_suite_v5.AdvancedSuiteTests.test_paired_utc_and_missing_method_rejected) ... ok
+test_rich_export_retains_physical_measured_controls (test_advanced_suite_v5.AdvancedSuiteTests.test_rich_export_retains_physical_measured_controls) ... ok
+test_weighted_mean_band_is_observed_day_variability (test_advanced_suite_v5.AdvancedSuiteTests.test_weighted_mean_band_is_observed_day_variability) ... ok
+test_gaussian_nll_is_exact (test_model_math.ModelTests.test_gaussian_nll_is_exact) ... ok
+test_group_level_holdout (test_model_math.ModelTests.test_group_level_holdout) ... ok
+test_mix_never_promotes_model_data_to_real_pool (test_model_math.ModelTests.test_mix_never_promotes_model_data_to_real_pool) ... ok
+test_one_step_physical_projection_and_terminal_mask (test_model_math.ModelTests.test_one_step_physical_projection_and_terminal_mask) ... ok
+test_probabilistic_ensemble_fits_and_restores (test_model_math.ModelTests.test_probabilistic_ensemble_fits_and_restores) ... /home/ecer/miniconda3/envs/simple-worm/lib/python3.12/site-packages/torch/autograd/graph.py:1072: UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 12030). Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx Alternatively, go to: https://pytorch.org to install a PyTorch version that has been compiled with your version of the CUDA driver. (Triggered internally at /__w/pytorch/pytorch/c10/cuda/CUDAFunctions.cpp:119.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+ok
+test_reads_model_knobs_from_original_modules_without_importing_ray (test_reference_config.ReferenceConfigTests.test_reads_model_knobs_from_original_modules_without_importing_ray) ... ok
+test_both_mbpo_and_reporting_imports (test_repair_interfaces.RepairInterfacesTest.test_both_mbpo_and_reporting_imports) ... ok
+test_no_missing_workflow_imports (test_repair_interfaces.RepairInterfacesTest.test_no_missing_workflow_imports) ... ok
+test_reference_fallback_when_compact_sets_none (test_repair_interfaces.RepairInterfacesTest.test_reference_fallback_when_compact_sets_none) ... ok
+test_sun_pointing_reuses_fixed_weather_without_any_simulator_steps (test_repair_interfaces.RepairInterfacesTest.test_sun_pointing_reuses_fixed_weather_without_any_simulator_steps) ... ok
+test_paired_comparison_and_2d_3d_plots (test_reports.ReportTests.test_paired_comparison_and_2d_3d_plots) ... ok
+test_modern_pipeline_no_ray_or_tf (test_runner_imports.ArchitectureTest.test_modern_pipeline_no_ray_or_tf) ... ok
+test_shared_sac_environment_and_optimizer (test_runner_imports.ArchitectureTest.test_shared_sac_environment_and_optimizer) ... ok
+test_oracle_rejects_failure_to_dominate_fixed (test_scientific_safety_v51.ScientificSafetyTests.test_oracle_rejects_failure_to_dominate_fixed) ... ok
+test_partial_reward_column_is_rejected (test_scientific_safety_v51.ScientificSafetyTests.test_partial_reward_column_is_rejected) ... ok
+test_duplicate_and_missing_seed_rejected (test_statistical_audit_v41.StatisticalAuditV41.test_duplicate_and_missing_seed_rejected) ... ok
+test_exact_randomization_distribution_matches_variance_formula (test_statistical_audit_v41.StatisticalAuditV41.test_exact_randomization_distribution_matches_variance_formula) ... ok
+test_exhaustive_census_has_exact_zero_sampling_variance (test_statistical_audit_v41.StatisticalAuditV41.test_exhaustive_census_has_exact_zero_sampling_variance) ... ok
+test_main_summary_is_design_weighted_and_has_no_naive_ci (test_statistical_audit_v41.StatisticalAuditV41.test_main_summary_is_design_weighted_and_has_no_naive_ci) ... ok
+test_missing_measurement_does_not_change_denominator (test_statistical_audit_v41.StatisticalAuditV41.test_missing_measurement_does_not_change_denominator) ... ok
+test_monthly_paired_plot_uses_design_weights (test_statistical_audit_v41.StatisticalAuditV41.test_monthly_paired_plot_uses_design_weights) ... ok
+test_nonfinite_and_duplicate_strata_rejected (test_statistical_audit_v41.StatisticalAuditV41.test_nonfinite_and_duplicate_strata_rejected) ... ok
+test_unequal_population_weights (test_statistical_audit_v41.StatisticalAuditV41.test_unequal_population_weights) ... ok
+test_partial_solar_weather_data_rejected (test_statistical_presentation_v52.ScientificPresentationV52Tests.test_partial_solar_weather_data_rejected) ... ok
+test_separate_gross_and_net_seasonal_panels (test_statistical_presentation_v52.ScientificPresentationV52Tests.test_separate_gross_and_net_seasonal_panels) ... ok
+test_exact_expansion_and_paired (test_verified_inference.VerifiedInference.test_exact_expansion_and_paired) ... ok
+test_one_day_has_undefined_sd_not_zero (test_verified_inference.VerifiedInference.test_one_day_has_undefined_sd_not_zero) ... ok
+test_oracle_is_gross_only_and_no_fake_ci (test_verified_inference.VerifiedInference.test_oracle_is_gross_only_and_no_fake_ci) ... ok
+test_repeated_selections_student_t (test_verified_inference.VerifiedInference.test_repeated_selections_student_t) ... ok
+test_explicit_missing_training_history_errors_early (test_workflow_audit_v53.EvaluationWorkflowContractV53.test_explicit_missing_training_history_errors_early) ... ok
+test_last_report_does_not_expect_nonexistent_plots_key (test_workflow_audit_v53.EvaluationWorkflowContractV53.test_last_report_does_not_expect_nonexistent_plots_key) ... ok
+test_audit_paired_weighted_episodes_and_exported_band (test_workflow_audit_v53.ReadOnlyNumericalAuditV53.test_audit_paired_weighted_episodes_and_exported_band) ... ok
+test_poa_optimization_uses_project_physics_function_and_no_net_claim (test_y_poa_reference.IdealReferenceTest.test_poa_optimization_uses_project_physics_function_and_no_net_claim) ... ok
+test_mock_training_synthetic_and_resume (test_z_mock_end_to_end.IntegrationTests.test_mock_training_synthetic_and_resume) ... ok
+
+----------------------------------------------------------------------
+Ran 42 tests in 35.603s
+
+OK

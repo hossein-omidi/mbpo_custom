@@ -1,0 +1,59 @@
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+=== Code and dependency checks ===
+  IMPORT OK SAC_workspace.src.evaluation.evaluation
+  IMPORT OK SAC_workspace.src.evaluation.plots
+  IMPORT OK SAC_workspace.src.evaluation.scenario_sampling
+  IMPORT OK SAC_workspace.src.evaluation.stratified_statistics
+  IMPORT OK SAC_workspace.src.evaluation.statistical_inference
+  IMPORT OK MBPO_workspace.src.evaluation
+  Manifest: /home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_multiyear_manifest.json (2557 unique scenarios)
+  Manifest SHA256: 4e4113caaa4b39b41018c193d8215aa13dfd60528ecd753fb69e9896e79a5c75
+=== Uploaded July 2019 step: disputed north-facing pose ===
+  PASS: north-facing reported pose -> 183.338384352 W/m2, 33.000909183 W; no one-step orientation mismatch
+=== Code defaults versus experiment overrides; physics scope ===
+  ENV default movement_penalty=0.01; benchmark override=0.0
+  Implemented power formula inputs=['surface_tilt', 'surface_azimuth', 'solar_zenith', 'solar_azimuth', 'dni', 'ghi', 'dhi', 'area', 'efficiency', 'model']
+  LIMITATION: This fixed-efficiency power function takes no temperature, wind-speed, IAM, inverter or module-datasheet inputs.
+  LIMITATION: This does not establish that 30deg/180deg is optimal. It is merely the source code's deterministic initial pose.
+=== Scenario-ID selection and the reported 'dead flag' claim ===
+  SOURCE VERIFIED: randomize_scenario IS consulted in _select_nsrdb_scenario
+  PASS explicit reset(scenario_id='2022-07-15') -> 2022-07-15
+  PASS raw PVTrackingEnv.reset(date='2022-07-15') -> 2022-07-15
+  PASS singleton fixed_eval_scenarios over four seeds: ['2022-07-15', '2022-07-15', '2022-07-15', '2022-07-15']
+  PASS multi-ID list: seed 42 -> 2018-01-02; explicit eval cycle -> ['2022-07-15', '2018-01-01', '2018-01-02', '2018-01-03']
+  PASS randomize_day=False,randomize_scenario=False: ['2024-07-15', '2018-07-15', '2019-07-15', '2024-07-15']
+  CONFIRMED RUNTIME BUG randomize_day=True,randomize_scenario=False: 'numpy.random._generator.Generator' object has no attribute 'randint'
+    Other scenario-selection and physics checks will continue.
+  PASS randomize_day=False,randomize_scenario=True: ['2024-07-15', '2018-07-15', '2019-07-15', '2024-07-15']
+nsrdb_multiyear: randomize_scenario=True takes precedence over randomize_day (uniform over all scenarios).
+  PASS randomize_day=True,randomize_scenario=True: ['2024-07-15', '2018-07-15', '2019-07-15', '2024-07-15']
+  INTERPRETATION: false does not mean deterministic fixed-year; start/end filter calendar month/day in NSRDB mode.
+=== Separate clear-sky random-day RNG compatibility check ===
+  CONFIRMED RUNTIME BUG clear-sky random day: 'numpy.random._generator.Generator' object has no attribute 'randint'
+=== Random initial orientation: repeatability given seed and scenario ===
+  PASS seed 12345 pose (20.46024202204527, 114.03300229551104); repeat identical. Seed 12346 pose (42.61251796984484, 13.880235083328806)
+=== Pinned seasonal rollouts (fixed 30deg/180deg pose) ===
+  PASS 2022-01-15 117/117  E=0.645548 kWh  max POA err=1.14e-13 W/m2  manual formula err=2.27e-13 W/m2
+    Sunlit 5-min samples outside UTC window: before=0, after=1 (not an energy-loss estimate)
+  PASS 2022-04-15 117/117  E=1.343557 kWh  max POA err=1.14e-13 W/m2  manual formula err=2.27e-13 W/m2
+    Sunlit 5-min samples outside UTC window: before=20, after=21 (not an energy-loss estimate)
+  PASS 2022-07-15 117/117  E=1.217564 kWh  max POA err=1.14e-13 W/m2  manual formula err=3.41e-13 W/m2
+    Sunlit 5-min samples outside UTC window: before=33, after=26 (not an energy-loss estimate)
+  PASS 2022-10-15 117/117  E=1.151894 kWh  max POA err=1.14e-13 W/m2  manual formula err=2.27e-13 W/m2
+    Sunlit 5-min samples outside UTC window: before=10, after=5 (not an energy-loss estimate)
+=== Reproducibility check (same scenario, seed, orientation and policy) ===
+  PASS repeat 2022-07-15: all 117 step traces identical
+=== North-facing orientation reached by actual slew-limited actions ===
+  PASS paired identical actions, zero-vs-one movement penalty: power and POA traces unchanged, only reward/cost differ
+  PASS 2022-07-15 north-facing end pose (80.0deg, 0.0deg), gross=0.329225 kWh, cost=0.001027778 kWh
+=== Actuator geometry-mode boundary diagnostic ===
+  MODELING CAVEAT: commanded 5.0deg tilt; actual motion 0.0deg; charged 0.000027778 kWh
+  JSON trace: pv_audit_v3_results.json
+
+AUDIT COMPLETED: 2 CONFIRMED RUNTIME BUG(S); OTHER COMPLETED CHECKS PASSED.
+  FAIL NSRDB_RANDOM_DAY_GENERATOR_RANDINT: AttributeError: 'numpy.random._generator.Generator' object has no attribute 'randint'
+  FAIL NON_NSRDB_RANDOM_DAY_GENERATOR_RANDINT: AttributeError: 'numpy.random._generator.Generator' object has no attribute 'randint'
+LIMITATION: Physical field accuracy, annual-energy impact and trained-policy evaluation were NOT tested.

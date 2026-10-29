@@ -1,0 +1,151 @@
+{
+  "source": "MBPO_workspace/evaluation/scientific_v52_fresh/trajectories_detailed.csv",
+  "n_distinct_dates": 252,
+  "groups_verified": 756,
+  "max_action_tilt_mapping_error_deg": 1.4210854715202004e-14,
+  "max_action_azimuth_mapping_error_deg": 1.1368683772161603e-13,
+  "by_method": {
+    "mbpo": {
+      "tilt_saturated_action_fraction": 0.14126305792972463,
+      "azimuth_saturated_action_fraction": 0.0502306335639669,
+      "tilt_hard_stop_fraction": 0.09662867996201328,
+      "tilt_outward_clipped_commands": 11.301587301587302,
+      "strong_adjacent_tilt_action_reversals": 4.325396825396825
+    },
+    "sac": {
+      "tilt_saturated_action_fraction": 0.06291547958214624,
+      "azimuth_saturated_action_fraction": 0.05792972459639127,
+      "tilt_hard_stop_fraction": 0.09510242843576176,
+      "tilt_outward_clipped_commands": 11.126984126984127,
+      "strong_adjacent_tilt_action_reversals": 3.1507936507936507
+    },
+    "fixed_no_motion": {
+      "tilt_saturated_action_fraction": 0.0,
+      "azimuth_saturated_action_fraction": 0.0,
+      "tilt_hard_stop_fraction": 0.0,
+      "tilt_outward_clipped_commands": 0.0,
+      "strong_adjacent_tilt_action_reversals": 0.0
+    }
+  },
+  "worst_five_days_by_method": {
+    "mbpo": [
+      {
+        "scenario_id": "2021-07-02",
+        "seed": 42,
+        "net_gain_kwh": -0.07765508697736001
+      },
+      {
+        "scenario_id": "2023-02-16",
+        "seed": 42,
+        "net_gain_kwh": -0.07427285376595161
+      },
+      {
+        "scenario_id": "2019-11-10",
+        "seed": 42,
+        "net_gain_kwh": -0.07257702187940934
+      },
+      {
+        "scenario_id": "2024-08-04",
+        "seed": 42,
+        "net_gain_kwh": -0.07129013026392828
+      },
+      {
+        "scenario_id": "2020-06-05",
+        "seed": 42,
+        "net_gain_kwh": -0.06851920381524507
+      }
+    ],
+    "sac": [
+      {
+        "scenario_id": "2018-12-27",
+        "seed": 42,
+        "net_gain_kwh": -0.09138787805247006
+      },
+      {
+        "scenario_id": "2019-12-07",
+        "seed": 42,
+        "net_gain_kwh": -0.07796763054071398
+      },
+      {
+        "scenario_id": "2024-10-09",
+        "seed": 42,
+        "net_gain_kwh": -0.0660440415696254
+      },
+      {
+        "scenario_id": "2024-12-21",
+        "seed": 42,
+        "net_gain_kwh": -0.05990853712513822
+      },
+      {
+        "scenario_id": "2018-10-12",
+        "seed": 42,
+        "net_gain_kwh": -0.05904202613085263
+      }
+    ]
+  },
+  "poa_oracle": {
+    "mbpo": {
+      "oracle_power_below_feasible_step_count": 0,
+      "mean_total_gross_gap_kwh": 0.1368403661065722
+    },
+    "sac": {
+      "oracle_power_below_feasible_step_count": 0,
+      "mean_total_gross_gap_kwh": 0.12184776041649802
+    },
+    "fixed_no_motion": {
+      "oracle_power_below_feasible_step_count": 0,
+      "mean_total_gross_gap_kwh": 0.17219310840916
+    }
+  },
+  "selected_day": "2024-12-23",
+  "selected_day_controller_mechanics": [
+    {
+      "scenario_id": "2024-12-23",
+      "seed": 42,
+      "method": "fixed_no_motion",
+      "max_tilt_mapping_error_deg": 0.0,
+      "max_azimuth_mapping_error_deg": 0.0,
+      "tilt_saturated_action_fraction": 0.0,
+      "azimuth_saturated_action_fraction": 0.0,
+      "tilt_hard_stop_fraction": 0.0,
+      "tilt_outward_clipped_commands": 0,
+      "strong_adjacent_tilt_action_reversals": 0,
+      "gross_energy_kwh": 0.8652252848010872
+    },
+    {
+      "scenario_id": "2024-12-23",
+      "seed": 42,
+      "method": "mbpo",
+      "max_tilt_mapping_error_deg": 7.105427357601002e-15,
+      "max_azimuth_mapping_error_deg": 5.684341886080802e-14,
+      "tilt_saturated_action_fraction": 0.1623931623931624,
+      "azimuth_saturated_action_fraction": 0.02564102564102564,
+      "tilt_hard_stop_fraction": 0.1282051282051282,
+      "tilt_outward_clipped_commands": 15,
+      "strong_adjacent_tilt_action_reversals": 3,
+      "gross_energy_kwh": 0.9371352953907307
+    },
+    {
+      "scenario_id": "2024-12-23",
+      "seed": 42,
+      "method": "sac",
+      "max_tilt_mapping_error_deg": 7.105427357601002e-15,
+      "max_azimuth_mapping_error_deg": 5.684341886080802e-14,
+      "tilt_saturated_action_fraction": 0.09401709401709402,
+      "azimuth_saturated_action_fraction": 0.05128205128205128,
+      "tilt_hard_stop_fraction": 0.042735042735042736,
+      "tilt_outward_clipped_commands": 5,
+      "strong_adjacent_tilt_action_reversals": 7,
+      "gross_energy_kwh": 0.8479357192138994
+    }
+  ],
+  "selected_day_net_kwh": [
+    {
+      "scenario_id": "2024-12-23",
+      "seed": 42,
+      "fixed_no_motion": 0.8652252848010872,
+      "mbpo": 0.9371352953907306,
+      "sac": 0.8479357192138994
+    }
+  ]
+}

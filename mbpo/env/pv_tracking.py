@@ -124,6 +124,13 @@ DEFAULT_STEP_HOURS = _DEFAULT_STEP_HOURS
 DEFAULT_END_HOUR = DEFAULT_START_HOUR + (DEFAULT_PERIODS - 1) * DEFAULT_STEP_HOURS
 
 
+def _rng_index(rng, high):
+    """Select an index using NumPy Generator or legacy RandomState."""
+    if hasattr(rng, 'integers'):
+        return int(rng.integers(high))
+    return int(rng.randint(high))
+
+
 class PVTrackingEnv(gym.Env):
     """RL scenario-sampling environment for single-day PV tracking episodes.
 
@@ -475,7 +482,7 @@ class PVTrackingEnv(gym.Env):
                 len(self._nsrdb_scenarios), p=self._nsrdb_scenario_probs))
             return self._nsrdb_scenarios[index]
         # randomize_day: pick calendar day, then uniform over years with that month/day.
-        index = self.np_random.randint(len(self.start_dates))
+        index = _rng_index(self.np_random, len(self.start_dates))
         m = int(self.start_dates[index].month)
         d = int(self.start_dates[index].day)
         pool = self._nsrdb_by_mday.get((m, d), [])
@@ -483,7 +490,7 @@ class PVTrackingEnv(gym.Env):
             index = int(self.np_random.choice(
                 len(self._nsrdb_scenarios), p=self._nsrdb_scenario_probs))
             return self._nsrdb_scenarios[index]
-        return pool[self.np_random.randint(len(pool))]
+        return pool[_rng_index(self.np_random, len(pool))]
 
     def _resolve_nsrdb_scenario_for_date(self, date):
         """Deterministic scenario for a calendar date (no pool resampling at reset)."""
@@ -809,7 +816,7 @@ class PVTrackingEnv(gym.Env):
                 self._fixed_eval_date_index += 1
             self.current_date = self.fixed_eval_dates[index]
         elif self.randomize_day and len(self.start_dates) > 1:
-            index = self.np_random.randint(len(self.start_dates))
+            index = _rng_index(self.np_random, len(self.start_dates))
             self.current_date = self.start_dates[index]
         else:
             self.current_date = self.start_dates[0]
@@ -851,10 +858,12 @@ class PVTrackingEnv(gym.Env):
         return self._maybe_noise_observation(obs)
 
     def step(self, action):
+        previous_tilt = float(self.tilt)
         delta_tilt = float(action[0]) * self.max_delta_tilt
         delta_azimuth = float(action[1]) * self.max_delta_azimuth
 
         self.tilt = clip_panel_tilt_deg(self.tilt + delta_tilt)
+        executed_delta_tilt = float(self.tilt - previous_tilt)
         self.azimuth = wrap_panel_azimuth_deg(self.azimuth + delta_azimuth)
 
         self.step_index += 1
@@ -875,7 +884,7 @@ class PVTrackingEnv(gym.Env):
             movement_cost = 0.0
         elif self.movement_cost_mode == 'geometry':
             movement_cost = actuator_movement_cost_kwh(
-                delta_tilt,
+                executed_delta_tilt,
                 delta_azimuth,
                 actuator_power_w=self.actuator_power_w,
                 slew_rate_tilt_deg_s=self.slew_rate_tilt_deg_s,

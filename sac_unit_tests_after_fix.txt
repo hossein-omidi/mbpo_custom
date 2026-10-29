@@ -1,0 +1,64 @@
+test_compact_is_not_rescaled (test_contract.ContractTests.test_compact_is_not_rescaled) ... ok
+test_reject_inconsistent_observations (test_contract.ContractTests.test_reject_inconsistent_observations) ... ok
+test_source_config_parses_without_legacy_tensorflow (test_contract.ContractTests.test_source_config_parses_without_legacy_tensorflow) ... ok
+test_ci_deterministic (test_evaluation.PairedEvaluationTests.test_ci_deterministic) ... ok
+test_paired_energy_metrics (test_evaluation.PairedEvaluationTests.test_paired_energy_metrics) ... ok
+test_default_scenarios_from_original_reference_when_compact_is_none (test_evaluation.ReferenceScenarioAndIdealReuseTests.test_default_scenarios_from_original_reference_when_compact_is_none) ... ERROR
+test_ideal_uses_recorded_weather_without_stepping_env (test_evaluation.ReferenceScenarioAndIdealReuseTests.test_ideal_uses_recorded_weather_without_stepping_env) ... ERROR
+test_direct_pvtracking_matches_sac_wrapper_for_117_steps (test_real_pv_parity.RealPhysicsParityTests.test_direct_pvtracking_matches_sac_wrapper_for_117_steps) ... Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+ok
+test_ideal_counterfactual_matches_original_pvlib_power (test_real_pv_parity.RealPhysicsParityTests.test_ideal_counterfactual_matches_original_pvlib_power)
+Real NSRDB episode: ideal power is computed from fixed path without resimulation. ... ok
+test_evaluation_builder_is_independent_of_training_override (test_reference_config_resolution.ReferenceResolutionTests.test_evaluation_builder_is_independent_of_training_override) ... ok
+test_buffer_requires_collected_size (test_sac_math.SACMathTests.test_buffer_requires_collected_size) ... ok
+test_entropy_temperature_respects_reference_minimum (test_sac_math.SACMathTests.test_entropy_temperature_respects_reference_minimum) ... ok
+test_log_density_matches_transformed_distribution (test_sac_math.SACMathTests.test_log_density_matches_transformed_distribution) ... ok
+test_ring_buffer_restores_identical_sampling_state (test_sac_math.SACMathTests.test_ring_buffer_restores_identical_sampling_state) ... ok
+test_tanh_log_probability_gradient (test_sac_math.SACMathTests.test_tanh_log_probability_gradient) ... /home/ecer/miniconda3/envs/simple-worm/lib/python3.12/site-packages/torch/autograd/graph.py:1072: UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 12030). Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx Alternatively, go to: https://pytorch.org to install a PyTorch version that has been compiled with your version of the CUDA driver. (Triggered internally at /__w/pytorch/pytorch/c10/cuda/CUDAFunctions.cpp:119.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+ok
+test_terminal_mask_and_exact_reward_scaling (test_sac_math.SACMathTests.test_terminal_mask_and_exact_reward_scaling) ... ok
+test_update_is_finite_and_changes_targets (test_sac_math.SACMathTests.test_update_is_finite_and_changes_targets) ... ok
+test_2557_day_frame_selects_252_balanced_dates (test_scenario_sampling.ScenarioSampleTests.test_2557_day_frame_selects_252_balanced_dates) ... ok
+test_complete_paired_weights_and_offline_figures (test_scenario_sampling.ScenarioSampleTests.test_complete_paired_weights_and_offline_figures) ... /home/ecer/miniconda3/envs/simple-worm/lib/python3.12/site-packages/matplotlib/_fontconfig_pattern.py:64: PyparsingDeprecationWarning: 'oneOf' deprecated - use 'one_of'
+  prop = Group((name + Suppress("=") + comma_separated(value)) | oneOf(_CONSTANTS))
+/home/ecer/miniconda3/envs/simple-worm/lib/python3.12/site-packages/matplotlib/_fontconfig_pattern.py:85: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+  parse = parser.parseString(pattern)
+/home/ecer/miniconda3/envs/simple-worm/lib/python3.12/site-packages/matplotlib/_fontconfig_pattern.py:89: PyparsingDeprecationWarning: 'resetCache' deprecated - use 'reset_cache'
+  parser.resetCache()
+/home/ecer/miniconda3/envs/simple-worm/lib/python3.12/site-packages/matplotlib/_mathtext.py:45: PyparsingDeprecationWarning: 'enablePackrat' deprecated - use 'enable_packrat'
+  ParserElement.enablePackrat()
+In /home/ecer/miniconda3/envs/simple-worm/lib/python3.12/site-packages/matplotlib/mpl-data/stylelib/classic.mplstyle: 'parseString' deprecated - use 'parse_string'
+In /home/ecer/miniconda3/envs/simple-worm/lib/python3.12/site-packages/matplotlib/mpl-data/stylelib/classic.mplstyle: 'resetCache' deprecated - use 'reset_cache'
+ok
+test_excluded_training_scenarios_and_plan_tamper_rejected (test_scenario_sampling.ScenarioSampleTests.test_excluded_training_scenarios_and_plan_tamper_rejected) ... ok
+test_sac_legacy_reference_alias_and_ideal_mock_interval (test_scenario_sampling.ScenarioSampleTests.test_sac_legacy_reference_alias_and_ideal_mock_interval) ... ok
+
+======================================================================
+ERROR: test_default_scenarios_from_original_reference_when_compact_is_none (test_evaluation.ReferenceScenarioAndIdealReuseTests.test_default_scenarios_from_original_reference_when_compact_is_none)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/ecer/projects/PVLIB_Paper/mbpo_custom/SAC_workspace/tests/test_evaluation.py", line 34, in test_default_scenarios_from_original_reference_when_compact_is_none
+    self.assertEqual(evaluation.resolve_scenario_ids(cfg,['2024-06-21']),['2024-06-21'])
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: resolve_scenario_ids() takes 1 positional argument but 2 were given
+
+======================================================================
+ERROR: test_ideal_uses_recorded_weather_without_stepping_env (test_evaluation.ReferenceScenarioAndIdealReuseTests.test_ideal_uses_recorded_weather_without_stepping_env)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/ecer/projects/PVLIB_Paper/mbpo_custom/SAC_workspace/tests/test_evaluation.py", line 61, in test_ideal_uses_recorded_weather_without_stepping_env
+    out=ideal_instantaneous_dual_axis(None,fixed,env=fake_env)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ecer/projects/PVLIB_Paper/mbpo_custom/SAC_workspace/src/evaluation/evaluation.py", line 153, in ideal_instantaneous_dual_axis
+    if n == 0 or n != len(fixed_path['energy']):
+                          ~~~~~~~~~~^^^^^^^^^^
+KeyError: 'energy'
+
+----------------------------------------------------------------------
+Ran 21 tests in 11.367s
+
+FAILED (errors=2)
