@@ -21,6 +21,12 @@ def main():
                    help='Do not render the offline advanced PNG/PDF suite after evaluation')
     p.add_argument('--representation-config', default='MBPO_workspace/representation_config.json',
                    help='JSON profile controlling visible comparisons without deleting legacy trackers')
+    # Single electrical backend selection shared by SAC and MBPO.
+    p.add_argument('--power-model',choices=('legacy','pvwatts_sapm'),default='legacy')
+    p.add_argument('--wind-reference-height-m',type=float,default=2.0)
+    p.add_argument('--gamma-pdc',type=float,default=-0.004)
+    p.add_argument('--sapm-mount',default='open_rack_glass_polymer')
+    p.add_argument('--wind-powerlaw-exponent',type=float,default=0.14)
     args=p.parse_args()
     # A requested training history is part of the scientific provenance.
     # Fail before expensive NSRDB evaluation rather than silently omitting
@@ -37,7 +43,11 @@ def main():
         p.error('Current verified profile supports exactly MBPO, SAC, fixed and POA oracle')
     if args.skip_poa_opt:
         p.error('POA-only representation requires POA optimization; remove --skip-poa-opt')
-    cfg=load_config()
+    power_kwargs=dict(power_model=args.power_model,
+        wind_reference_height_m=args.wind_reference_height_m,
+        gamma_pdc=args.gamma_pdc, sapm_mount=args.sapm_mount,
+        wind_powerlaw_exponent=args.wind_powerlaw_exponent)
+    cfg=load_config(**power_kwargs)
     from mbpo.env.nsrdb_weather import load_scenario_manifest
     from SAC_workspace.src.evaluation.scenario_sampling import resolve_cli_selection,save_selection
     try:

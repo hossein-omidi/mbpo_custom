@@ -59,8 +59,12 @@ class MBPOConfig:
                 'schema': 'mbpo-torch-structured-v1'}
 
 
-def load_config(require_data=True, model_overrides=None) -> MBPOConfig:
-    sac = load_sac_config(require_data=require_data)
+def load_config(require_data=True, model_overrides=None, *, power_model='legacy',
+                wind_reference_height_m=2.0, gamma_pdc=-0.004,
+                sapm_mount='open_rack_glass_polymer', wind_powerlaw_exponent=0.14) -> MBPOConfig:
+    sac = load_sac_config(require_data=require_data, power_model=power_model,
+        wind_reference_height_m=wind_reference_height_m, gamma_pdc=gamma_pdc,
+        sapm_mount=sapm_mount, wind_powerlaw_exponent=wind_powerlaw_exponent)
     keys = {'real_ratio','num_networks','num_elites','hidden_dim',
             'max_model_rollout_length','model_train_freq','rollout_batch_size','model_retain_epochs'}
     orig = _literal_mapping_fields(_SKELETON, 'params', keys)

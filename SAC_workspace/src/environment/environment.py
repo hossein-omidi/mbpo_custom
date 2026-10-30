@@ -56,6 +56,25 @@ class SACEnvironment:
             'observation_mode': value('observation_mode'),
             'horizon': self.horizon,
         }
+        if source.power_model == 'pvwatts_sapm':
+            import hashlib
+            from pathlib import Path
+            from mbpo.env import pv_power_backend, pvlib_physics, pv_tracking
+            digest = hashlib.sha256()
+            for module in (pv_power_backend, pvlib_physics, pv_tracking):
+                digest.update(Path(module.__file__).read_bytes())
+            self.resolved_mdp.update(
+                power_model=source.power_model,
+                wind_reference_height_m=float(source.wind_reference_height_m),
+                gamma_pdc=float(source.gamma_pdc),
+                sapm_mount=source.sapm_mount,
+                wind_powerlaw_exponent=float(source.wind_powerlaw_exponent),
+                power_source_sha256=digest.hexdigest(),
+                pv_power_backend_sha256=hashlib.sha256(
+                    Path(pv_power_backend.__file__).read_bytes()).hexdigest(),
+                pvlib_physics_sha256=hashlib.sha256(
+                    Path(pvlib_physics.__file__).read_bytes()).hexdigest(),
+            )
 
     def seed(self, seed: int) -> None:
         self.env.seed(seed)
@@ -85,6 +104,19 @@ class SACEnvironment:
             raise RuntimeError('PVTrackingEnv compact tau feature does not match step count')
         if not np.isclose(reward, float(info['energy_kwh']) - float(info['movement_cost']), atol=1e-9):
             raise RuntimeError('Step reward differs from the reference net-energy definition')
+        if getattr(self.env, 'power_model', 'legacy') == 'pvwatts_sapm':
+            if info.get('power_model') != 'pvwatts_sapm':
+                raise RuntimeError('PVWatts transition reported wrong backend')
+            expected_energy = float(info['power_dc_w']) * float(self.env.interval_hours) / 1000.0
+            if not np.isclose(expected_energy, float(info['energy_kwh']), rtol=0, atol=1e-10):
+                raise RuntimeError('Power/energy identity failed for PVWatts')
+            if not np.isclose(float(info['power']), float(info['power_dc_w']), rtol=0, atol=1e-10):
+                raise RuntimeError('PVWatts DC power reporting mismatch')
+            if info.get('cell_temperature_c') is None or info.get('wind_speed_10m_ms') is None:
+                raise RuntimeError('Missing PVWatts cell temperature or wind metadata')
+            # Normalized power is the *same* third feature in both physics modes.
+            if not np.isclose(observation[2], np.clip(float(info['power_dc_w']) / 2000., 0, 1), atol=1e-6):
+                raise RuntimeError('PVWatts power observation is inconsistent')
         expected_time = self.env.times[self.steps]
         actual_time = pd.Timestamp(info['timestamp_utc_iso'])
         if (actual_time != expected_time or str(info['timezone']).upper() != 'UTC'

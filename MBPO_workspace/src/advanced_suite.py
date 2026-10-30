@@ -20,10 +20,13 @@ from matplotlib.backends.backend_pdf import PdfPages
 VISIBLE=('mbpo','sac','fixed_no_motion','poa_instant_ideal')
 FEASIBLE=VISIBLE[:3]
 LABELS={'mbpo':'MBPO','sac':'SAC','fixed_no_motion':'Fixed mount',
-        'poa_instant_ideal':'Instant POA (gross-only)'}
+        'poa_instant_ideal':'Instant DC optimum (gross-only)'}
 DETAIL=('net_step_kwh','action_tilt','action_azimuth','actual_delta_tilt_deg',
         'actual_delta_azimuth_deg','pre_tilt_deg','pre_azimuth_deg','solar_zenith_deg',
-        'solar_azimuth_deg','dni_wm2','dhi_wm2','ghi_wm2','weather_condition')
+        'solar_azimuth_deg','dni_wm2','dhi_wm2','ghi_wm2','weather_condition',
+        'power_model','poa_global','poa_global_wm2','power_dc_w','effective_irradiance_wm2',
+        'cell_temperature_c','ambient_temperature_c','wind_speed_m_s','wind_speed_10m_ms',
+        'wind_reference_height_m','gamma_pdc','sapm_mount','wind_powerlaw_exponent')
 BASIC=('scenario_id','seed','method','step','utc_iso','power_w','energy_kwh',
        'cumulative_gross_kwh','tilt_deg','azimuth_deg','movement_cost_kwh')
 ALL=BASIC+DETAIL
@@ -87,7 +90,19 @@ def export_detail(paths, outdir):
                          solar_zenith_deg=info.get('solar_zenith_deg'),
                          solar_azimuth_deg=info.get('solar_azimuth_deg'),
                          dni_wm2=info.get('dni_wm2'),dhi_wm2=info.get('dhi_wm2'),
-                         ghi_wm2=info.get('ghi_wm2'),weather_condition=info.get('weather_condition'))
+                         ghi_wm2=info.get('ghi_wm2'),weather_condition=info.get('weather_condition'),
+                         power_model=info.get('power_model','legacy'),
+                         poa_global=info.get('poa_global'),
+                         poa_global_wm2=info.get('poa_global'),power_dc_w=info.get('power_dc_w'),
+                         effective_irradiance_wm2=info.get('effective_irradiance_wm2'),
+                         cell_temperature_c=info.get('cell_temperature_c'),
+                         ambient_temperature_c=info.get('ambient_temperature_c'),
+                         wind_speed_m_s=info.get('wind_speed_m_s'),
+                         wind_speed_10m_ms=info.get('wind_speed_10m_ms'),
+                         wind_reference_height_m=info.get('wind_reference_height_m'),
+                         gamma_pdc=info.get('gamma_pdc'),
+                         sapm_mount=info.get('sapm_mount'),
+                         wind_powerlaw_exponent=info.get('wind_powerlaw_exponent'))
                 w.writerow(row)
     return fp
 
@@ -128,7 +143,7 @@ def _read_eval(folder):
             if source==legacy_rich:
                 row['utc_iso']=row.get('timestamp_utc_iso')
                 row['net_step_kwh']=row.get('reward_kwh') if method!='poa_instant_ideal' else None
-            parsed={k:(_float(row.get(k)) if k not in ('scenario_id','method','utc_iso','weather_condition') else row.get(k)) for k in ALL}
+            parsed={k:(_float(row.get(k)) if k not in ('scenario_id','method','utc_iso','weather_condition','power_model','sapm_mount') else row.get(k)) for k in ALL}
             parsed['scenario_id']=key[0];parsed['seed']=key[1];parsed['method']=method
             parsed['step']=int(row['step']);parsed['utc_iso']=str(row['utc_iso'])
             grouped[key].append(parsed)
@@ -287,14 +302,14 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
         line_bands('01_power_weighted_mean_spread.png','power_w',VISIBLE,
                    'PV power across NSRDB sampled days — observed weather variability')
         line_bands('02_cumulative_gross_weighted_mean_spread.png','cumulative_gross_kwh',VISIBLE,
-                   'Cumulative gross generation — includes POA gross-only reference')
+                   'Cumulative gross DC generation — includes unconstrained upper bound')
         line_bands('03_cumulative_net_weighted_mean_spread.png','cumulative_net_kwh',FEASIBLE,
                    'Cumulative feasible net generation (no gross-only oracle)')
 
         # Paired POA gross power surplus and MBPO–SAC gross power differences.
         for metric,filename,comparison,title in (
             ('power_w','04_poa_minus_mbpo_power_band.png',('poa_instant_ideal','mbpo'),
-             'Paired instantaneous POA power surplus over MBPO (gross)'),
+             'Paired instantaneous DC upper-bound surplus over MBPO (gross)'),
             ('power_w','05_mbpo_minus_sac_power_band.png',('mbpo','sac'),
              'Paired physical power contrast: MBPO minus SAC')):
             series=_day_curves(grouped,metric,comparison)
@@ -378,7 +393,7 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
         im=ax.imshow(gap,aspect='auto',cmap='RdBu_r',vmin=-vmax,vmax=vmax,interpolation='nearest')
         ix=np.linspace(0,116,7).astype(int)
         ax.set_xticks(ix,[f'{hours[i]:.1f}' for i in ix]);ax.set(xlabel='UTC post-step hour',
-            ylabel='Distinct sampled scenario day, sorted',title='POA gross power minus MBPO gross power (W)')
+            ylabel='Distinct sampled scenario day, sorted',title='Instantaneous DC upper bound minus MBPO DC power (W)')
         if len(day_sids)<=30:
             ax.set_yticks(np.arange(len(day_sids)),day_sids,fontsize=7)
         fig.colorbar(im,ax=ax,label='POA − MBPO power (W)')
@@ -412,7 +427,7 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
             monthly('movement_total_deg','13_monthly_weighted_movement.png',FEASIBLE,'Abs. tilt + azimuth travel (degrees / window)',
                     'Population-bin weighted physical motion — no motor electricity implied')
             monthly('gross_energy_kwh','14_monthly_gross_poa.png',VISIBLE,'Mean gross kWh / window',
-                    'Gross PV energy including ideal unconstrained POA')
+                    'Gross DC energy including unconstrained upper bound')
 
             # Scientific separation: POA oracle has GROSS only; a common net-energy
             # plot must NEVER include it. Both charts use the same sampled days and
@@ -421,7 +436,7 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
                      ('summer',(6,7,8)),('fall',(9,10,11))]
             for metric,methods,filename,heading in (
                 ('gross_energy_kwh',VISIBLE,'21_seasonal_weighted_energy.png',
-                 'Seasonal gross PV energy: all policies and instantaneous POA reference'),
+                 'Seasonal gross DC energy: policies and instantaneous upper bound'),
                 ('net_energy_kwh',FEASIBLE,'27_seasonal_weighted_net_energy.png',
                  'Seasonal feasible net PV energy: POA oracle excluded')):
                 fig,ax=plt.subplots(figsize=(10.5,5.2));shown=0

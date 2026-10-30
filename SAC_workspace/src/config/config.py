@@ -154,7 +154,10 @@ class SACConfig:
                 'reference_configs': [str(p) for p in self.config_paths]}
 
 
-def load_config(require_data: bool = True) -> SACConfig:
+def load_config(require_data: bool = True, *, power_model='legacy',
+                wind_reference_height_m=2.0, gamma_pdc=-0.004,
+                sapm_mount='open_rack_glass_polymer',
+                wind_powerlaw_exponent=0.14) -> SACConfig:
     """Materialize the effective *compact MBPO task* for an independent SAC run.
 
     Only optimizer and replay implementation are SAC-specific; environmental
@@ -164,8 +167,27 @@ def load_config(require_data: bool = True) -> SACConfig:
     nsrdb.update(_call_kwargs(_COMPACT, 'build_nsrdb_params', 'train_env_kwargs'))
     eval_env = _reference_eval_defaults(_BASE)
     eval_env.update(_call_kwargs(_COMPACT, 'build_nsrdb_params', 'eval_env_kwargs'))
+    if power_model not in ('legacy', 'pvwatts_sapm'):
+        raise ValueError(f'Unknown power_model {power_model!r}')
+    if power_model == 'pvwatts_sapm':
+        import math
+        from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS
+        if (wind_reference_height_m is None or not math.isfinite(float(wind_reference_height_m))
+                or float(wind_reference_height_m) <= 0):
+            raise ValueError('A positive wind reference height is mandatory')
+        if not -0.02 < float(gamma_pdc) <= 0:
+            raise ValueError('Invalid gamma_pdc')
+        if sapm_mount not in TEMPERATURE_MODEL_PARAMETERS['sapm']:
+            raise ValueError('Unknown SAPM mount preset')
+        if not 0 <= float(wind_powerlaw_exponent) <= 1:
+            raise ValueError('Invalid wind exponent')
     for env in (nsrdb, eval_env):
         env['scenario_manifest'] = str((ROOT / _constant(_BASE, 'NSRDB_MANIFEST')).resolve())
+        if power_model == 'pvwatts_sapm':
+            env.update(power_model=power_model,
+                       wind_reference_height_m=float(wind_reference_height_m),
+                       gamma_pdc=float(gamma_pdc), sapm_mount=str(sapm_mount),
+                       wind_powerlaw_exponent=float(wind_powerlaw_exponent))
     skeleton = _literal_mapping_fields(_SKELETON, 'params', {'discount', 'tau', 'reward_scale', 'n_train_repeat', 'n_epochs', 'n_initial_exploration_steps', 'min_alpha'})
     base_algo = _updated_dict(_BASE, 'default_nsrdb_algo_kwargs', 'kw')
     # The default NSRDB algorithm block is a literal dict, and conf_compact overrides it.

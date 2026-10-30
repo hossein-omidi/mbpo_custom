@@ -16,7 +16,7 @@ from MBPO_workspace.src.evaluation import METHODS,FEASIBLE
 LABELS={'mbpo':'Remastered MBPO','sac':'Standalone SAC',
         'fixed_no_motion':'Fixed mount','dual_axis_slew_limited':'Dual axis (rate-limited)',
         'dual_axis_instant_ideal':'Ideal sun pointing (gross only)',
-        'poa_instant_ideal':'Instant POA optimum (gross only)'}
+        'poa_instant_ideal':'Instant DC upper bound (gross only)'}
 
 
 def _utc_hours(path):

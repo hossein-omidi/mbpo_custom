@@ -25,11 +25,17 @@ PHYSICS_KEYS=('pvlib_version','gym_version','site_latitude','site_longitude','si
     'max_delta_tilt','max_delta_azimuth','movement_penalty','movement_cost_mode',
     'actuator_power_w','slew_rate_tilt_deg_s','slew_rate_azimuth_deg_s',
     'observation_mode','horizon')
+PVWATTS_PHYSICS_KEYS=('power_model','wind_reference_height_m','gamma_pdc',
+    'sapm_mount','wind_powerlaw_exponent','power_source_sha256',
+    'pv_power_backend_sha256','pvlib_physics_sha256')
 
 
 def _check_physics(saved, actual):
     if not saved: raise ValueError('Checkpoint lacks effective MDP metadata')
-    for k in PHYSICS_KEYS:
+    if (saved.get('power_model', 'legacy') != actual.get('power_model', 'legacy')):
+        raise ValueError('Physical MDP mismatch: checkpoint and evaluator use different power models')
+    keys = PHYSICS_KEYS + (PVWATTS_PHYSICS_KEYS if actual.get('power_model') == 'pvwatts_sapm' else ())
+    for k in keys:
         if saved.get(k)!=actual.get(k):
             raise ValueError(f'Physical MDP mismatch for {k}: {saved.get(k)} != {actual.get(k)}')
 
@@ -50,14 +56,15 @@ def load_mbpo_agent(cfg: MBPOConfig, checkpoint,device='cpu'):
 
 def ideal_instantaneous_poa(cfg, fixed_path, env=None):
     """Instantaneous, actuator-unconstrained maximum POA under the project's
-    default *isotropic* transposition model. At a fixed tilt, beam incidence is
-    maximized by facing solar azimuth; sky/ground diffuse terms are azimuth-
-    independent. Optimize the remaining tilt coordinate numerically with the
-    canonical project compute_panel_power_w, including the interval endpoints.
-    This is an upper bound for GROSS energy, not an optimal finite-horizon policy.
+    default *isotropic* transposition model. The POA-optimal tilt is
+    computed analytically, with azimuth facing the sun. Under PVWatts the
+    temperature-corrected DC model must be monotone in POA; this is verified
+    before reporting a certified instantaneous gross-DC upper bound. No
+    action/slew limits apply and this is not a feasible controller.
     """
-    from scipy.optimize import minimize_scalar
-    from mbpo.env.pvlib_physics import compute_panel_power_w
+    from mbpo.env.baseline_contract import (
+        isotropic_max_poa_tilt, certify_pvwatts_monotonicity)
+    from mbpo.env.pv_power_backend import compute_pv_power
     owns = env is None
     if owns: env = SACEnvironment(cfg.eval_env)
     p={'method':'poa_instant_ideal','scenario_id':fixed_path['scenario_id'],
@@ -76,16 +83,29 @@ def ideal_instantaneous_poa(cfg, fixed_path, env=None):
             for key in ('solar_zenith_deg','solar_azimuth_deg','dni_wm2','ghi_wm2','dhi_wm2'):
                 if info.get(key) is None: raise ValueError('POA reference weather missing '+key)
             az=float(info['solar_azimuth_deg'])%360.
-            def value(tilt):
-                return compute_panel_power_w(float(tilt),az,info['solar_zenith_deg'],
-                         info['solar_azimuth_deg'],info['dni_wm2'],
-                         info['ghi_wm2'],info['dhi_wm2'],area=area,efficiency=efficiency)
-            res=minimize_scalar(lambda tilt:-value(tilt),bounds=(0.,90.),
-                                method='bounded',options={'xatol':1e-6})
-            if not res.success:raise RuntimeError('POA optimizer failed')
-            candidates=[0.,90.,float(res.x)]
-            tilt=max(candidates,key=value)
-            power=float(value(tilt));energy=power*hours/1000.
+            def physical(tilt):
+                return compute_pv_power(float(tilt),az,info['solar_zenith_deg'],
+                    info['solar_azimuth_deg'],info['dni_wm2'],info['ghi_wm2'],info['dhi_wm2'],
+                    area=area, efficiency=efficiency, power_model=getattr(u,'power_model','legacy'),
+                    temp_air_c=info.get('temperature_c',info.get('ambient_temperature_c')),
+                    wind_speed_ms=info.get('wind_speed_m_s'),
+                    wind_reference_height_m=getattr(u,'wind_reference_height_m',None),
+                    gamma_pdc=getattr(u,'gamma_pdc',-0.004),
+                    sapm_mount=getattr(u,'sapm_mount','open_rack_glass_polymer'),
+                    wind_powerlaw_exponent=getattr(u,'wind_powerlaw_exponent',0.14))
+            # The monofacial isotropic POA maximum is analytic, not a local
+            # bounded-search approximation. With the current SAPM temperature
+            # law, the PVWatts DC equation is monotone in POA over the
+            # operating interval only when certified below.
+            tilt=isotropic_max_poa_tilt(info['solar_zenith_deg'],
+                info['dni_wm2'],info['ghi_wm2'],info['dhi_wm2'])
+            selected=physical(tilt)
+            if getattr(u,'power_model','legacy') == 'pvwatts_sapm':
+                certify_pvwatts_monotonicity(
+                    selected,info.get('temperature_c',info.get('ambient_temperature_c')),
+                    getattr(u,'gamma_pdc',-0.004))
+            power=float(selected.power_w)
+            energy=power*hours/1000.
             # An unconstrained gross-power oracle must dominate the feasible
             # fixed orientation under IDENTICAL recorded weather. Catch
             # optimizer/model regressions before publishing an upper bound.
@@ -101,7 +121,19 @@ def ideal_instantaneous_poa(cfg, fixed_path, env=None):
             p['tilt'].append(float(tilt));p['azimuth'].append(float(az))
             for key in ('action_tilt','action_azimuth','delta_tilt_deg','delta_azimuth_deg'):
                 p[key].append(float('nan'))
-            p['infos'].append(dict(info))
+            metadata=dict(info)
+            result=selected
+            metadata.update(power=power,power_dc_w=power,
+                poa_global=result.poa_global_wm2,
+                effective_irradiance_wm2=result.effective_irradiance_wm2,
+                cell_temperature_c=result.cell_temperature_c,
+                wind_speed_10m_ms=result.wind_speed_10m_ms,
+                power_model=getattr(u,'power_model','legacy'),
+                tilt=float(tilt),azimuth=float(az),
+                cos_aoi=(u._cos_angle_of_incidence(info['solar_zenith_deg'],
+                    info['solar_azimuth_deg'],float(tilt),float(az))
+                    if hasattr(u,'_cos_angle_of_incidence') else None))
+            p['infos'].append(metadata)
     finally:
         if owns:env.close()
     p['gross_energy_kwh']=float(sum(p['energy']))
@@ -112,6 +144,7 @@ def ideal_instantaneous_poa(cfg, fixed_path, env=None):
 def evaluate(cfg:MBPOConfig, mbpo_checkpoint, sac_checkpoint, scenarios=None,
              seeds=(42,),device='cpu',include_poa=True,include_classical=True):
     from mbpo.env.nsrdb_weather import load_scenario_manifest
+    from mbpo.env.baseline_contract import validate_paired_reference_group
     known={s['scenario_id'] for s in load_scenario_manifest(cfg.sac.manifest)['scenarios']}
     if scenarios is None: scenarios=reference_scenario_ids(cfg.sac)
     scenarios=list(scenarios);seeds=list(seeds)
@@ -148,6 +181,8 @@ def evaluate(cfg:MBPOConfig, mbpo_checkpoint, sac_checkpoint, scenarios=None,
                         raise RuntimeError('Unequal paired initial orientation')
                     if [i['timestamp_utc_iso'] for i in p['infos']]!=expected:
                         raise RuntimeError('Mismatch in five-minute UTC episode clocks')
+                validate_paired_reference_group(
+                    {p['method']:p for p in group}, require_oracle=include_poa)
                 paths.extend(group)
     finally:
         env.close()
@@ -171,8 +206,9 @@ def paired_summary(paths, plan=None):
          'paired_episodes':len(keys),'methods':{},'paired_net_kwh':{},
          'notes':['Instantaneous dual-axis is a sun-pointing GROSS-only reference, '
                   'not a globally optimized POA oracle, and not actuator-feasible.',
-                  'Instantaneous POA optimizer maximizes single-step gross power for the '
-                  'isotropic transposition model, not global finite-horizon net energy.',
+                  'Instantaneous DC reference maximizes single-step gross DC power for the '
+                  'isotropic, monotone-PVWatts model (or legacy POA model); it is '
+                  'unconstrained and not a finite-horizon net-energy policy.',
                   'Training and evaluation scenarios may overlap; do not claim a held-out result '
                   'without a disjoint training protocol.']}
     available=[m for m in METHODS if m in next(iter(keys.values()))]
@@ -246,6 +282,18 @@ def paired_summary(paths, plan=None):
 def write_outputs(paths,outdir,plan=None):
     out=Path(outdir);out.mkdir(parents=True,exist_ok=True)
     stats=paired_summary(paths,plan=plan)
+    models={info.get('power_model','legacy') for p in paths for info in p['infos']}
+    if len(models)!=1:
+        raise ValueError('Mixed electrical power models in the same evaluation output')
+    stats['power_model']=next(iter(models))
+    # Record the power physics in summaries, not only in checkpoint snapshots.
+    fields=('wind_reference_height_m','gamma_pdc','sapm_mount','wind_powerlaw_exponent')
+    declared={tuple((k,info.get(k)) for k in fields)
+              for p in paths for info in p['infos']}
+    if len(declared)!=1:
+        raise ValueError('Inconsistent PV temperature/wind parameters across evaluation paths')
+    stats['power_physics']={'model':stats['power_model'],
+         **dict(next(iter(declared)))}
     def clean(x):
         if isinstance(x,dict):return {k:clean(v) for k,v in x.items()}
         if isinstance(x,list):return [clean(v) for v in x]

@@ -16,12 +16,22 @@ def main():
     ap.add_argument('--device', default='cpu')
     ap.add_argument('--training-csv', default=None)
     ap.add_argument('--representation-config',default='MBPO_workspace/representation_config.json')
+    # Single electrical backend selection shared by SAC and MBPO.
+    ap.add_argument('--power-model',choices=('legacy','pvwatts_sapm'),default='legacy')
+    ap.add_argument('--wind-reference-height-m',type=float,default=2.0)
+    ap.add_argument('--gamma-pdc',type=float,default=-0.004)
+    ap.add_argument('--sapm-mount',default='open_rack_glass_polymer')
+    ap.add_argument('--wind-powerlaw-exponent',type=float,default=0.14)
     args=ap.parse_args()
     import json
     profile=json.loads(Path(args.representation_config).read_text())
     if 'poa_instant_ideal' not in profile.get('active_methods',[]):
         ap.error('POA-only representation must enable poa_instant_ideal')
-    cfg=load_config()
+    power_kwargs=dict(power_model=args.power_model,
+        wind_reference_height_m=args.wind_reference_height_m,
+        gamma_pdc=args.gamma_pdc, sapm_mount=args.sapm_mount,
+        wind_powerlaw_exponent=args.wind_powerlaw_exponent)
+    cfg=load_config(**power_kwargs)
     from mbpo.env.nsrdb_weather import load_scenario_manifest
     from SAC_workspace.src.evaluation.scenario_sampling import resolve_cli_selection,save_selection
     manifest = load_scenario_manifest(cfg.manifest)

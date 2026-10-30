@@ -179,6 +179,11 @@ class PVTrackingEnv(gym.Env):
         observation_noise_std=0.0,
         observation_mode='legacy',
         log_observations=False,
+        power_model='legacy',
+        wind_reference_height_m=None,
+        gamma_pdc=-0.004,
+        sapm_mount='open_rack_glass_polymer',
+        wind_powerlaw_exponent=0.14,
     ):
         self.location = Location(latitude, longitude, tz=tz, altitude=altitude)
         self.start_date = pd.Timestamp(start_date, tz=tz)
@@ -220,6 +225,18 @@ class PVTrackingEnv(gym.Env):
         self.temperature_variation = 5.0
         self.wind_speed = wind_speed
         self.wind_speed_variation = 1.0
+        from mbpo.env.pv_power_backend import compute_pv_power
+        if power_model not in ('legacy', 'pvwatts_sapm'):
+            raise ValueError(f'Unrecognized power_model {power_model!r}')
+        # The PVWatts model requires a real wind reference height; never guess.
+        if power_model == 'pvwatts_sapm' and wind_reference_height_m is None:
+            raise ValueError('PVWatts requires explicit wind_reference_height_m')
+        self.power_model = str(power_model)
+        self.wind_reference_height_m = wind_reference_height_m
+        self.gamma_pdc = float(gamma_pdc)
+        self.sapm_mount = str(sapm_mount)
+        self.wind_powerlaw_exponent = float(wind_powerlaw_exponent)
+        self._last_power_result = None
         self.movement_penalty = float(movement_penalty)
         self.movement_cost_mode = str(movement_cost_mode).lower()
         if self.movement_cost_mode not in ('legacy', 'geometry'):
@@ -681,14 +698,35 @@ class PVTrackingEnv(gym.Env):
         self._obs_log_steps_remaining -= 1
 
     def _power_from_orientation(self, solar_zenith, solar_azimuth, tilt, azimuth):
+        """Compute the active DC backend at the CURRENT weather timestamp.
+
+        Keep the original legacy compute_panel_power_w path intact for audit and
+        existing physics-spy tests. Store the complete result for diagnostics.
+        """
+        from mbpo.env.pv_power_backend import PowerResult, compute_pv_power
         weather = self._current_weather()
-        return compute_panel_power_w(
-            tilt, azimuth,
-            solar_zenith, solar_azimuth,
+        if self.power_model == 'legacy':
+            power = compute_panel_power_w(
+                tilt, azimuth, solar_zenith, solar_azimuth,
+                weather['dni'], weather['ghi'], weather['dhi'],
+                area=self.area, efficiency=self.efficiency)
+            poa = power / (self.efficiency * self.area)
+            self._last_power_result = PowerResult(
+                power, poa, poa, None, None, None, None, 'legacy')
+            return power
+        result = compute_pv_power(
+            tilt, azimuth, solar_zenith, solar_azimuth,
             weather['dni'], weather['ghi'], weather['dhi'],
-            area=self.area,
-            efficiency=self.efficiency,
-        )
+            area=self.area, efficiency=self.efficiency,
+            power_model=self.power_model,
+            temp_air_c=weather['temperature'],
+            wind_speed_ms=weather['wind_speed'],
+            wind_reference_height_m=self.wind_reference_height_m,
+            gamma_pdc=self.gamma_pdc, sapm_mount=self.sapm_mount,
+            wind_powerlaw_exponent=self.wind_powerlaw_exponent)
+        self._last_power_result = result
+        return float(result.power_w)
+
     def _build_observation(self, solar_zenith, solar_azimuth, weather, power):
         """Build observation based on observation_mode.
         
@@ -919,7 +957,20 @@ class PVTrackingEnv(gym.Env):
 
         solar_alt = float(90.0 - solar_position.zenith)
         info = {
-            'poa_global': float(power / self.efficiency / self.area),
+            'poa_global': float(self._last_power_result.poa_global_wm2),
+            'power_dc_w': float(power),
+            'effective_irradiance_wm2': float(self._last_power_result.effective_irradiance_wm2),
+            'cell_temperature_c': self._last_power_result.cell_temperature_c,
+            'ambient_temperature_c': float(weather['temperature']),
+            'wind_speed_m_s': float(weather['wind_speed']),
+            'wind_speed_10m_ms': self._last_power_result.wind_speed_10m_ms,
+            'power_model': self.power_model,
+            'wind_reference_height_m': (self.wind_reference_height_m
+                if self.power_model == 'pvwatts_sapm' else None),
+            'gamma_pdc': (self.gamma_pdc if self.power_model == 'pvwatts_sapm' else None),
+            'sapm_mount': (self.sapm_mount if self.power_model == 'pvwatts_sapm' else None),
+            'wind_powerlaw_exponent': (self.wind_powerlaw_exponent
+                if self.power_model == 'pvwatts_sapm' else None),
             'power': float(power),
             'energy_kwh': float(energy_kwh),
             'movement_cost': float(movement_cost),

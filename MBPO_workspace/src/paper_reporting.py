@@ -30,20 +30,23 @@ LABELS = {
     'mbpo': 'MBPO (remastered)', 'sac': 'SAC (model-free)',
     'fixed_no_motion': 'Fixed mount', 'dual_axis_slew_limited': 'Dual axis (slew-limited)',
     'dual_axis_instant_ideal': 'Sun pointing (ideal; gross only)',
-    'poa_instant_ideal': 'POA optimum (ideal; gross only)',
+    'poa_instant_ideal': 'Selected DC optimum (ideal; gross only)',
 }
 IDEALS = set(METHODS) - set(FEASIBLE)
 FIELDS = (
     'scenario_id','seed','method','step','timestamp_utc_iso','clock_hour_utc',
     'season','weather_condition','solar_zenith_deg','solar_azimuth_deg',
     'solar_altitude_deg','dni_wm2','dhi_wm2','ghi_wm2',
+    'power_model','poa_global','poa_global_wm2','power_dc_w','effective_irradiance_wm2',
+    'cell_temperature_c','ambient_temperature_c','wind_speed_m_s','wind_speed_10m_ms',
+    'wind_reference_height_m','gamma_pdc','sapm_mount','wind_powerlaw_exponent',
     'power_w','energy_kwh','reward_kwh','movement_cost_kwh',
     'cumulative_gross_kwh','cumulative_net_kwh',
     'pre_tilt_deg','pre_azimuth_deg','tilt_deg','azimuth_deg',
     'action_tilt','action_azimuth','actual_delta_tilt_deg','actual_delta_azimuth_deg',
     'tilt_sun_target_deg','tilt_tracking_error_deg','azimuth_tracking_error_deg',
 )
-FLOATS = set(FIELDS)-{'scenario_id','seed','method','step','timestamp_utc_iso','season','weather_condition'}
+FLOATS = set(FIELDS)-{'scenario_id','seed','method','step','timestamp_utc_iso','season','weather_condition','power_model','sapm_mount'}
 
 
 def _hour(ts):
@@ -129,6 +132,19 @@ def expand_paths(paths):
                      dni_wm2=_fixed_float(info.get('dni_wm2')),
                      dhi_wm2=_fixed_float(info.get('dhi_wm2')),
                      ghi_wm2=_fixed_float(info.get('ghi_wm2')),
+                     power_model=str(info.get('power_model','legacy')),
+                     poa_global=_fixed_float(info.get('poa_global')),
+                     poa_global_wm2=_fixed_float(info.get('poa_global')),
+                     power_dc_w=_fixed_float(info.get('power_dc_w')),
+                     effective_irradiance_wm2=_fixed_float(info.get('effective_irradiance_wm2')),
+                     cell_temperature_c=_fixed_float(info.get('cell_temperature_c')),
+                     ambient_temperature_c=_fixed_float(info.get('ambient_temperature_c')),
+                     wind_speed_m_s=_fixed_float(info.get('wind_speed_m_s')),
+                     wind_speed_10m_ms=_fixed_float(info.get('wind_speed_10m_ms')),
+                     wind_reference_height_m=_fixed_float(info.get('wind_reference_height_m')),
+                     gamma_pdc=_fixed_float(info.get('gamma_pdc')),
+                     sapm_mount=str(info.get('sapm_mount') or ''),
+                     wind_powerlaw_exponent=_fixed_float(info.get('wind_powerlaw_exponent')),
                      power_w=pw,energy_kwh=en,reward_kwh=rw,movement_cost_kwh=cost,
                      cumulative_gross_kwh=gross+en,cumulative_net_kwh=net+rw,
                      pre_tilt_deg=pre_tilt,pre_azimuth_deg=pre_az,
@@ -166,11 +182,23 @@ def expand_paths(paths):
 def _load_rows(path):
     with Path(path).open(newline='',encoding='utf-8') as f:
         rd=csv.DictReader(f)
-        if not rd.fieldnames or set(rd.fieldnames)!=set(FIELDS):
+        # Accept the exact historical schema as a legacy-only source, while
+        # retaining all new PVWatts fields in newly exported reports.
+        new_fields={'power_model','poa_global','poa_global_wm2','power_dc_w',
+                    'effective_irradiance_wm2','cell_temperature_c',
+                    'ambient_temperature_c','wind_speed_m_s','wind_speed_10m_ms',
+                    'wind_reference_height_m','gamma_pdc','sapm_mount',
+                    'wind_powerlaw_exponent'}
+        headers=set(rd.fieldnames or ())
+        if headers not in (set(FIELDS),set(FIELDS)-new_fields):
             raise ValueError('Unsupported rich trajectory CSV format')
+        historic=headers!=set(FIELDS)
         rows=[]
         for x in rd:
-            v={k:(_fixed_float(x[k]) if k in FLOATS else x[k]) for k in FIELDS}
+            v={k:(_fixed_float(x.get(k)) if k in FLOATS else x.get(k, ''))
+               for k in FIELDS}
+            if historic:
+                v['power_model']='legacy'
             v['seed']=int(v['seed']);v['step']=int(v['step'])
             rows.append(v)
     return rows

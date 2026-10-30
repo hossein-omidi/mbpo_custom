@@ -6,10 +6,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from SAC_workspace.src.evaluation.statistical_inference import build_valid_statistical_summary, day_summary_from_paths
+from SAC_workspace.src.evaluation.statistical_inference import (
+    build_valid_statistical_summary, day_summary_from_paths, stratified_point_estimate)
 
 VISIBLE=('mbpo','sac','fixed_no_motion','poa_instant_ideal')
-LABELS={'mbpo':'MBPO','sac':'SAC','fixed_no_motion':'Fixed','poa_instant_ideal':'Instant POA oracle (gross)'}
+LABELS={'mbpo':'MBPO','sac':'SAC','fixed_no_motion':'Fixed','poa_instant_ideal':'Instant DC upper bound (gross)'}
 
 def render_verified(paths,plan,outdir):
     outdir=Path(outdir);outdir.mkdir(parents=True,exist_ok=True)
@@ -23,12 +24,14 @@ def render_verified(paths,plan,outdir):
         def save(fig,name):
             fig.tight_layout();fig.savefig(outdir/name,dpi=160);pdf.savefig(fig);plt.close(fig);figfiles.append(name)
         names=[m for m in VISIBLE if m in methods]
-        ys=[];sds=[]
-        for m in names:
-            rec=summary['methods'][m];ys.append(rec['weighted_mean']);sds.append(rec['sd_across_days'])
+        # Do not mix net energy of feasible controllers with gross-only
+        # ideal energy in the same comparative bar chart.
+        ys=[stratified_point_estimate(day_summary_from_paths(
+            paths,m,'gross_energy_kwh'),plan) for m in names]
         fig,ax=plt.subplots(figsize=(10,5));xs=np.arange(len(names))
         ax.bar(xs,ys,alpha=.75)
-        ax.set_xticks(xs,[LABELS[x] for x in names]);ax.set(ylabel='Mean energy (kWh / 117-step window)',title='Finite-manifest weighted mean; POA oracle gross-only')
+        ax.set_xticks(xs,[LABELS[x] for x in names]);ax.set(ylabel='Mean gross DC energy (kWh / 117-step window)',
+               title='Matched gross DC energy, including unconstrained upper bound')
         ax.text(.01,.98,'No confidence bars: one sampled date per stratum cannot estimate design variance.',transform=ax.transAxes,va='top',fontsize=8)
         ax.grid(axis='y',alpha=.2);save(fig,'01_weighted_mean_energy.png')
         # Distribution plots MUST compare one physical metric at a time.
@@ -58,8 +61,7 @@ def render_verified(paths,plan,outdir):
         fig,ax=plt.subplots(figsize=(10,5))
         months=range(1,13)
         for m in names:
-            metric='gross_energy_kwh' if m=='poa_instant_ideal' else 'net_energy_kwh'
-            v=day_summary_from_paths(paths,m,metric)
+            v=day_summary_from_paths(paths,m,'gross_energy_kwh')
             vals=[]
             for month in months:
                 strata=[s for s in plan['strata'] if s['month']==month]
@@ -67,6 +69,7 @@ def render_verified(paths,plan,outdir):
                 y=np.array([v[s['selected_scenario_id']] for s in strata])
                 vals.append(float(np.average(y,weights=w)) if len(y) else np.nan)
             ax.plot(months,vals,marker='o',label=LABELS[m])
-        ax.set_xticks(list(months));ax.set(xlabel='Month',ylabel='Weighted mean energy (kWh / window)',title='Month-stratified energy: observed dates only, no unsupported CI')
+        ax.set_xticks(list(months));ax.set(xlabel='Month',ylabel='Weighted mean gross DC energy (kWh / window)',
+               title='Month-stratified gross DC energy, matched metric; no unsupported CI')
         ax.legend();ax.grid(alpha=.2);save(fig,'04_monthly_weighted_energy.png')
     return {'figures':figfiles,'statistics':summary}

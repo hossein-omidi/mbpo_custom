@@ -4,7 +4,19 @@ from SAC_workspace.src.config.config import ROOT, load_config, write_snapshot
 
 
 def main():
-    c = load_config(require_data=True)
+    import argparse
+    p=argparse.ArgumentParser()
+    p.add_argument('--power-model', choices=('legacy','pvwatts_sapm'), default='legacy')
+    p.add_argument('--wind-reference-height-m', type=float, default=2.0)
+    p.add_argument('--gamma-pdc', type=float, default=-0.004)
+    p.add_argument('--sapm-mount', default='open_rack_glass_polymer')
+    p.add_argument('--wind-powerlaw-exponent', type=float, default=0.14)
+    args=p.parse_args()
+    kwargs=dict(power_model=args.power_model,
+        wind_reference_height_m=args.wind_reference_height_m,
+        gamma_pdc=args.gamma_pdc, sapm_mount=args.sapm_mount,
+        wind_powerlaw_exponent=args.wind_powerlaw_exponent)
+    c = load_config(require_data=True, **kwargs)
     dest = ROOT / 'SAC_workspace' / 'runs' / 'reference_config.json'
     write_snapshot(c, dest)
     print(f'VALIDATED: compact 6D, NSRDB manifest and reference files. Snapshot: {dest}')

@@ -1,0 +1,21 @@
+{
+  "files": {
+    "MBPO_workspace/src/power_references.py": "7842f215dd81a5190e68f9ff2cd355607914cb7330d347596865a46be03bd30c",
+    "STAGE2_DIRECT_COPY_README.md": "0c1622f63cbd366b7d41531463f095ba2dc0f472fe4bb007fb5dc9d8a0defc13",
+    "STAGE2_INSTALL_AND_VALIDATION.md": "3037d2f2ccc2bcf6869d7df03d15ea4edc95d8c06f250747955ea5d1e78114ae",
+    "mbpo/env/pv_power_backend.py": "0eff58d4e589238b84ea7b64176a539217f7569e3aa386d85bdc90fc0adf08f9",
+    "mbpo/env/pv_power_cli.py": "180ee59fc9fe2567f9f19f3e17410141edaac87749a2c8a170464c8176f5ef9d",
+    "scripts/apply_pvwatts_stage2.py": "4693de0189fd40e4df66e1ec5ca2286e5d41494819b0834306b3a65af9d69431",
+    "scripts/build_stage2_direct_replacements.py": "bd0bf93513c02da69f1c49b81abf3007ccf385c3cdef65b75bb487d1b09cffb0",
+    "scripts/pvwatts_stage1_preflight.py": "71262389746d70d6f070f49783f11290452465d74f1029a1ae6a759aecdeb111",
+    "scripts/pvwatts_stage2_audit.py": "0e163740e653b3f7f3cec47a45f4d29cb9ac091d90337331c803857c8ab4a667",
+    "scripts/verify_stage2_direct_copy.py": "6979f3de9a726f204eb189209c42d7b6d1aa2d8a472bac65a185a2d32cd07736",
+    "tests/pvwatts_daily_sensitivity.py": "f86ef5a2aa34cbcdc589788fb13a7bc3eac7fc314a29e3dd06be38b6e857f1ff",
+    "tests/test_pv_power_backend.py": "720be8ef057b02be26f6b5677aed584f695f07d27a2525cf79dbedaba25a1928",
+    "tests/test_pvwatts_stage2.py": "707dd9cd7a6bb0f8e5724cb2fc469312433493dc7281c03dca15991545958680",
+    "tests/test_pvwatts_stage2_patcher.py": "f408bdbcccb09707a5d93ad3e4bb9ffc2ce49d71a1f91ff3495e6c166c87c266",
+    "tests/test_stage2_all_workflow_source.py": "712b4913d2eb62575dbd36106ad712a3190792da1d4badb875a63fc93165e184",
+    "tests/test_stage2_direct_copy_generator.py": "8abf4c1767e9ad70d5d2cbbd96bd0abdf3f5c083162e4f41ff48aca30eaa5f42"
+  },
+  "schema": "pvwatts-stage2-safe-v4"
+}

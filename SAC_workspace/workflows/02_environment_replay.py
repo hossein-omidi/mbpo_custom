@@ -5,7 +5,19 @@ from SAC_workspace.src.environment.environment import SACEnvironment
 
 
 def main():
-    config = load_config()
+    import argparse
+    p=argparse.ArgumentParser()
+    p.add_argument('--power-model', choices=('legacy','pvwatts_sapm'), default='legacy')
+    p.add_argument('--wind-reference-height-m', type=float, default=2.0)
+    p.add_argument('--gamma-pdc', type=float, default=-0.004)
+    p.add_argument('--sapm-mount', default='open_rack_glass_polymer')
+    p.add_argument('--wind-powerlaw-exponent', type=float, default=0.14)
+    args=p.parse_args()
+    kwargs=dict(power_model=args.power_model,
+        wind_reference_height_m=args.wind_reference_height_m,
+        gamma_pdc=args.gamma_pdc, sapm_mount=args.sapm_mount,
+        wind_powerlaw_exponent=args.wind_powerlaw_exponent)
+    config = load_config(**kwargs)
     env = SACEnvironment(config.train_env)
     try:
         env.seed(42)
