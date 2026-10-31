@@ -44,7 +44,7 @@ def main():
     parser.add_argument(
         '--observation-mode',
         choices=('legacy', 'physical'),
-        default='legacy',
+        default='pvwatts_sapm',
         help='Observation layout (default: legacy for checkpoint compatibility).',
     )
     parser.add_argument(

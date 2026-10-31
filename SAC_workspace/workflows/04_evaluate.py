@@ -17,7 +17,7 @@ def main():
     ap.add_argument('--training-csv', default=None)
     ap.add_argument('--representation-config',default='MBPO_workspace/representation_config.json')
     # Single electrical backend selection shared by SAC and MBPO.
-    ap.add_argument('--power-model',choices=('legacy','pvwatts_sapm'),default='legacy')
+    ap.add_argument('--power-model',choices=('legacy','pvwatts_sapm'),default='pvwatts_sapm')
     ap.add_argument('--wind-reference-height-m',type=float,default=2.0)
     ap.add_argument('--gamma-pdc',type=float,default=-0.004)
     ap.add_argument('--sapm-mount',default='open_rack_glass_polymer')

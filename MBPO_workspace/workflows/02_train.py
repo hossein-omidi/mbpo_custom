@@ -15,7 +15,7 @@ def main():
     p.add_argument('--model-epochs',type=int,default=None)
     p.add_argument('--model-max-train-samples',type=int,default=None)
     # Single electrical backend selection shared by SAC and MBPO.
-    p.add_argument('--power-model',choices=('legacy','pvwatts_sapm'),default='legacy')
+    p.add_argument('--power-model',choices=('legacy','pvwatts_sapm'),default='pvwatts_sapm')
     p.add_argument('--wind-reference-height-m',type=float,default=2.0)
     p.add_argument('--gamma-pdc',type=float,default=-0.004)
     p.add_argument('--sapm-mount',default='open_rack_glass_polymer')

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 def add_power_cli_arguments(parser):
     group = parser.add_argument_group('PV physical model (applies to train and evaluation)')
-    group.add_argument('--power-model', choices=('legacy', 'pvwatts_sapm'), default='legacy',
+    group.add_argument('--power-model', choices=('legacy', 'pvwatts_sapm'), default='pvwatts_sapm',
                        help='Legacy remains default for reproducibility. Use pvwatts_sapm for new experiments.')
     group.add_argument('--wind-reference-height-m', type=float, default=2.0,
                        help='PROVISIONAL NSRDB measurement height; confirm source dataset')

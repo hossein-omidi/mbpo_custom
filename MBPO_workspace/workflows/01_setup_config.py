@@ -8,7 +8,7 @@ from SAC_workspace.src.config.config import ROOT
 def main():
     import argparse
     p=argparse.ArgumentParser()
-    p.add_argument('--power-model', choices=('legacy','pvwatts_sapm'), default='legacy')
+    p.add_argument('--power-model', choices=('legacy','pvwatts_sapm'), default='pvwatts_sapm')
     p.add_argument('--wind-reference-height-m', type=float, default=2.0)
     p.add_argument('--gamma-pdc', type=float, default=-0.004)
     p.add_argument('--sapm-mount', default='open_rack_glass_polymer')
