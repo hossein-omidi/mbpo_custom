@@ -1,0 +1,13 @@
+Stage 4 SAC/MBPO read-only diagnostic: validated candidate.
+Verifications completed in this tooling environment:
+  Python compilation: PASS
+  Offline unit/regression tests: 14 PASS
+  Script direct --help from a different working directory with no PYTHONPATH: PASS
+  Fresh-extracted package tests: PASS
+  Zip CRC and listed-file SHA256: PASS
+Not yet run in this tooling environment:
+  Actual NSRDB-backed PVlib environment branch rollouts
+  Actual saved SAC/MBPO checkpoint loading and optimizer shadow step
+  Actual evaluation action replay and live dynamics prediction
+These tasks are performed by executing the provided command on the user's trained repository.
+No edits to either training algorithm, observations, rewards or physics.

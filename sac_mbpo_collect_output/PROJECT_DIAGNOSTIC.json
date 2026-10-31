@@ -1,0 +1,1168 @@
+{
+  "evaluations": [
+    {
+      "episodes_count": 1008,
+      "method_means": {
+        "fixed_no_motion": {
+          "count": 252,
+          "mean_gross_kwh": 0.7572702201951633,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7572702201951633
+        },
+        "mbpo": {
+          "count": 252,
+          "mean_gross_kwh": 0.7929419121553738,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7929419121553738
+        },
+        "poa_instant_ideal": {
+          "count": 252,
+          "mean_gross_kwh": 0.9296727006250939,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "sac": {
+          "count": 252,
+          "mean_gross_kwh": 0.8076053413794994,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.8076053413794994
+        }
+      },
+      "paired_episodes": 252,
+      "power_model": null,
+      "sampling_population_count": 2557,
+      "sampling_protocol": "calendar_stratified_utc_daytime",
+      "sampling_selected_count": 252,
+      "scenario_count": 252,
+      "summary_path": "MBPO_workspace/evaluation/full_with_poa/summary.json"
+    },
+    {
+      "episodes_count": 1008,
+      "method_means": {
+        "fixed_no_motion": {
+          "count": 252,
+          "mean_gross_kwh": 0.7572702201951633,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7572702201951633
+        },
+        "mbpo": {
+          "count": 252,
+          "mean_gross_kwh": 0.7929419121553738,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7929419121553738
+        },
+        "poa_instant_ideal": {
+          "count": 252,
+          "mean_gross_kwh": 0.9296727006250939,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "sac": {
+          "count": 252,
+          "mean_gross_kwh": 0.8076053413794994,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.8076053413794994
+        }
+      },
+      "paired_episodes": 252,
+      "power_model": null,
+      "sampling_population_count": 2557,
+      "sampling_protocol": "calendar_stratified_utc_daytime",
+      "sampling_selected_count": 252,
+      "scenario_count": 252,
+      "summary_path": "MBPO_workspace/evaluation/paired_poa_stratified/summary.json"
+    },
+    {
+      "episodes_count": 30,
+      "method_means": {
+        "dual_axis_instant_ideal": {
+          "count": 5,
+          "mean_gross_kwh": 0.9037422338646467,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "dual_axis_slew_limited": {
+          "count": 5,
+          "mean_gross_kwh": 0.8950123030163333,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.8950123030163333
+        },
+        "fixed_no_motion": {
+          "count": 5,
+          "mean_gross_kwh": 0.7804788062351357,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7804788062351357
+        },
+        "mbpo": {
+          "count": 5,
+          "mean_gross_kwh": 0.7937135586815097,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7937135586815097
+        },
+        "poa_instant_ideal": {
+          "count": 5,
+          "mean_gross_kwh": 0.9214850280310116,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "sac": {
+          "count": 5,
+          "mean_gross_kwh": 0.8429174869790022,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.8429174869790022
+        }
+      },
+      "paired_episodes": 5,
+      "power_model": null,
+      "sampling_protocol": null,
+      "scenario_count": 5,
+      "summary_path": "MBPO_workspace/evaluation/paired_seed0/summary.json"
+    },
+    {
+      "episodes_count": 1260,
+      "method_means": {
+        "dual_axis_instant_ideal": {
+          "count": 252,
+          "mean_gross_kwh": 0.9155681914523818,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "dual_axis_slew_limited": {
+          "count": 252,
+          "mean_gross_kwh": 0.9092877244399746,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.9092877244399746
+        },
+        "fixed_no_motion": {
+          "count": 252,
+          "mean_gross_kwh": 0.7564553157781221,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7564553157781221
+        },
+        "mbpo": {
+          "count": 252,
+          "mean_gross_kwh": 0.79180805808071,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.79180805808071
+        },
+        "sac": {
+          "count": 252,
+          "mean_gross_kwh": 0.8068006637707842,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.8068006637707842
+        }
+      },
+      "paired_episodes": 252,
+      "power_model": null,
+      "sampling_population_count": 2557,
+      "sampling_protocol": null,
+      "sampling_selected_count": 252,
+      "scenario_count": 252,
+      "summary_path": "MBPO_workspace/evaluation/paired_stratified/summary.json"
+    },
+    {
+      "detailed_trajectory_bytes": 184304847,
+      "detailed_trajectory_file_present": true,
+      "episodes_count": 3340,
+      "method_means": {
+        "fixed_no_motion": {
+          "count": 835,
+          "mean_gross_kwh": 0.72624824700763,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.72624824700763
+        },
+        "mbpo": {
+          "count": 835,
+          "mean_gross_kwh": 0.8291226310946788,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.8291226310946788
+        },
+        "poa_instant_ideal": {
+          "count": 835,
+          "mean_gross_kwh": 0.8813186772570678,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "sac": {
+          "count": 835,
+          "mean_gross_kwh": 0.7168147756141711,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7168147756141711
+        }
+      },
+      "paired_episodes": 835,
+      "power_model": "pvwatts_sapm",
+      "sampling_population_count": 1167,
+      "sampling_protocol": "calendar_stratified_utc_daytime",
+      "sampling_selected_count": 835,
+      "scenario_count": 835,
+      "summary_path": "MBPO_workspace/evaluation/pvwatts_seed0_heldout/summary.json"
+    },
+    {
+      "detailed_trajectory_bytes": 74138244,
+      "detailed_trajectory_file_present": true,
+      "episodes_count": 1344,
+      "method_means": {
+        "fixed_no_motion": {
+          "count": 336,
+          "mean_gross_kwh": 0.7454190285497121,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7454190285497121
+        },
+        "mbpo": {
+          "count": 336,
+          "mean_gross_kwh": 0.857585161346645,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.857585161346645
+        },
+        "poa_instant_ideal": {
+          "count": 336,
+          "mean_gross_kwh": 0.9124866744746785,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "sac": {
+          "count": 336,
+          "mean_gross_kwh": 0.7487482290916517,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7487482290916517
+        }
+      },
+      "paired_episodes": 336,
+      "power_model": "pvwatts_sapm",
+      "sampling_population_count": 1167,
+      "sampling_protocol": "calendar_stratified_utc_daytime",
+      "sampling_selected_count": 336,
+      "scenario_count": 336,
+      "summary_path": "MBPO_workspace/evaluation/pvwatts_seed0_heldout1/summary.json"
+    },
+    {
+      "detailed_trajectory_bytes": 444202,
+      "detailed_trajectory_file_present": true,
+      "episodes_count": 8,
+      "method_means": {
+        "fixed_no_motion": {
+          "count": 2,
+          "mean_gross_kwh": 0.9002400034526281,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.9002400034526281
+        },
+        "mbpo": {
+          "count": 2,
+          "mean_gross_kwh": 1.0229799662770003,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 1.0229799662770003
+        },
+        "poa_instant_ideal": {
+          "count": 2,
+          "mean_gross_kwh": 1.0852068870710267,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "sac": {
+          "count": 2,
+          "mean_gross_kwh": 0.8658652884947593,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.8658652884947593
+        }
+      },
+      "paired_episodes": 2,
+      "power_model": "pvwatts_sapm",
+      "sampling_protocol": null,
+      "scenario_count": 2,
+      "summary_path": "MBPO_workspace/evaluation/pvwatts_seed0_pilot/summary.json"
+    },
+    {
+      "detailed_trajectory_bytes": 35022224,
+      "detailed_trajectory_file_present": true,
+      "episodes_count": 1008,
+      "method_means": {
+        "fixed_no_motion": {
+          "count": 252,
+          "mean_gross_kwh": 0.7572702201951633,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7572702201951633
+        },
+        "mbpo": {
+          "count": 252,
+          "mean_gross_kwh": 0.7929419121553738,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.7929419121553738
+        },
+        "poa_instant_ideal": {
+          "count": 252,
+          "mean_gross_kwh": 0.9296727006250939,
+          "mean_movement_cost_kwh": null,
+          "mean_net_kwh": null
+        },
+        "sac": {
+          "count": 252,
+          "mean_gross_kwh": 0.8076053413794994,
+          "mean_movement_cost_kwh": 0.0,
+          "mean_net_kwh": 0.8076053413794994
+        }
+      },
+      "paired_episodes": 252,
+      "power_model": null,
+      "sampling_population_count": 2557,
+      "sampling_protocol": "calendar_stratified_utc_daytime",
+      "sampling_selected_count": 252,
+      "scenario_count": 252,
+      "summary_path": "MBPO_workspace/evaluation/scientific_v52_fresh/summary.json"
+    }
+  ],
+  "privacy": {
+    "checkpoint_weights_included": false,
+    "secrets_included": false,
+    "source_included": true,
+    "trajectories_included": false,
+    "weather_included": false
+  },
+  "project": {
+    "git": {
+      "branch": "state-space-reduction",
+      "dirty_file_count": 34,
+      "head": "b0e27b3ee6cbb03bbf7e84d26386498d02e19c81",
+      "status": "AVAILABLE"
+    },
+    "missing_path_note": "These are probes for potentially relevant code files, not a pass/fail checklist; repository layouts may differ.",
+    "note": "No secrets, raw weather data, checkpoints, optimizer state or private .env copied.",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python": "3.12.13",
+    "repository_name": "mbpo_custom",
+    "source_inventory": [
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/agents/sac_agent.py",
+        "sha256": "98a81ea1494655fcff7bfc1e72323396982ead34b9117a2f18a06a2e1a99df72",
+        "size_bytes": 7867
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/training/replay_buffer.py",
+        "sha256": "04ad61a58e4e5eabb37c334c3cbe2cc198cc4f1ce8fa7971a010b76b3eebc67b",
+        "size_bytes": 2958
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/training/trainer.py",
+        "sha256": "b5f4b13f6ec31c38ac74751c2ee5d42b89b9ad06457a5e662e3ea8a90bdf88b7",
+        "size_bytes": 8408
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/config/config.py",
+        "sha256": "6a28037d174bfa9dc0895214ff5150c8b1701b795ee172a7d97986cfb964c651",
+        "size_bytes": 14146
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/environment/environment.py",
+        "sha256": "9629debe75e6f9492cc59c9dec995d5b017f3f2a95503b60e3e5d4af835d59c0",
+        "size_bytes": 7528
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/evaluation/evaluation.py",
+        "sha256": "5b3c382491d58c07560f43d10c25c0ed33c8cc2ab2af5217dd9db858f2451d30",
+        "size_bytes": 22962
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/evaluation/scenario_sampling.py",
+        "sha256": "037e8d85a4f3930bbfad064fcef0c6f53dcbee4cfb96a50fff6986944ec8edbc",
+        "size_bytes": 12372
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/evaluation/stratified_statistics.py",
+        "sha256": "7282254fae519126b1680db207c49733b21491d1846a628374f3e87f2a74d687",
+        "size_bytes": 25236
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/src/evaluation/statistical_inference.py",
+        "sha256": "eb42770437bd1eea265500ed070d9237abd093d2ed1d7edd5496a6221b012bfb",
+        "size_bytes": 7344
+      },
+      {
+        "exists": true,
+        "file": "SAC_workspace/workflows/03_train.py",
+        "sha256": "72b5d60097573a29ea82b99f01ba0257e6a76c79d82fc49f622905d1ca066381",
+        "size_bytes": 1534
+      },
+      {
+        "exists": true,
+        "file": "MBPO_workspace/src/dynamics.py",
+        "sha256": "10d4e5eed42ed3884bbd37e586bf70cf4de6f0d0b3234203f1824c725b8c18f4",
+        "size_bytes": 12801
+      },
+      {
+        "exists": true,
+        "file": "MBPO_workspace/src/trainer.py",
+        "sha256": "1420fdd8c999fc83faaa8b7c56bc34acb44cc07c59ff385b56cef2dd35484aea",
+        "size_bytes": 13122
+      },
+      {
+        "exists": true,
+        "file": "MBPO_workspace/src/replay.py",
+        "sha256": "48f83e6a0d79f81c4e10652a3599150068db6c02961d264f499470c04a5c9a28",
+        "size_bytes": 3911
+      },
+      {
+        "exists": true,
+        "file": "MBPO_workspace/src/evaluation.py",
+        "sha256": "1f0c69bc8f896e521b9edb67fe650cb2b27aa7a4cf3526725b2578025b3146c6",
+        "size_bytes": 19405
+      },
+      {
+        "exists": true,
+        "file": "MBPO_workspace/src/config.py",
+        "sha256": "792cdbc6b2cc8aaafca344ab89fb846f1037c74bb5ada4b80bed58aaa18f7ecf",
+        "size_bytes": 4340
+      },
+      {
+        "exists": false,
+        "file": "MBPO_workspace/src/agents/mbpo_agent.py",
+        "sha256": null,
+        "size_bytes": null
+      },
+      {
+        "exists": true,
+        "file": "MBPO_workspace/workflows/02_train.py",
+        "sha256": "a1da3fc845c3576d618eda7d9e8f9d7e3c98c6ec3bf8dae9426dbd27b02719a7",
+        "size_bytes": 1862
+      },
+      {
+        "exists": true,
+        "file": "MBPO_workspace/workflows/03_evaluate.py",
+        "sha256": "e85310bcc36c2e60278bfc1c2849dfca79100d79f65505a095beddfd5f91e558",
+        "size_bytes": 5699
+      },
+      {
+        "exists": true,
+        "file": "MBPO_workspace/representation_config.json",
+        "sha256": "a4999901b725de9962242d0b60ba4ced055f39408fdfc741e9bfc3439d96c89b",
+        "size_bytes": 685
+      },
+      {
+        "exists": true,
+        "file": "mbpo/env/pv_tracking.py",
+        "sha256": "fa67c5e472cef44aba52f449a28c57c7c12a155a5ac6a3bdbb7fe6bc46a81eb2",
+        "size_bytes": 47235
+      },
+      {
+        "exists": true,
+        "file": "mbpo/env/pvlib_physics.py",
+        "sha256": "59338fc732899ade68449145e52320418c99d422874cf6e318813005bab6c325",
+        "size_bytes": 8917
+      },
+      {
+        "exists": true,
+        "file": "mbpo/env/pv_power_backend.py",
+        "sha256": "0eff58d4e589238b84ea7b64176a539217f7569e3aa386d85bdc90fc0adf08f9",
+        "size_bytes": 6011
+      }
+    ],
+    "unavailable_whitelisted_source_paths": [
+      "MBPO_workspace/src/agents/mbpo_agent.py"
+    ],
+    "version": "2026-10-30.v2"
+  },
+  "reproducibility_issues": [],
+  "runs": {
+    "mbpo": [
+      {
+        "checkpoint": {
+          "metadata": {
+            "actor_all_finite": true,
+            "actor_parameter_tensors": 6,
+            "agent_alpha_effective": 0.012782987144607278,
+            "agent_alpha_unclamped": 0.012782987144607278,
+            "agent_keys": [
+              "actor",
+              "actor_opt",
+              "alpha_opt",
+              "critic",
+              "critic_opt",
+              "critic_target",
+              "gamma",
+              "log_alpha",
+              "min_alpha",
+              "reward_scale",
+              "target_entropy",
+              "tau",
+              "updates"
+            ],
+            "agent_updates": 101000,
+            "alpha_minimum_assumed_if_no_saved_value": null,
+            "config_hash": "1e12d6d1ac67cb4ecbbbde8f30e56cb2bc071ca16295efde7498e5985fb7d030",
+            "critic_all_finite": true,
+            "critic_parameter_tensors": 12,
+            "critic_target_all_finite": true,
+            "critic_target_parameter_tensors": 12,
+            "env_steps": 58500,
+            "epoch": 500,
+            "real_buffer": {
+              "capacity": 50000,
+              "count": 50000
+            },
+            "resolved_mdp": {
+              "gamma_pdc": -0.004,
+              "horizon": 117,
+              "max_delta_azimuth": 10.0,
+              "max_delta_tilt": 5.0,
+              "movement_penalty": 0.0,
+              "observation_mode": "compact",
+              "periods": 118,
+              "power_model": "pvwatts_sapm",
+              "power_source_sha256": "af72b661e1039b6205554751052b05b4a5297c1286851b6f8f4dbcd39b10af7e",
+              "sapm_mount": "open_rack_glass_polymer",
+              "wind_powerlaw_exponent": 0.14,
+              "wind_reference_height_m": 2.0
+            },
+            "schema": 1,
+            "synthetic_buffer": {
+              "capacity": 1600,
+              "count": 1600
+            }
+          },
+          "path": "MBPO_workspace/runs/mbpo_pvwatts_new_seed0/latest.pt",
+          "sha256": "69da37c2de95ce50e25f71a51181c2a89716e60fbc8d1d03346a3a04e178037a",
+          "size_bytes": 5820758,
+          "stage4_expected_hash_matches": true,
+          "status": "READ"
+        },
+        "provenance": {
+          "checks": {
+            "agent_updates": "MATCH",
+            "alpha": "MATCH",
+            "env_steps": "MATCH",
+            "epoch": "MATCH"
+          },
+          "issues": [],
+          "limitation": "Matching final values do not prove that all prior episodes came from this checkpoint run",
+          "status": "MATCH_ON_CHECKED_FIELDS"
+        },
+        "stage4_comparison": {
+          "checkpoint_sha256": "69da37c2de95ce50e25f71a51181c2a89716e60fbc8d1d03346a3a04e178037a",
+          "issues": [],
+          "status": "CHECKPOINT_MATCHES_STAGE4"
+        },
+        "training_history": {
+          "anomalies": [],
+          "columns": [
+            "epoch",
+            "env_steps",
+            "updates",
+            "scenario_id",
+            "return_kwh",
+            "gross_energy_kwh",
+            "movement_cost_kwh",
+            "alpha",
+            "real_replay_size",
+            "model_replay_size",
+            "model_fits",
+            "synthetic_generated",
+            "synthetic_rejected",
+            "model_train_seconds",
+            "mean_real_batch",
+            "mean_model_batch",
+            "critic_loss",
+            "actor_loss",
+            "alpha_loss",
+            "entropy",
+            "q_mean",
+            "target_mean",
+            "model_val_nll",
+            "model_val_dni_rmse_norm",
+            "model_val_dhi_rmse_norm",
+            "model_val_power_rmse_norm",
+            "model_mean_epistemic_std_norm",
+            "model_persistence_power_rmse_norm",
+            "model_skill_power_vs_persistence",
+            "model_skill_all_channels_vs_persistence"
+          ],
+          "distinct_scenario_ids": 451,
+          "first": {
+            "alpha": "1.0",
+            "env_steps": "117",
+            "epoch": "1",
+            "scenario_id": "2022-06-17",
+            "updates": "0"
+          },
+          "last": {
+            "alpha": "0.012782987207174301",
+            "env_steps": "58500",
+            "epoch": "500",
+            "scenario_id": "2024-06-18",
+            "updates": "101000"
+          },
+          "last100_means": {
+            "actor_loss": -39.56233439649272,
+            "alpha_loss": -0.021188650577106217,
+            "critic_loss": 12.801475362899977,
+            "entropy": -1.995039486431668,
+            "q_mean": 39.40756048169911,
+            "return_kwh": 0.7194644605180417,
+            "target_mean": 39.544576267992326
+          },
+          "last428_episodes": {
+            "distinct_scenarios": 387,
+            "episodes": 428
+          },
+          "path": "MBPO_workspace/runs/mbpo_pvwatts_new_seed0/episodes.csv",
+          "rows": 500,
+          "season_count": {
+            "autumn": 112,
+            "spring": 135,
+            "summer": 111,
+            "winter": 142
+          },
+          "sha256": "46009e08af8bbcaa16eb255cdcff15e0848029750b2fabf9d8e537cf359af175"
+        }
+      },
+      {
+        "checkpoint": {
+          "metadata": {
+            "actor_all_finite": true,
+            "actor_parameter_tensors": 6,
+            "agent_alpha_effective": 0.02441273058419435,
+            "agent_alpha_unclamped": 0.02441273058419435,
+            "agent_keys": [
+              "actor",
+              "actor_opt",
+              "alpha_opt",
+              "critic",
+              "critic_opt",
+              "critic_target",
+              "gamma",
+              "log_alpha",
+              "min_alpha",
+              "reward_scale",
+              "target_entropy",
+              "tau",
+              "updates"
+            ],
+            "agent_updates": 452000,
+            "alpha_minimum_assumed_if_no_saved_value": null,
+            "config_hash": "5942ce720cb184bb2ec360ca35cd02a32316b88ee66173a61046f2263b1792ca",
+            "critic_all_finite": true,
+            "critic_parameter_tensors": 12,
+            "critic_target_all_finite": true,
+            "critic_target_parameter_tensors": 12,
+            "env_steps": 234000,
+            "epoch": 2000,
+            "real_buffer": {
+              "capacity": 50000,
+              "count": 50000
+            },
+            "resolved_mdp": {
+              "horizon": 117,
+              "max_delta_azimuth": 10.0,
+              "max_delta_tilt": 5.0,
+              "movement_penalty": 0.0,
+              "observation_mode": "compact",
+              "periods": 118
+            },
+            "schema": 1,
+            "synthetic_buffer": {
+              "capacity": 1600,
+              "count": 1600
+            }
+          },
+          "path": "MBPO_workspace/runs/mbpo_seed0/latest.pt",
+          "sha256": "c8d2920372307badd8187577e7a5bed54a58e92931f5177d7f3e8290b13a87f6",
+          "size_bytes": 5806742,
+          "stage4_expected_hash_matches": false,
+          "status": "READ"
+        },
+        "provenance": {
+          "checks": {
+            "agent_updates": "MATCH",
+            "alpha": "MATCH",
+            "env_steps": "MATCH",
+            "epoch": "MATCH"
+          },
+          "issues": [],
+          "limitation": "Matching final values do not prove that all prior episodes came from this checkpoint run",
+          "status": "MATCH_ON_CHECKED_FIELDS"
+        },
+        "stage4_comparison": {
+          "current_sha256": "c8d2920372307badd8187577e7a5bed54a58e92931f5177d7f3e8290b13a87f6",
+          "expected_stage4_sha256": "69da37c2de95ce50e25f71a51181c2a89716e60fbc8d1d03346a3a04e178037a",
+          "status": "DIFFERENT_CHECKPOINT_THAN_STAGE4"
+        },
+        "training_history": {
+          "anomalies": [],
+          "columns": [
+            "epoch",
+            "env_steps",
+            "updates",
+            "scenario_id",
+            "return_kwh",
+            "gross_energy_kwh",
+            "movement_cost_kwh",
+            "alpha",
+            "real_replay_size",
+            "model_replay_size",
+            "model_fits",
+            "synthetic_generated",
+            "synthetic_rejected",
+            "model_train_seconds",
+            "mean_real_batch",
+            "mean_model_batch",
+            "critic_loss",
+            "actor_loss",
+            "alpha_loss",
+            "entropy",
+            "q_mean",
+            "target_mean",
+            "model_val_nll",
+            "model_val_dni_rmse_norm",
+            "model_val_dhi_rmse_norm",
+            "model_val_power_rmse_norm",
+            "model_mean_epistemic_std_norm",
+            "model_persistence_power_rmse_norm",
+            "model_skill_power_vs_persistence",
+            "model_skill_all_channels_vs_persistence"
+          ],
+          "distinct_scenario_ids": 1390,
+          "first": {
+            "alpha": "1.0",
+            "env_steps": "117",
+            "epoch": "1",
+            "scenario_id": "2022-06-17",
+            "updates": "0"
+          },
+          "last": {
+            "alpha": "0.0244127307087183",
+            "env_steps": "234000",
+            "epoch": "2000",
+            "scenario_id": "2020-12-18",
+            "updates": "452000"
+          },
+          "last100_means": {
+            "actor_loss": -39.58870789650159,
+            "alpha_loss": -0.005516850795561016,
+            "critic_loss": 17.165661156401676,
+            "entropy": -1.9984642090705724,
+            "q_mean": 39.42154727088081,
+            "return_kwh": 0.7924987945251929,
+            "target_mean": 39.61293867437249
+          },
+          "last428_episodes": {
+            "distinct_scenarios": 393,
+            "episodes": 428
+          },
+          "path": "MBPO_workspace/runs/mbpo_seed0/episodes.csv",
+          "rows": 2000,
+          "season_count": {
+            "autumn": 503,
+            "spring": 520,
+            "summer": 453,
+            "winter": 524
+          },
+          "sha256": "bd8a1bf77ac15c21064157048420bb6b44d33832faa3b3bdd4348520856e102a"
+        }
+      },
+      {
+        "checkpoint": {
+          "metadata": {
+            "actor_all_finite": true,
+            "actor_parameter_tensors": 6,
+            "agent_alpha_effective": 1.0,
+            "agent_alpha_unclamped": 1.0,
+            "agent_keys": [
+              "actor",
+              "actor_opt",
+              "alpha_opt",
+              "critic",
+              "critic_opt",
+              "critic_target",
+              "gamma",
+              "log_alpha",
+              "min_alpha",
+              "reward_scale",
+              "target_entropy",
+              "tau",
+              "updates"
+            ],
+            "agent_updates": 0,
+            "alpha_minimum_assumed_if_no_saved_value": null,
+            "config_hash": "5942ce720cb184bb2ec360ca35cd02a32316b88ee66173a61046f2263b1792ca",
+            "critic_all_finite": true,
+            "critic_parameter_tensors": 12,
+            "critic_target_all_finite": true,
+            "critic_target_parameter_tensors": 12,
+            "env_steps": 234,
+            "epoch": 2,
+            "real_buffer": {
+              "capacity": 50000,
+              "count": 234
+            },
+            "resolved_mdp": {
+              "horizon": 117,
+              "max_delta_azimuth": 10.0,
+              "max_delta_tilt": 5.0,
+              "movement_penalty": 0.0,
+              "observation_mode": "compact",
+              "periods": 118
+            },
+            "schema": 1,
+            "synthetic_buffer": {
+              "capacity": 1600,
+              "count": 0
+            }
+          },
+          "path": "MBPO_workspace/runs/mbpo_smoke_new/latest.pt",
+          "sha256": "58a03d251bf4d8d030919f25e46f57d8e5baf399689b255be054b6686bb81363",
+          "size_bytes": 429269,
+          "stage4_expected_hash_matches": false,
+          "status": "READ"
+        },
+        "provenance": {
+          "checks": {
+            "agent_updates": "MATCH",
+            "alpha": "MATCH",
+            "env_steps": "MATCH",
+            "epoch": "MATCH"
+          },
+          "issues": [],
+          "limitation": "Matching final values do not prove that all prior episodes came from this checkpoint run",
+          "status": "MATCH_ON_CHECKED_FIELDS"
+        },
+        "stage4_comparison": {
+          "current_sha256": "58a03d251bf4d8d030919f25e46f57d8e5baf399689b255be054b6686bb81363",
+          "expected_stage4_sha256": "69da37c2de95ce50e25f71a51181c2a89716e60fbc8d1d03346a3a04e178037a",
+          "status": "DIFFERENT_CHECKPOINT_THAN_STAGE4"
+        },
+        "training_history": {
+          "anomalies": [],
+          "columns": [
+            "epoch",
+            "env_steps",
+            "updates",
+            "scenario_id",
+            "return_kwh",
+            "gross_energy_kwh",
+            "movement_cost_kwh",
+            "alpha",
+            "real_replay_size",
+            "model_replay_size",
+            "model_fits",
+            "synthetic_generated",
+            "synthetic_rejected",
+            "model_train_seconds",
+            "mean_real_batch",
+            "mean_model_batch",
+            "critic_loss",
+            "actor_loss",
+            "alpha_loss",
+            "entropy",
+            "q_mean",
+            "target_mean",
+            "model_val_nll",
+            "model_val_dni_rmse_norm",
+            "model_val_dhi_rmse_norm",
+            "model_val_power_rmse_norm",
+            "model_mean_epistemic_std_norm",
+            "model_persistence_power_rmse_norm",
+            "model_skill_power_vs_persistence",
+            "model_skill_all_channels_vs_persistence"
+          ],
+          "distinct_scenario_ids": 2,
+          "first": {
+            "alpha": "1.0",
+            "env_steps": "117",
+            "epoch": "1",
+            "scenario_id": "2022-06-17",
+            "updates": "0"
+          },
+          "last": {
+            "alpha": "1.0",
+            "env_steps": "234",
+            "epoch": "2",
+            "scenario_id": "2018-02-12",
+            "updates": "0"
+          },
+          "last100_means": {
+            "return_kwh": 0.6447148990041311
+          },
+          "last428_episodes": {
+            "distinct_scenarios": 2,
+            "episodes": 2
+          },
+          "path": "MBPO_workspace/runs/mbpo_smoke_new/episodes.csv",
+          "rows": 2,
+          "season_count": {
+            "autumn": 0,
+            "spring": 0,
+            "summer": 1,
+            "winter": 1
+          },
+          "sha256": "f88685a27a96b283c5ce6a27420cf1a6e950ce5b8bc2e4c2979debbb0b7a55c2"
+        }
+      }
+    ],
+    "sac": [
+      {
+        "checkpoint": {
+          "metadata": {
+            "actor_all_finite": true,
+            "actor_parameter_tensors": 6,
+            "agent_alpha_effective": 0.015580181924218294,
+            "agent_alpha_unclamped": 0.015580181924218294,
+            "agent_keys": [
+              "actor",
+              "actor_opt",
+              "alpha_opt",
+              "critic",
+              "critic_opt",
+              "critic_target",
+              "gamma",
+              "log_alpha",
+              "min_alpha",
+              "reward_scale",
+              "target_entropy",
+              "tau",
+              "updates"
+            ],
+            "agent_updates": 452000,
+            "alpha_minimum_assumed_if_no_saved_value": null,
+            "critic_all_finite": true,
+            "critic_parameter_tensors": 12,
+            "critic_target_all_finite": true,
+            "critic_target_parameter_tensors": 12,
+            "env_steps": 234000,
+            "epoch": 2000,
+            "hash": "810fbf383493e305d294b12948114fd3c39bdc29d4a1761cd654a8c515504421",
+            "real_buffer": {
+              "capacity": 50000,
+              "count": 50000
+            },
+            "resolved_mdp": {
+              "gamma_pdc": -0.004,
+              "horizon": 117,
+              "max_delta_azimuth": 10.0,
+              "max_delta_tilt": 5.0,
+              "movement_penalty": 0.0,
+              "observation_mode": "compact",
+              "periods": 118,
+              "power_model": "pvwatts_sapm",
+              "power_source_sha256": "af72b661e1039b6205554751052b05b4a5297c1286851b6f8f4dbcd39b10af7e",
+              "sapm_mount": "open_rack_glass_polymer",
+              "wind_powerlaw_exponent": 0.14,
+              "wind_reference_height_m": 2.0
+            },
+            "schema": 1
+          },
+          "path": "SAC_workspace/runs/sac_pvwatts_new_seed0/latest.pt",
+          "sha256": "749e28902aede9d64154bfb27431b3a47522f33f43e6e85015f51db1c28f1688",
+          "size_bytes": 4529593,
+          "stage4_expected_hash_matches": true,
+          "status": "READ"
+        },
+        "provenance": {
+          "checks": {
+            "agent_updates": "MATCH",
+            "alpha": "MATCH",
+            "env_steps": "MATCH",
+            "epoch": "MATCH"
+          },
+          "issues": [],
+          "limitation": "Matching final values do not prove that all prior episodes came from this checkpoint run",
+          "status": "MATCH_ON_CHECKED_FIELDS"
+        },
+        "stage4_comparison": {
+          "checkpoint_sha256": "749e28902aede9d64154bfb27431b3a47522f33f43e6e85015f51db1c28f1688",
+          "issues": [],
+          "status": "CHECKPOINT_MATCHES_STAGE4"
+        },
+        "training_history": {
+          "anomalies": [],
+          "columns": [
+            "epoch",
+            "env_steps",
+            "updates",
+            "scenario_id",
+            "return_kwh",
+            "gross_energy_kwh",
+            "movement_cost_kwh",
+            "alpha",
+            "critic_loss",
+            "actor_loss",
+            "alpha_loss",
+            "entropy",
+            "q_mean",
+            "target_mean"
+          ],
+          "distinct_scenario_ids": 1390,
+          "first": {
+            "alpha": "1.0",
+            "env_steps": "117",
+            "epoch": "1",
+            "scenario_id": "2022-06-17",
+            "updates": "0"
+          },
+          "last": {
+            "alpha": "0.01558018196374178",
+            "env_steps": "234000",
+            "epoch": "2000",
+            "scenario_id": "2020-12-18",
+            "updates": "452000"
+          },
+          "last100_means": {
+            "actor_loss": -34.31802623650967,
+            "alpha_loss": -0.01564317452697418,
+            "critic_loss": 10.505923694749164,
+            "entropy": -1.9961329077604488,
+            "q_mean": 34.171191606032544,
+            "return_kwh": 0.7436841330368996,
+            "target_mean": 34.376248376471366
+          },
+          "last428_episodes": {
+            "distinct_scenarios": 393,
+            "episodes": 428
+          },
+          "path": "SAC_workspace/runs/sac_pvwatts_new_seed0/episodes.csv",
+          "rows": 2000,
+          "season_count": {
+            "autumn": 503,
+            "spring": 520,
+            "summer": 453,
+            "winter": 524
+          },
+          "sha256": "ee55c8c0a740a6ae20b84246a92b4559889e231cd81e66c37acccabc6ac53c75"
+        }
+      },
+      {
+        "checkpoint": {
+          "metadata": {
+            "actor_all_finite": true,
+            "actor_parameter_tensors": 6,
+            "agent_alpha_effective": 0.022418051910842247,
+            "agent_alpha_unclamped": 0.022418051910842247,
+            "agent_keys": [
+              "actor",
+              "actor_opt",
+              "alpha_opt",
+              "critic",
+              "critic_opt",
+              "critic_target",
+              "gamma",
+              "log_alpha",
+              "min_alpha",
+              "reward_scale",
+              "target_entropy",
+              "tau",
+              "updates"
+            ],
+            "agent_updates": 452000,
+            "alpha_minimum_assumed_if_no_saved_value": null,
+            "critic_all_finite": true,
+            "critic_parameter_tensors": 12,
+            "critic_target_all_finite": true,
+            "critic_target_parameter_tensors": 12,
+            "env_steps": 234000,
+            "epoch": 2000,
+            "hash": "3a8c7a8588440263c04c9a6e004c20992261a4697385fec91a7dbc2288461253",
+            "real_buffer": {
+              "capacity": 50000,
+              "count": 50000
+            },
+            "resolved_mdp": {
+              "horizon": 117,
+              "max_delta_azimuth": 10.0,
+              "max_delta_tilt": 5.0,
+              "movement_penalty": 0.0,
+              "observation_mode": "compact",
+              "periods": 118
+            },
+            "schema": 1
+          },
+          "path": "SAC_workspace/runs/sac_seed0/latest.pt",
+          "sha256": "c04afe072e160c542264de4471239a4066c1e2f2359bc43cdb1230879c3d5f21",
+          "size_bytes": 4560889,
+          "stage4_expected_hash_matches": false,
+          "status": "READ"
+        },
+        "provenance": {
+          "checks": {
+            "agent_updates": "MATCH",
+            "alpha": "MATCH",
+            "env_steps": "MATCH",
+            "epoch": "MATCH"
+          },
+          "issues": [],
+          "limitation": "Matching final values do not prove that all prior episodes came from this checkpoint run",
+          "status": "MATCH_ON_CHECKED_FIELDS"
+        },
+        "stage4_comparison": {
+          "current_sha256": "c04afe072e160c542264de4471239a4066c1e2f2359bc43cdb1230879c3d5f21",
+          "expected_stage4_sha256": "749e28902aede9d64154bfb27431b3a47522f33f43e6e85015f51db1c28f1688",
+          "status": "DIFFERENT_CHECKPOINT_THAN_STAGE4"
+        },
+        "training_history": {
+          "anomalies": [],
+          "columns": [
+            "epoch",
+            "env_steps",
+            "updates",
+            "scenario_id",
+            "return_kwh",
+            "gross_energy_kwh",
+            "movement_cost_kwh",
+            "alpha",
+            "critic_loss",
+            "actor_loss",
+            "alpha_loss",
+            "entropy",
+            "q_mean",
+            "target_mean"
+          ],
+          "distinct_scenario_ids": 1390,
+          "first": {
+            "alpha": "1.0",
+            "env_steps": "117",
+            "epoch": "1",
+            "scenario_id": "2022-06-17",
+            "updates": "0"
+          },
+          "last": {
+            "alpha": "0.022418051958084106",
+            "env_steps": "234000",
+            "epoch": "2000",
+            "scenario_id": "2020-12-18",
+            "updates": "452000"
+          },
+          "last100_means": {
+            "actor_loss": -40.39000391674857,
+            "alpha_loss": -0.016976094958253016,
+            "critic_loss": 15.954891347070026,
+            "entropy": -1.9953781835289084,
+            "q_mean": 40.16033151447264,
+            "return_kwh": 0.8240498241510212,
+            "target_mean": 40.40467100208641
+          },
+          "last428_episodes": {
+            "distinct_scenarios": 393,
+            "episodes": 428
+          },
+          "path": "SAC_workspace/runs/sac_seed0/episodes.csv",
+          "rows": 2000,
+          "season_count": {
+            "autumn": 503,
+            "spring": 520,
+            "summer": 453,
+            "winter": 524
+          },
+          "sha256": "3c33448ff26e6299b704a46d91bea42dc1eb4f956a168d02c954faeab2f2b0c2"
+        }
+      }
+    ]
+  },
+  "schema": "sac-mbpo-local-inventory-v2",
+  "status": "COLLECTED_NO_DETECTED_CONFLICT",
+  "tool_version": "2026-10-30.v2"
+}

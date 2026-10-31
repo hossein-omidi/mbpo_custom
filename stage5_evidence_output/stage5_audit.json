@@ -1,0 +1,248 @@
+{
+  "claims": {
+    "fixed_outperforms_sac": "DESCRIPTIVE_ONLY_IF_FULL_EVALUATION_SHOWS_IT",
+    "mbpo_superiority_statistically_supported": "NEEDS_MULTI_TRAINING_SEEDS_AND_PROPER_HELDOUT_DESIGN",
+    "more_episodes_or_larger_batch_fix_sac": "NOT_DEMONSTRATED",
+    "sac_critic_broken": "NOT_PROVED",
+    "sac_optimizer_wiring_broken": "NO_EVIDENCE_IN_SAMPLED_CHECKPOINT_DIAGNOSTICS"
+  },
+  "deep": {
+    "algo": {
+      "alpha_init": 1.0,
+      "batch_size": 256,
+      "checkpoint_interval": 50,
+      "epochs": 2000,
+      "eval_interval": 10,
+      "gamma": 1.0,
+      "hidden_sizes": [
+        64,
+        64
+      ],
+      "lr": 0.0003,
+      "min_alpha": 0.001,
+      "replay_size": 50000,
+      "reward_scale": 100.0,
+      "start_steps": 8000,
+      "target_entropy": -2.0,
+      "tau": 0.005,
+      "updates_per_step": 2
+    },
+    "checkpoints": {
+      "mbpo": {
+        "agent_updates": 101000,
+        "epoch": 500,
+        "expected_updates": 101000,
+        "real_steps": 58500,
+        "sha256": "69da37c2de95ce50e25f71a51181c2a89716e60fbc8d1d03346a3a04e178037a"
+      },
+      "sac": {
+        "agent_updates": 452000,
+        "epoch": 2000,
+        "expected_updates": 452000,
+        "real_steps": 234000,
+        "sha256": "749e28902aede9d64154bfb27431b3a47522f33f43e6e85015f51db1c28f1688"
+      }
+    },
+    "day_branch": {
+      "mbpo": {
+        "critic_chosen_minus_down_mean_scaled_Q": 0.622683604558309,
+        "distinct_days": 4,
+        "physical_chosen_minus_down_mean_kwh": -0.00019527236277859517,
+        "points": 12,
+        "sign_agreement": 0.16666666666666666,
+        "warning": "Selected correlated within-day branches; deterministic energy and stochastic soft-Q optimize different objectives."
+      },
+      "sac": {
+        "critic_chosen_minus_down_mean_scaled_Q": 0.27449965476989746,
+        "distinct_days": 4,
+        "physical_chosen_minus_down_mean_kwh": -0.00043045624889849536,
+        "points": 12,
+        "sign_agreement": 0.5833333333333334,
+        "warning": "Selected correlated within-day branches; deterministic energy and stochastic soft-Q optimize different objectives."
+      }
+    },
+    "dynamics_validation": {
+      "in_sample_power_skill": 0.027788221836090088,
+      "rotating_holdout_warning": "Rotating day-level holdout on successive persistent fits risks validation leakage; positive skill is not independent proof of model accuracy."
+    },
+    "evaluation_action_replay": {
+      "mbpo": {
+        "checked_actions": 38976,
+        "checkpoint_actions_match_saved_evaluation": true,
+        "fraction_above_1e_4": 0.0,
+        "max_abs_normalized_action_error": 2.1979212760925293e-06,
+        "p99_abs_normalized_action_error": 9.597279131412506e-07
+      },
+      "sac": {
+        "checked_actions": 38976,
+        "checkpoint_actions_match_saved_evaluation": true,
+        "fraction_above_1e_4": 0.0,
+        "max_abs_normalized_action_error": 3.9711594581604e-06,
+        "p99_abs_normalized_action_error": 1.817941665649414e-06
+      }
+    },
+    "in_sample_td_absolute_Q1_mean": {
+      "mbpo_real": 1.2015850319694437,
+      "mbpo_synthetic": 2.1671224866015835,
+      "sac_real": 1.196881771184053
+    },
+    "issues": [
+      "Low alpha relative to reward may merit ablation; neither alpha is at configured minimum; not a proven bug"
+    ],
+    "limitations": [
+      "The same six-sensor observation and SACAgent implementation are used by SAC and MBPO.",
+      "Checkpoint diagnostics are snapshots of learned values; they do not prove algorithm convergence.",
+      "Replay TD errors and dynamics errors are evaluated on training replay, not an independent held-out set.",
+      "Branched continuations evaluate frozen deterministic policies on selected dates, not the SAC stochastic entropy-regularized objective.",
+      "Changing batch sizes or training for more epochs needs a controlled new run and fixed development evaluation.",
+      "MBPO rotating dynamics holdouts can leak previously trained days; independent validation remains required.",
+      "A policy improvement in these diagnostic evaluation days must not be used to tune and then claim untouched test-set results."
+    ],
+    "observed_alpha": {
+      "mbpo_real": 0.012782987207174301,
+      "sac_real": 0.01558018196374178
+    },
+    "physics": {
+      "area": 1.0,
+      "efficiency": 0.18,
+      "freq": "5min",
+      "gamma_pdc": -0.004,
+      "horizon": 117,
+      "max_delta_azimuth": 10.0,
+      "max_delta_tilt": 5.0,
+      "movement_penalty": 0.0,
+      "observation_mode": "compact",
+      "periods": 118,
+      "power_model": "pvwatts_sapm",
+      "power_source_sha256": "af72b661e1039b6205554751052b05b4a5297c1286851b6f8f4dbcd39b10af7e",
+      "sapm_mount": "open_rack_glass_polymer",
+      "start_time": "12:00",
+      "wind_powerlaw_exponent": 0.14,
+      "wind_reference_height_m": 2.0
+    },
+    "replay_total": {
+      "mbpo_model": 1600,
+      "mbpo_real": 50000,
+      "sac": 50000
+    },
+    "shadow_status": {
+      "mbpo": "SHADOW_UPDATE_PASSED",
+      "sac": "SHADOW_UPDATE_PASSED"
+    },
+    "shared_sac_agent": true,
+    "terminal_mismatch": {
+      "mbpo_model": 0,
+      "mbpo_real": 0,
+      "sac": 0
+    }
+  },
+  "evaluation": {
+    "comparisons": {
+      "mbpo_minus_fixed": {
+        "daily_mean_kwh": 0.1121745961054402,
+        "n_distinct_days": 336,
+        "negative_day_fraction": 0.17261904761904762,
+        "positive_day_fraction": 0.8273809523809523,
+        "status": "DESCRIPTIVE; no unqualified bootstrap CI or inference from selected days"
+      },
+      "mbpo_minus_sac": {
+        "daily_mean_kwh": 0.10449983496217759,
+        "n_distinct_days": 336,
+        "negative_day_fraction": 0.07142857142857142,
+        "positive_day_fraction": 0.9285714285714286,
+        "status": "DESCRIPTIVE; no unqualified bootstrap CI or inference from selected days"
+      },
+      "sac_minus_fixed": {
+        "daily_mean_kwh": 0.0076747611432626175,
+        "n_distinct_days": 336,
+        "negative_day_fraction": 0.5952380952380952,
+        "positive_day_fraction": 0.40476190476190477,
+        "status": "DESCRIPTIVE; no unqualified bootstrap CI or inference from selected days"
+      }
+    },
+    "detailed": {
+      "physical_contract": "PASS: action, pose, power, net reward, PVWatts label, 117 steps, paired clock",
+      "validated_trajectories": 1008,
+      "validated_transitions": 117936
+    },
+    "detailed_sha256": "3e5e9f24f5f1c7888deb5530b444e3486f28e66ab02c4cd0997789b9d1cb9d95",
+    "distinct_days": 336,
+    "evaluation_episodes_sha256": "928324640d9c9994d3b3e588ee30f140065d4dbee0f207b58c441283e25be16a",
+    "evaluation_summary_sha256": "8c1dd081707b1e0e2c671a042b1cf05ee6bea628ad3be6c5e1c0abcc19b892d1",
+    "mbpo_train_eval_day_overlap_count": 0,
+    "method_mean_kwh_unweighted_days": {
+      "fixed_no_motion": 0.7372671864826937,
+      "mbpo": 0.8494417825881339,
+      "sac": 0.7449419476259563
+    },
+    "paired_episode_count": 336,
+    "report_methods": {
+      "fixed_no_motion": {
+        "count": 336,
+        "mean_gross_kwh": 0.7454190285497121,
+        "mean_movement_cost_kwh": 0.0,
+        "mean_net_kwh": 0.7454190285497121,
+        "std_interpretation": "unweighted sampled-day descriptive SD; not the standard error",
+        "std_net_kwh": 0.3681329967174599
+      },
+      "mbpo": {
+        "count": 336,
+        "mean_gross_kwh": 0.857585161346645,
+        "mean_movement_cost_kwh": 0.0,
+        "mean_net_kwh": 0.857585161346645,
+        "std_interpretation": "unweighted sampled-day descriptive SD; not the standard error",
+        "std_net_kwh": 0.450906799545865
+      },
+      "poa_instant_ideal": {
+        "count": 336,
+        "mean_gross_kwh": 0.9124866744746785,
+        "mean_movement_cost_kwh": null,
+        "mean_net_kwh": null,
+        "std_interpretation": "unweighted sampled-day descriptive SD; not the standard error",
+        "std_net_kwh": null
+      },
+      "sac": {
+        "count": 336,
+        "mean_gross_kwh": 0.7487482290916517,
+        "mean_movement_cost_kwh": 0.0,
+        "mean_net_kwh": 0.7487482290916517,
+        "std_interpretation": "unweighted sampled-day descriptive SD; not the standard error",
+        "std_net_kwh": 0.4123723098138747
+      }
+    },
+    "sac_train_eval_day_overlap_count": 0,
+    "sampling_protocol": "calendar_stratified_utc_daytime",
+    "sampling_warning": "Unweighted day means are descriptive; apply the original design weights if the sample is stratified."
+  },
+  "evaluation_status": "AUDITED",
+  "input_deep_sha256": "b7c9fb836cb9491eca0a5f6ed525e600a10cb71767863e650e12b052d170b29b",
+  "reproducibility_issues": [
+    "Sample may use a stratified/weighted design; unweighted day-level means in this audit are descriptive, not design-weighted research estimates."
+  ],
+  "schema": "sac-mbpo-stage5-v1",
+  "training": {
+    "mbpo": {
+      "distinct_training_days": 451,
+      "episodes": 500,
+      "final_alpha": 0.012782987207174301,
+      "fraction_of_episodes_that_are_repeats": 0.098,
+      "maximum_repetitions": 4,
+      "mean_day_repetitions": 1.1086474501108647,
+      "min_alpha": 0.009837258607149124,
+      "repeated_episode_count": 49,
+      "training_csv_sha256": "46009e08af8bbcaa16eb255cdcff15e0848029750b2fabf9d8e537cf359af175"
+    },
+    "sac": {
+      "distinct_training_days": 1390,
+      "episodes": 2000,
+      "final_alpha": 0.022418051958084106,
+      "fraction_of_episodes_that_are_repeats": 0.305,
+      "maximum_repetitions": 6,
+      "mean_day_repetitions": 1.4388489208633093,
+      "min_alpha": 0.015948910266160965,
+      "repeated_episode_count": 610,
+      "training_csv_sha256": "3c33448ff26e6299b704a46d91bea42dc1eb4f956a168d02c954faeab2f2b0c2"
+    }
+  },
+  "validation_scope": "Static artifact audit; NO new training or physics execution"
+}

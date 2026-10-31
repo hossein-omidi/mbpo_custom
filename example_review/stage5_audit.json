@@ -1,0 +1,146 @@
+{
+  "claims": {
+    "fixed_outperforms_sac": "DESCRIPTIVE_ONLY_IF_FULL_EVALUATION_SHOWS_IT",
+    "mbpo_superiority_statistically_supported": "NEEDS_MULTI_TRAINING_SEEDS_AND_PROPER_HELDOUT_DESIGN",
+    "more_episodes_or_larger_batch_fix_sac": "NOT_DEMONSTRATED",
+    "sac_critic_broken": "NOT_PROVED",
+    "sac_optimizer_wiring_broken": "NO_EVIDENCE_IN_SAMPLED_CHECKPOINT_DIAGNOSTICS"
+  },
+  "deep": {
+    "algo": {
+      "alpha_init": 1.0,
+      "batch_size": 256,
+      "checkpoint_interval": 50,
+      "epochs": 2000,
+      "eval_interval": 10,
+      "gamma": 1.0,
+      "hidden_sizes": [
+        64,
+        64
+      ],
+      "lr": 0.0003,
+      "min_alpha": 0.001,
+      "replay_size": 50000,
+      "reward_scale": 100.0,
+      "start_steps": 8000,
+      "target_entropy": -2.0,
+      "tau": 0.005,
+      "updates_per_step": 2
+    },
+    "checkpoints": {
+      "mbpo": {
+        "agent_updates": 101000,
+        "epoch": 500,
+        "expected_updates": 101000,
+        "real_steps": 58500,
+        "sha256": "69da37c2de95ce50e25f71a51181c2a89716e60fbc8d1d03346a3a04e178037a"
+      },
+      "sac": {
+        "agent_updates": 452000,
+        "epoch": 2000,
+        "expected_updates": 452000,
+        "real_steps": 234000,
+        "sha256": "749e28902aede9d64154bfb27431b3a47522f33f43e6e85015f51db1c28f1688"
+      }
+    },
+    "day_branch": {
+      "mbpo": {
+        "critic_chosen_minus_down_mean_scaled_Q": 0.622683604558309,
+        "distinct_days": 4,
+        "physical_chosen_minus_down_mean_kwh": -0.00019527236277859517,
+        "points": 12,
+        "sign_agreement": 0.16666666666666666,
+        "warning": "Selected correlated within-day branches; deterministic energy and stochastic soft-Q optimize different objectives."
+      },
+      "sac": {
+        "critic_chosen_minus_down_mean_scaled_Q": 0.27449965476989746,
+        "distinct_days": 4,
+        "physical_chosen_minus_down_mean_kwh": -0.00043045624889849536,
+        "points": 12,
+        "sign_agreement": 0.5833333333333334,
+        "warning": "Selected correlated within-day branches; deterministic energy and stochastic soft-Q optimize different objectives."
+      }
+    },
+    "dynamics_validation": {
+      "in_sample_power_skill": 0.027788221836090088,
+      "rotating_holdout_warning": "Rotating day-level holdout on successive persistent fits risks validation leakage; positive skill is not independent proof of model accuracy."
+    },
+    "evaluation_action_replay": {
+      "mbpo": {
+        "checked_actions": 38976,
+        "checkpoint_actions_match_saved_evaluation": true,
+        "fraction_above_1e_4": 0.0,
+        "max_abs_normalized_action_error": 2.1979212760925293e-06,
+        "p99_abs_normalized_action_error": 9.597279131412506e-07
+      },
+      "sac": {
+        "checked_actions": 38976,
+        "checkpoint_actions_match_saved_evaluation": true,
+        "fraction_above_1e_4": 0.0,
+        "max_abs_normalized_action_error": 3.9711594581604e-06,
+        "p99_abs_normalized_action_error": 1.817941665649414e-06
+      }
+    },
+    "in_sample_td_absolute_Q1_mean": {
+      "mbpo_real": 1.2015850319694437,
+      "mbpo_synthetic": 2.1671224866015835,
+      "sac_real": 1.196881771184053
+    },
+    "issues": [
+      "Low alpha relative to reward may merit ablation; neither alpha is at configured minimum; not a proven bug"
+    ],
+    "limitations": [
+      "The same six-sensor observation and SACAgent implementation are used by SAC and MBPO.",
+      "Checkpoint diagnostics are snapshots of learned values; they do not prove algorithm convergence.",
+      "Replay TD errors and dynamics errors are evaluated on training replay, not an independent held-out set.",
+      "Branched continuations evaluate frozen deterministic policies on selected dates, not the SAC stochastic entropy-regularized objective.",
+      "Changing batch sizes or training for more epochs needs a controlled new run and fixed development evaluation.",
+      "MBPO rotating dynamics holdouts can leak previously trained days; independent validation remains required.",
+      "A policy improvement in these diagnostic evaluation days must not be used to tune and then claim untouched test-set results."
+    ],
+    "observed_alpha": {
+      "mbpo_real": 0.012782987207174301,
+      "sac_real": 0.01558018196374178
+    },
+    "physics": {
+      "area": 1.0,
+      "efficiency": 0.18,
+      "freq": "5min",
+      "gamma_pdc": -0.004,
+      "horizon": 117,
+      "max_delta_azimuth": 10.0,
+      "max_delta_tilt": 5.0,
+      "movement_penalty": 0.0,
+      "observation_mode": "compact",
+      "periods": 118,
+      "power_model": "pvwatts_sapm",
+      "power_source_sha256": "af72b661e1039b6205554751052b05b4a5297c1286851b6f8f4dbcd39b10af7e",
+      "sapm_mount": "open_rack_glass_polymer",
+      "start_time": "12:00",
+      "wind_powerlaw_exponent": 0.14,
+      "wind_reference_height_m": 2.0
+    },
+    "replay_total": {
+      "mbpo_model": 1600,
+      "mbpo_real": 50000,
+      "sac": 50000
+    },
+    "shadow_status": {
+      "mbpo": "SHADOW_UPDATE_PASSED",
+      "sac": "SHADOW_UPDATE_PASSED"
+    },
+    "shared_sac_agent": true,
+    "terminal_mismatch": {
+      "mbpo_model": 0,
+      "mbpo_real": 0,
+      "sac": 0
+    }
+  },
+  "evaluation_status": "NOT_SUPPLIED",
+  "input_deep_sha256": "b7c9fb836cb9491eca0a5f6ed525e600a10cb71767863e650e12b052d170b29b",
+  "reproducibility_issues": [
+    "Full evaluation directory not supplied: claims about fixed beating SAC and +15% MBPO cannot be independently verified from Stage 4 ZIP."
+  ],
+  "schema": "sac-mbpo-stage5-v1",
+  "validation_scope": "Static artifact audit; NO new training or physics execution"
+}
