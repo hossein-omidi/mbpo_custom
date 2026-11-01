@@ -154,7 +154,7 @@ class SACConfig:
                 'reference_configs': [str(p) for p in self.config_paths]}
 
 
-def load_config(require_data: bool = True, *, power_model='legacy',
+def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
                 wind_reference_height_m=2.0, gamma_pdc=-0.004,
                 sapm_mount='open_rack_glass_polymer',
                 wind_powerlaw_exponent=0.14) -> SACConfig:

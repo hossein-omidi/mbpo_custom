@@ -39,7 +39,6 @@ class SquashedGaussianActor(nn.Module):
         action = torch.tanh(z)
         if not with_logprob:
             return action, None
-        # Stable log|d tanh(z)/dz| = 2(log(2) - z - softplus(-2z)).
         normal_lp = (-0.5 * ((z - mean) / std).square() - log_std - 0.5 * math.log(2. * math.pi)).sum(-1, keepdim=True)
         log_det = (2. * (LOG_2 - z - F.softplus(-2. * z))).sum(-1, keepdim=True)
         return action, normal_lp - log_det
@@ -82,6 +81,26 @@ class SACAgent:
     def alpha(self):
         return float(self.log_alpha.detach().exp().clamp_min(self.min_alpha).item())
 
+    def _project_alpha_floor(self):
+        """Project log(alpha) onto log(min_alpha), preserving recoverability.
+
+        The effective alpha was already clamped in actor/critic losses, but the
+        unconstrained log parameter could drift far below the floor. That made
+        automatic entropy tuning slow to recover if entropy later needed to
+        increase. Project after updates and after loading old checkpoints.
+        """
+        minimum = math.log(self.min_alpha)
+        with torch.no_grad():
+            if not torch.isfinite(self.log_alpha).all():
+                raise FloatingPointError('Non-finite SAC log_alpha')
+            if float(self.log_alpha.item()) < minimum:
+                self.log_alpha.fill_(minimum)
+                state = self.alpha_opt.state.get(self.log_alpha, {})
+                # Remove only outward first-moment momentum. A subsequent
+                # gradient requesting larger alpha can move immediately upward.
+                if 'exp_avg' in state:
+                    state['exp_avg'].zero_()
+
     @torch.no_grad()
     def act(self, state, deterministic=False):
         s = torch.as_tensor(np.asarray(state, dtype=np.float32), device=self.device).reshape(1,6)
@@ -106,7 +125,6 @@ class SACAgent:
         nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=10.)
         self.critic_opt.step()
 
-        # Freeze Q parameters during the policy step (but retain dQ/da).
         for p in self.critic.parameters(): p.requires_grad_(False)
         action, logp = self.actor(s)
         qa, qb = self.critic(s, action)
@@ -121,6 +139,7 @@ class SACAgent:
         self.alpha_opt.zero_grad(set_to_none=True)
         alpha_loss.backward()
         self.alpha_opt.step()
+        self._project_alpha_floor()
         with torch.no_grad():
             for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
                 target_param.lerp_(param, self.tau)
@@ -154,4 +173,5 @@ class SACAgent:
         self.actor_opt.load_state_dict(state['actor_opt'])
         self.critic_opt.load_state_dict(state['critic_opt'])
         self.alpha_opt.load_state_dict(state['alpha_opt'])
+        self._project_alpha_floor()
         self.updates = int(state['updates'])

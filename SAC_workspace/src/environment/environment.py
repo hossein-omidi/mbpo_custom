@@ -1,4 +1,4 @@
-"""Minimal adapter over the unmodified NSRDB/pvlib PVTrackingEnv.
+"""Minimal adapter over PVTrackingEnv plus recorded-NSRDB-albedo Stage A subclass.
 
 Normalized actions stay [-1,1]^2. Degrees and rewards are computed by the
 original environment, not approximated or transformed inside this adapter.
@@ -12,10 +12,10 @@ from SAC_workspace.src.representation.representation import encode
 
 class SACEnvironment:
     def __init__(self, env_kwargs: dict):
-        from mbpo.env.pv_tracking import PVTrackingEnv
+        from mbpo.env.stage_a_pv_tracking import StageAPVTrackingEnv
         if env_kwargs.get('observation_mode') != 'compact':
             raise ValueError('Must use compact mode for reference parity')
-        self.env = PVTrackingEnv(**dict(env_kwargs))
+        self.env = StageAPVTrackingEnv(**dict(env_kwargs))
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
         self.horizon = int(self.env.num_action_steps)
@@ -56,15 +56,21 @@ class SACEnvironment:
             'observation_mode': value('observation_mode'),
             'horizon': self.horizon,
         }
+        if source.weather_source == 'nsrdb_multiyear':
+            from mbpo.env.stage_a_data_contract import nsrdb_dataset_fingerprint
+            self.resolved_mdp.update(nsrdb_dataset_fingerprint(source.scenario_manifest_path))
+            self.resolved_mdp['nsrdb_albedo_contract'] = 'recorded_per_5min_strict'
         if source.power_model == 'pvwatts_sapm':
             import hashlib
             from pathlib import Path
-            from mbpo.env import pv_power_backend, pvlib_physics, pv_tracking
+            from mbpo.env import pv_power_backend, pvlib_physics, pv_tracking, stage_a_pv_tracking, stage_a_data_contract
             digest = hashlib.sha256()
-            for module in (pv_power_backend, pvlib_physics, pv_tracking):
+            for module in (pv_power_backend, pvlib_physics, pv_tracking, stage_a_pv_tracking, stage_a_data_contract):
                 digest.update(Path(module.__file__).read_bytes())
             self.resolved_mdp.update(
                 power_model=source.power_model,
+                albedo_model='nsrdb_recorded_strict',
+                physics_revision=pv_power_backend.PHYSICS_REVISION,
                 wind_reference_height_m=float(source.wind_reference_height_m),
                 gamma_pdc=float(source.gamma_pdc),
                 sapm_mount=source.sapm_mount,

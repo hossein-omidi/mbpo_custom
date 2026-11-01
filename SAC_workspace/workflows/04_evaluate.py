@@ -46,7 +46,7 @@ def main():
     paths=evaluate(cfg,args.checkpoint,scenario_ids=scenario_ids,seeds=args.seeds,device=args.device,include_classical=False)
     # Preserve original evaluation implementation but exclude classical tracker plots.
     # POA uses the exact recorded weather; no additional env stepping.
-    from MBPO_workspace.src.evaluation import ideal_instantaneous_poa
+    from MBPO_workspace.src.stage_a_reference import ideal_instantaneous_poa
     from SAC_workspace.src.environment.environment import SACEnvironment
     ref_env=SACEnvironment(cfg.eval_env)
     try:

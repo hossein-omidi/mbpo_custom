@@ -1,0 +1,172 @@
+{
+  "annual_files": [
+    {
+      "file": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_2018_5min.csv",
+      "fill_flag_counts": {
+        "0": 96458,
+        "1": 573,
+        "3": 30,
+        "5": 38,
+        "7": 8021
+      },
+      "irradiance_closure_diagnostic": {
+        "abs_p95_wm2": 0.8248024660766515,
+        "fraction_daytime_abs_gt_50_wm2": 0.0
+      },
+      "latitude": "40.72",
+      "longitude": "-74.01",
+      "row_count": 105120,
+      "sha256": "049c419dc0d4a95faa3e022657deefdb3c56ce02d45f28fb04443ead40ce4e71",
+      "surface_albedo_max": 0.8,
+      "surface_albedo_mean": 0.12473972602739729,
+      "surface_albedo_min": 0.06,
+      "time_zone_metadata": "0",
+      "weather_synthesis_or_interpolation": "none",
+      "year": 2018
+    },
+    {
+      "file": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_2019_5min.csv",
+      "fill_flag_counts": {
+        "0": 96065,
+        "1": 156,
+        "3": 13,
+        "5": 57,
+        "7": 7677,
+        "8": 1152
+      },
+      "irradiance_closure_diagnostic": {
+        "abs_p95_wm2": 0.8367233647675221,
+        "fraction_daytime_abs_gt_50_wm2": 0.0
+      },
+      "latitude": "40.72",
+      "longitude": "-74.01",
+      "row_count": 105120,
+      "sha256": "2190ddd2d15abeffde05342146d9eadd0ca4f48bfbb9d283df8606809283c9a3",
+      "surface_albedo_max": 0.8,
+      "surface_albedo_mean": 0.11761643835616441,
+      "surface_albedo_min": 0.06,
+      "time_zone_metadata": "0",
+      "weather_synthesis_or_interpolation": "none",
+      "year": 2019
+    },
+    {
+      "file": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_2020_5min.csv",
+      "fill_flag_counts": {
+        "0": 97150,
+        "1": 651,
+        "3": 21,
+        "5": 38,
+        "7": 7548
+      },
+      "irradiance_closure_diagnostic": {
+        "abs_p95_wm2": 0.8283248027507852,
+        "fraction_daytime_abs_gt_50_wm2": 0.0
+      },
+      "latitude": "40.72",
+      "longitude": "-74.01",
+      "row_count": 105408,
+      "sha256": "a1d6a085cfdf8af3e5a9d3bfb9ffd179e396f45d575ef3ab3dcd6fc9db81643c",
+      "surface_albedo_max": 0.8,
+      "surface_albedo_mean": 0.0945081967213115,
+      "surface_albedo_min": 0.06,
+      "time_zone_metadata": "0",
+      "weather_synthesis_or_interpolation": "none",
+      "year": 2020
+    },
+    {
+      "file": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_2021_5min.csv",
+      "fill_flag_counts": {
+        "0": 99119,
+        "1": 258,
+        "5": 95,
+        "7": 5648
+      },
+      "irradiance_closure_diagnostic": {
+        "abs_p95_wm2": 0.834918044230315,
+        "fraction_daytime_abs_gt_50_wm2": 0.0
+      },
+      "latitude": "40.72",
+      "longitude": "-74.01",
+      "row_count": 105120,
+      "sha256": "2c1b0d35614177ec018ab9f5bb6bd9814fe351ac7c2654c3f64bcdf3df0c6e86",
+      "surface_albedo_max": 0.8,
+      "surface_albedo_mean": 0.1317260273972603,
+      "surface_albedo_min": 0.06,
+      "time_zone_metadata": "0",
+      "weather_synthesis_or_interpolation": "none",
+      "year": 2021
+    },
+    {
+      "file": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_2022_5min.csv",
+      "fill_flag_counts": {
+        "0": 99666,
+        "1": 295,
+        "5": 63,
+        "7": 5096
+      },
+      "irradiance_closure_diagnostic": {
+        "abs_p95_wm2": 0.8299112321168707,
+        "fraction_daytime_abs_gt_50_wm2": 0.0
+      },
+      "latitude": "40.72",
+      "longitude": "-74.01",
+      "row_count": 105120,
+      "sha256": "dfd27c8e1a83ebf70c93ec68e9b0618cb1df97bf8fe387f7a92aaef6f04d9be0",
+      "surface_albedo_max": 0.8,
+      "surface_albedo_mean": 0.10819178082191781,
+      "surface_albedo_min": 0.06,
+      "time_zone_metadata": "0",
+      "weather_synthesis_or_interpolation": "none",
+      "year": 2022
+    },
+    {
+      "file": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_2023_5min.csv",
+      "fill_flag_counts": {
+        "0": 100464,
+        "1": 326,
+        "5": 148,
+        "7": 4182
+      },
+      "irradiance_closure_diagnostic": {
+        "abs_p95_wm2": 0.8312008913560192,
+        "fraction_daytime_abs_gt_50_wm2": 0.0
+      },
+      "latitude": "40.72",
+      "longitude": "-74.01",
+      "row_count": 105120,
+      "sha256": "8dfd9984de0b0b6f09a314dbb700846d6f601a7ba86f4396f7b32186de9f922d",
+      "surface_albedo_max": 0.65,
+      "surface_albedo_mean": 0.08695890410958905,
+      "surface_albedo_min": 0.06,
+      "time_zone_metadata": "0",
+      "weather_synthesis_or_interpolation": "none",
+      "year": 2023
+    },
+    {
+      "file": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_2024_5min.csv",
+      "fill_flag_counts": {
+        "0": 100817,
+        "1": 475,
+        "5": 1130,
+        "7": 2986
+      },
+      "irradiance_closure_diagnostic": {
+        "abs_p95_wm2": 0.8326996416185976,
+        "fraction_daytime_abs_gt_50_wm2": 0.0
+      },
+      "latitude": "40.72",
+      "longitude": "-74.01",
+      "row_count": 105408,
+      "sha256": "27627b82bb199dfd19e563070a078b9efb449371ceb07334080449d32403241d",
+      "surface_albedo_max": 0.8,
+      "surface_albedo_mean": 0.12396174863387979,
+      "surface_albedo_min": 0.07,
+      "time_zone_metadata": "0",
+      "weather_synthesis_or_interpolation": "none",
+      "year": 2024
+    }
+  ],
+  "dataset_policy": "local_historical_csv_no_interpolation_no_synthesis",
+  "note": "Fill Flags are reported, not silently deleted or corrected. NSRDB is a satellite/model-derived product, not raw ground truth.",
+  "schema": "stage_a_nsrdb_audit_v1"
+}

@@ -71,6 +71,31 @@ def sha(path):
     return h.hexdigest()
 
 
+def fingerprint_modules(modules):
+    """Hash source bytes in the exact order used by SACEnvironment."""
+    digest = hashlib.sha256()
+    components = {}
+    for module in modules:
+        path = Path(module.__file__)
+        payload = path.read_bytes()
+        digest.update(payload)
+        components[module.__name__] = hashlib.sha256(payload).hexdigest()
+    return digest.hexdigest(), components
+
+
+def current_power_source_fingerprint():
+    """Return the same five-file PV physics digest stored in resolved_mdp."""
+    from mbpo.env import (
+        pv_power_backend, pvlib_physics, pv_tracking,
+        stage_a_pv_tracking, stage_a_data_contract,
+    )
+    modules = (
+        pv_power_backend, pvlib_physics, pv_tracking,
+        stage_a_pv_tracking, stage_a_data_contract,
+    )
+    return fingerprint_modules(modules)
+
+
 def csv_rows(path):
     if path is None:
         return []
@@ -220,12 +245,12 @@ def check_checkpoint(path, kind, config, cfg_kwargs):
     ensure(ck['epoch'] * H == ck['env_steps'], f'{kind}: checkpoint epoch/steps mismatch')
     ensure(ck['resolved_mdp']['power_model'] == cfg_kwargs['power_model'], f'{kind}: power model mismatch')
     if cfg_kwargs['power_model'] == 'pvwatts_sapm':
-        from mbpo.env import pv_power_backend, pvlib_physics, pv_tracking
-        h=hashlib.sha256()
-        for module in (pv_power_backend,pvlib_physics,pv_tracking):
-            h.update(Path(module.__file__).read_bytes())
-        ensure(h.hexdigest()==ck['resolved_mdp'].get('power_source_sha256'),
-               f'{kind}: checkpoint and current PV power source fingerprints differ')
+        current_fingerprint, component_hashes = current_power_source_fingerprint()
+        saved_fingerprint = ck['resolved_mdp'].get('power_source_sha256')
+        ensure(saved_fingerprint == current_fingerprint,
+               f'{kind}: checkpoint and current PV power source fingerprints differ; '
+               f'checkpoint={saved_fingerprint}; current={current_fingerprint}; '
+               f'current_components={component_hashes}')
     for group in ('actor','critic','critic_target'):
         ensure(all(torch.isfinite(t).all().item() for t in ck['agent'][group].values()),
                f'{kind}: nonfinite {group} checkpoint parameters')
@@ -478,7 +503,9 @@ def select_branch_days(sids, n, seed):
     if n <= 0: return []
     rng=np.random.default_rng(seed)
     months=defaultdict(list)
-    for sid in sorted(sids): months[int(sid[5:7])].append(sid)
+    for sid in sorted(sids):
+        name=sid[0] if isinstance(sid,tuple) else sid
+        months[int(name[5:7])].append(sid)
     picks=[]
     for m in (1,4,7,10):
         if months[m]:picks.append(months[m][int(rng.integers(len(months[m])))])
@@ -493,18 +520,23 @@ def select_branch_days(sids, n, seed):
 def read_evaluation_actions(eval_dir):
     path=Path(eval_dir)/'trajectories_detailed.csv'
     ensure(path.is_file(), f'Missing detailed trajectories: {path}')
-    byday=defaultdict(lambda:defaultdict(list))
+    bypair=defaultdict(lambda:defaultdict(list))
     for row in csv_rows(path):
-        m=row['method'];sid=row['scenario_id']
-        if m in ('sac','mbpo'):
-            byday[sid][m].append(row)
-    complete={sid:group for sid,group in byday.items() if all(m in group and len(group[m])==H for m in ('sac','mbpo'))}
-    ensure(complete,'No complete SAC/MBPO evaluation trajectories found')
-    for sid,group in complete.items():
+        method=row['method']
+        if method in ('sac','mbpo'):
+            if row.get('seed') in (None,''):
+                raise ValueError('Each evaluation trajectory must contain its seed')
+            key=(str(row['scenario_id']),int(row['seed']))
+            bypair[key][method].append(row)
+    ensure(bypair,'No SAC/MBPO evaluation trajectories found')
+    # Never concatenate different seeds or silently drop incomplete pairs.
+    for key,group in bypair.items():
+        ensure(set(group)=={'sac','mbpo'},f'Missing paired policy for {key}')
         for method,rr in group.items():
             rr.sort(key=lambda r:int(r['step']))
-            ensure([int(r['step']) for r in rr]==list(range(1,H+1)),f'Incomplete step order {sid}/{method}')
-    return complete
+            ensure([int(r['step']) for r in rr]==list(range(1,H+1)),
+                   f'Incomplete/duplicate step order {key}/{method}')
+    return dict(bypair)
 
 
 
@@ -646,10 +678,10 @@ def branch_experiment(config, agents, eval_dir, days, steps, seed, soft_mc_repea
         recorded=read_evaluation_actions(eval_dir)
     sids=select_branch_days(recorded,days,seed)
     output=[]
-    for sid in sids:
+    for key in sids:
+        sid,eval_seed=key if isinstance(key,tuple) else (key,int(recorded[key]['sac'][0]['seed']))
         for method in ('sac','mbpo'):
-            rr=recorded[sid][method]
-            eval_seed=int(rr[0]['seed'])
+            rr=recorded[key][method]
             # Reproduce each method's original action up to branch; use same policy
             # thereafter. This tests *real closed-loop continuation* conditional
             # on a selected alternate first action, not a hindsight all-step oracle.
@@ -779,7 +811,7 @@ def run(args):
             'Replay TD errors and dynamics errors are evaluated on training replay, not an independent held-out set.',
             'Branched continuations evaluate frozen deterministic policies on selected dates, not the SAC stochastic entropy-regularized objective.',
             'Changing batch sizes or training for more epochs needs a controlled new run and fixed development evaluation.',
-            'MBPO rotating dynamics holdouts can leak previously trained days; independent validation remains required.',
+            'Internal MBPO persistent model holdout cannot substitute independent held-out policy days.',
             'A policy improvement in these diagnostic evaluation days must not be used to tune and then claim untouched test-set results.']}
     probes={}; rows=[]
     for key,agent,rep,sd in [('sac_real',sagent,srep,args.seed),
