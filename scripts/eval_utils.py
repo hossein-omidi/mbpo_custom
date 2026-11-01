@@ -48,7 +48,7 @@ PV_EPISODE_MAX_STEPS = DEFAULT_EPISODE_STEPS
 
 
 def apply_pv_utc_schedule(config):
-    """Force evaluation to use UTC daylight grid (12:00-21:45 UTC)."""
+    """Force evaluation to use the shared fixed UTC daylight envelope."""
     # This ensures eval always uses UTC regardless of training config
     config = dict(config)
     config['tz'] = PV_TIMEZONE
@@ -85,7 +85,8 @@ def rollout_time_axis(obs, tz=PV_TIMEZONE):
     H = DEFAULT_EPISODE_STEPS
     times = build_episode_times(tz=tz)
     # Return post-step times (skip first timestamp which is pre-step)
-    return [(t.hour + t.minute / 60.0 + t.second / 3600.0) for t in times[1:H+1]]
+    start_hour = DEFAULT_START_HOUR
+    return [start_hour + (i + 1) * DEFAULT_STEP_HOURS for i in range(H)]
 
 
 def rollout_xlabel(path=None):

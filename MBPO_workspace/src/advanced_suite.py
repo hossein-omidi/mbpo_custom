@@ -41,11 +41,12 @@ def export_detail(paths, outdir):
     """Optional lossless *observed* metadata export at evaluation time.
 
     A None field means unmeasured, not zero. Ideal commands are undefined.
-    Every complete 117-step method-day-seed path is checked before export.
+    Every complete method-day-seed path is checked against the resolved episode horizon.
     """
     outdir=Path(outdir);outdir.mkdir(parents=True,exist_ok=True)
     fp=outdir/'trajectories_detailed.csv'
     seen=set()
+    expected_horizon=None
     with fp.open('w',newline='',encoding='utf-8') as f:
         w=csv.DictWriter(f,fieldnames=ALL);w.writeheader()
         for p in paths:
@@ -53,8 +54,11 @@ def export_detail(paths, outdir):
             key=(str(p['scenario_id']),int(p['seed']),p['method'])
             if key in seen:raise ValueError('Duplicate evaluation path '+str(key))
             seen.add(key)
-            if any(len(p[z])!=117 for z in ('infos','power','energy','reward','cost','tilt','azimuth','action_tilt','action_azimuth','delta_tilt_deg','delta_azimuth_deg')):
-                raise ValueError('Detailed export requires 117 complete steps: '+str(key))
+            horizon=len(p['infos'])
+            if expected_horizon is None:
+                expected_horizon=horizon
+            if horizon!=expected_horizon or any(len(p[z])!=horizon for z in ('power','energy','reward','cost','tilt','azimuth','action_tilt','action_azimuth','delta_tilt_deg','delta_azimuth_deg')):
+                raise ValueError('Detailed export requires one consistent complete episode horizon: '+str(key))
             cum=0.
             for i,info in enumerate(p['infos']):
                 power=float(p['power'][i]);energy=float(p['energy'][i]);cost=float(p['cost'][i]);cum+=energy
@@ -148,16 +152,21 @@ def _read_eval(folder):
             parsed['step']=int(row['step']);parsed['utc_iso']=str(row['utc_iso'])
             grouped[key].append(parsed)
     if not grouped:raise ValueError('No visible controller trajectories')
-    keys=defaultdict(dict); clocks={}
+    keys=defaultdict(dict); clocks={}; expected_horizon=None; expected_clock=None
     for (sid,seed,method),rr in grouped.items():
-        if len(rr)!=117 or [int(row['step']) for row in rr]!=list(range(1,118)):
-            raise ValueError('Expected 117 ordered steps per path: '+str((sid,seed,method)))
+        horizon=len(rr)
+        if expected_horizon is None:
+            expected_horizon=horizon
+        if horizon!=expected_horizon or [int(row['step']) for row in rr]!=list(range(1,horizon+1)):
+            raise ValueError('Expected one consistent ordered episode horizon: '+str((sid,seed,method)))
         dt=[_time(r['utc_iso']) for r in rr]
         if any(abs((b-a).total_seconds()-300)>1e-5 for a,b in zip(dt,dt[1:])):
             raise ValueError('Non-native five-minute clock: '+str((sid,seed,method)))
-        h=np.array([x.hour+x.minute/60. for x in dt])
-        if not np.isclose(h[0],12.+5./60.) or not np.isclose(h[-1],21.75):
-            raise ValueError('Unsupported control window')
+        clock=[(x.hour,x.minute,x.second) for x in dt]
+        if expected_clock is None:
+            expected_clock=clock
+        elif clock!=expected_clock:
+            raise ValueError('Different UTC clock grid across evaluation paths')
         for i,r in enumerate(rr):
             if not np.isfinite([r['power_w'],r['energy_kwh'],r['tilt_deg'],r['azimuth_deg'],r['movement_cost_kwh']]).all():
                 raise ValueError('Nonfinite physical measurements')
@@ -265,7 +274,11 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
     weights,weight_type=_weights(root,{key[0] for key in pairs})
     # All controller/date/seed pairs are already validated. Collapse seed replicas by day.
     results=[];omitted=[];curve_rows=[]
-    hours=np.arange(1,118)*5./60.+12.
+    sample_path=next(iter(grouped.values()))
+    sample_times=[_time(r['utc_iso']) for r in sample_path]
+    episode_steps=len(sample_times)
+    episode_start_hour=(sample_times[0].hour+sample_times[0].minute/60.)-5./60.
+    hours=episode_start_hour+np.arange(1,episode_steps+1)*5./60.
     with PdfPages(out/'advanced_suite.pdf') as pdf:
         def save(fig,filename):
             fig.tight_layout()
@@ -370,7 +383,7 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
                 seedrr=[rr for (s,seed,meth),rr in grouped.items() if s==sid and meth==m]
                 for rr in seedrr:
                     xx.extend([r['azimuth_deg']%360. for r in rr]);yy.extend([r['tilt_deg'] for r in rr])
-                    ww.extend([weights[sid]/(len(seedrr)*117.)]*117)
+                    ww.extend([weights[sid]/(len(seedrr)*episode_steps)]*episode_steps)
             H,_,_=np.histogram2d(xx,yy,bins=bins,weights=ww)
             maps.append(H/max(H.sum(),1.))
         vmax=max(h.max() for h in maps)
@@ -454,7 +467,8 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
                         omitted.append(filename+': incomplete '+method+' '+metric+' coverage')
                 if shown==len(methods):
                     ax.set(ylabel='Weighted mean '+('gross' if metric.startswith('gross') else 'net')+
-                           ' energy (kWh / 117-step window)',title=heading+' (no sampling CI)')
+                           ' energy (kWh / {}-step window)'.format(episode_steps),
+                           title=heading+' (no sampling CI)')
                     ax.legend(fontsize=8);ax.grid(alpha=.2);save(fig,filename)
                 else:
                     plt.close(fig);omitted.append(filename+': incomplete comparable method coverage')

@@ -200,8 +200,11 @@ def paired_summary(paths, plan=None):
                  {'mbpo','sac','fixed_no_motion','poa_instant_ideal'},
                  set(METHODS),set(METHODS)-{'poa_instant_ideal'}]
         if set(group) not in allowed:raise ValueError(f'Missing paired methods for {key}')
+    first_group=next(iter(keys.values()))
+    first_path=next(iter(first_group.values()))
+    evaluated_horizon=len(first_path['power'])
     out={'protocol':('Paired by NSRDB scenario, seed, initial pose and post-step UTC timestamps; '
-           'real PVTrackingEnv; 117 transitions; no model-generated actions in evaluation'),
+           'real PVTrackingEnv; {} transitions; no model-generated actions in evaluation').format(evaluated_horizon),
          'scenario_count':len({k[0] for k in keys}),
          'paired_episodes':len(keys),'methods':{},'paired_net_kwh':{},
          'notes':['Instantaneous dual-axis is a sun-pointing GROSS-only reference, '

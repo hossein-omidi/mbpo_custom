@@ -16,11 +16,13 @@ NSRDB_SITE_LONGITUDE = -74.01
 NSRDB_SITE_ALTITUDE = 12.0
 
 EPISODE_TZ = 'UTC'
-# Daylight window centred on NYC solar noon (~16:56 UTC): 12:00–21:45 UTC.
-EPISODE_START_TIME = '12:00'
-EPISODE_PERIODS = 118
+# Fixed UTC envelope covers NYC apparent daylight across the annual cycle.
+# 08:45 UTC through 01:00 UTC on the next date: 16 h 15 min.
+# 196 timestamps at 5-min spacing = 195 control transitions.
+EPISODE_START_TIME = '08:45'
+EPISODE_PERIODS = 196
 EPISODE_FREQ = '5min'
-EPISODE_ACTION_STEPS = EPISODE_PERIODS - 1  # 117
+EPISODE_ACTION_STEPS = EPISODE_PERIODS - 1  # 195
 
 NSRDB_VALIDATION_SCENARIO_IDS = [
     '2018-02-15',

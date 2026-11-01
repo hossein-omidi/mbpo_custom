@@ -137,7 +137,7 @@ class MBPOTrainer:
             state=nxt
             if done:break
         if len(episode_rewards)!=self.env.horizon or not done:
-            raise RuntimeError('Incomplete 117-transition solar episode')
+            raise RuntimeError('Incomplete {}-transition solar episode'.format(self.env.horizon))
         self.epoch+=1
         row={'epoch':self.epoch,'env_steps':self.env_steps,'updates':self.agent.updates,
              'scenario_id':scenario,'return_kwh':float(sum(episode_rewards)),

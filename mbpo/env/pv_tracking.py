@@ -101,14 +101,14 @@ PV_TIMEZONE = 'UTC'
 
 # Episode grid: periods timestamps at freq; env.step() count == periods - 1.
 # Wall-clock labels use Location.tz (UTC) only — no civil-time conversion.
-# Daylight window 12:00–21:45 UTC (NYC solar noon ~16:56 UTC):
-# 585 min / 5 min = 117 transitions (118 timestamps).
+# Fixed annual daylight envelope: 08:45 UTC through 01:00 UTC next date.
+# 975 min / 5 min = 195 transitions (196 timestamps).
 # Step convention: action updates panel pose, then env advances to times[step_index];
 # reward uses NSRDB weather + pvlib geometry at that same timestamp (post-action pose).
-DEFAULT_START_TIME = '12:00'
-DEFAULT_PERIODS = 118
+DEFAULT_START_TIME = '08:45'
+DEFAULT_PERIODS = 196
 DEFAULT_FREQ = '5min'
-DEFAULT_EPISODE_STEPS = DEFAULT_PERIODS - 1  # 117 transitions per day
+DEFAULT_EPISODE_STEPS = DEFAULT_PERIODS - 1  # 195 transitions per episode
 DEFAULT_CONTROL_INTERVAL_MINUTES = 5.0
 
 
@@ -469,6 +469,10 @@ class PVTrackingEnv(gym.Env):
                 raise RuntimeError('NSRDB scenario not set before _build_weather_profile')
             year = scenario_source_year(self._current_scenario)
             year_weather = self._nsrdb_year_cache.get_year(year)
+            if len(times) and int(times[-1].year) > year:
+                next_year_weather = self._nsrdb_year_cache.get_year(int(times[-1].year))
+                year_weather = pd.concat([year_weather, next_year_weather]).sort_index()
+                year_weather = year_weather[~year_weather.index.duplicated(keep='last')]
             weather = build_weather_profile_from_scenario(
                 self.location, times, year_weather, self._current_scenario)
         else:

@@ -211,11 +211,18 @@ def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
             'lr': 3e-4, 'alpha_init': 1.0, 'target_entropy': -2.0,
             'min_alpha': float(skeleton['min_alpha']),
             'eval_interval': 10, 'checkpoint_interval': 50}
-    if (int(nsrdb['periods']) != 118 or nsrdb['start_time'] != '12:00'
-            or nsrdb['freq'] != '5min' or nsrdb['tz'] != 'UTC'
-            or int(eval_env['periods']) != 118 or eval_env['start_time'] != '12:00'
-            or eval_env['freq'] != '5min' or eval_env['tz'] != 'UTC'):
-        raise ValueError('Reference episode grid changed; verify horizon before proceeding')
+    expected_start = str(_constant(_BASE, 'EPISODE_START_TIME'))
+    expected_periods = int(_constant(_BASE, 'EPISODE_PERIODS'))
+    expected_freq = str(_constant(_BASE, 'EPISODE_FREQ'))
+    expected_tz = str(_constant(_BASE, 'EPISODE_TZ'))
+    for env_name, env in (('training', nsrdb), ('evaluation', eval_env)):
+        if (int(env['periods']) != expected_periods
+                or env['start_time'] != expected_start
+                or env['freq'] != expected_freq or env['tz'] != expected_tz):
+            raise ValueError(
+                '{} episode grid differs from shared NSRDB reference: '
+                'start_time={!r}, periods={!r}, freq={!r}, tz={!r}'.format(
+                    env_name, env['start_time'], env['periods'], env['freq'], env['tz']))
     manifest = Path(nsrdb['scenario_manifest'])
     if require_data:
         if not manifest.is_file():

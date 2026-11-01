@@ -17,7 +17,7 @@ Steps:
   2. Copy to data/pv_weather/nsrdb/newyork_{year}_5min.csv (canonical names).
   3. Validate each year: UTC index, 5-min spacing, full coverage incl. Feb 29,
      no NaNs in required columns, zenith-column vs pvlib agreement (< 1 deg).
-  4. Build scenario manifest (episode window 12:00-21:45 UTC, 118 stamps).
+   4. Build scenario manifest (episode window 08:45 UTC through 01:00 UTC next day, 196 stamps).
 
 Usage:
   python scripts/prepare_nsrdb_newyork_catalog.py

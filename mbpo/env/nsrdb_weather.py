@@ -1,7 +1,8 @@
 """NSRDB PSM v4 multi-year weather scenarios for PVTracking (New York City).
 
 Each scenario e = (data_year, calendar month, day) maps to one fixed irradiance
-trajectory W_e on the project UTC episode grid (12:00–21:45 UTC, native 5min).
+trajectory W_e on the project UTC episode grid (08:45 UTC through 01:00 UTC
+on the next date, native 5min).
 
 Data flow:
   - Official NSRDB API download (GOES CONUS v4, 5-min) → SAM CSV per year.
@@ -40,10 +41,10 @@ DEFAULT_LONGITUDE = -74.01
 DEFAULT_ALTITUDE = 12.0
 DEFAULT_TZ = 'UTC'
 
-# Project episode window (UTC), centred on NYC solar noon (~16:56 UTC):
-# 12:00–21:45 UTC = 118 timestamps / 117 transitions at 5 min.
-DEFAULT_EPISODE_START_TIME = '12:00'
-DEFAULT_EPISODE_PERIODS = 118
+# Fixed UTC envelope for NYC apparent daylight across the annual cycle:
+# 08:45 UTC through 01:00 UTC on the next date = 196 timestamps / 195 transitions.
+DEFAULT_EPISODE_START_TIME = '08:45'
+DEFAULT_EPISODE_PERIODS = 196
 
 REQUIRED_COLUMNS = ('dni', 'ghi', 'dhi', 'temperature', 'wind_speed')
 OPTIONAL_COLUMNS = (
@@ -429,9 +430,16 @@ class NsrdbYearCache:
         if year not in self._cache:
             path = self._path_by_year.get(year)
             if not path:
+                data_dir = Path(self._manifest.get('_data_dir', self._manifest.get('data_dir', '')))
+                for pattern in YEAR_FILE_PATTERNS:
+                    candidate = data_dir / pattern.format(year=year)
+                    if candidate.is_file():
+                        path = str(candidate)
+                        break
+            if not path:
                 rows = [s for s in self._manifest['scenarios'] if int(s.get('source_year', s['year'])) == year]
                 if not rows:
-                    raise KeyError('No scenarios for year {} in manifest'.format(year))
+                    raise KeyError('No NSRDB year file for {} in manifest/data_dir'.format(year))
                 path = rows[0]['_year_path']
             if not os.path.isfile(path):
                 raise FileNotFoundError(
@@ -529,6 +537,7 @@ def build_manifest_from_year_files(
     year_file_map = year_file_map or discover_year_csv_files(data_dir, years=years)
 
     scenarios = []
+    missing_boundary_scenarios = []
     for year in sorted(int(y) for y in years):
         year_path = year_file_map.get(year)
         if not year_path:
@@ -556,6 +565,20 @@ def build_manifest_from_year_files(
                     tz='UTC',
                 )
                 sid = '{}-{:02d}-{:02d}'.format(year, month, day)
+                episode_weather = weather
+                episode_end_year = int(times[-1].year)
+                if episode_end_year > year:
+                    adjacent_path = year_file_map.get(episode_end_year)
+                    if not adjacent_path:
+                        adjacent_map = discover_year_csv_files(
+                            data_dir, years=[episode_end_year])
+                        adjacent_path = adjacent_map.get(episode_end_year)
+                    if not adjacent_path or not os.path.isfile(adjacent_path):
+                        missing_boundary_scenarios.append(sid)
+                        continue
+                    next_year_weather = load_nsrdb_year_csv(adjacent_path)
+                    episode_weather = pd.concat([weather, next_year_weather]).sort_index()
+                    episode_weather = episode_weather[~episode_weather.index.duplicated(keep='last')]
                 row = {
                     'scenario_id': sid,
                     'id': sid,
@@ -574,14 +597,17 @@ def build_manifest_from_year_files(
                 }
                 if episode_validate:
                     try:
-                        prof = resample_weather_to_episode_times(weather, times)
+                        prof = resample_weather_to_episode_times(episode_weather, times)
                     except ValueError:
                         continue
                     if prof[list(REQUIRED_COLUMNS)].isnull().any().any():
                         continue
                     if not _episode_has_daylight(prof):
                         continue
-                scenarios.append(row)
+                    scenarios.append(row)
+    if missing_boundary_scenarios:
+        print('[warning] omitted cross-year episodes without adjacent-year NSRDB data: {}'.format(
+            ', '.join(missing_boundary_scenarios)))
     return scenarios
 
 
