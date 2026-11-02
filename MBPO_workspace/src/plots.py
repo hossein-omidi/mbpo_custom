@@ -24,7 +24,13 @@ def _utc_hours(path):
     ts=[datetime.fromisoformat(x['timestamp_utc_iso']) for x in path['infos']]
     if any(t.utcoffset().total_seconds()!=0 for t in ts):
         raise ValueError('Expected UTC-normalized NSRDB post-step timestamps')
-    return np.array([t.hour+t.minute/60+t.second/3600 for t in ts])
+    if not ts:
+        raise ValueError('Cannot plot an empty evaluation trajectory')
+    start_clock = ts[0].hour + ts[0].minute/60 + ts[0].second/3600
+    hours = np.array([start_clock + (t-ts[0]).total_seconds()/3600 for t in ts])
+    if np.any(np.diff(hours) <= 0):
+        raise ValueError('Non-monotone real NSRDB evaluation time grid')
+    return hours
 
 
 def _history(path):
@@ -67,7 +73,7 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
     ax.bar([LABELS[m] for m in available],
            [np.mean([p['gross_energy_kwh'] for p in paths if p['method']==m]) for m in available])
     ax.set_title('Gross energy — same NSRDB scenarios, same pvlib irradiance model')
-    ax.set_ylabel('Mean gross energy (kWh / 117-step episode)')
+    ax.set_ylabel('Mean gross energy (kWh / episode)')
     ax.tick_params(axis='x',rotation=17);ax.grid(axis='y',alpha=.2)
     save(fig,'01_gross_energy.png')
 
@@ -75,7 +81,7 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
     ax.bar([LABELS[m] for m in FEASIBLE],
            [np.mean([p['net_energy_kwh'] for p in paths if p['method']==m]) for m in FEASIBLE])
     ax.set_title('Net energy — only feasible controllers with identical reward')
-    ax.set_ylabel('Mean net energy (kWh / 117-step episode)')
+    ax.set_ylabel('Mean net energy (kWh / episode)')
     ax.tick_params(axis='x',rotation=17);ax.grid(axis='y',alpha=.2)
     save(fig,'02_net_energy.png')
 

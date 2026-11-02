@@ -25,6 +25,7 @@ DETAIL=('net_step_kwh','action_tilt','action_azimuth','actual_delta_tilt_deg',
         'actual_delta_azimuth_deg','pre_tilt_deg','pre_azimuth_deg','solar_zenith_deg',
         'solar_azimuth_deg','dni_wm2','dhi_wm2','ghi_wm2','weather_condition',
         'power_model','poa_global','poa_global_wm2','power_dc_w','effective_irradiance_wm2',
+        'weather_source','surface_albedo','albedo_source',
         'cell_temperature_c','ambient_temperature_c','wind_speed_m_s','wind_speed_10m_ms',
         'wind_reference_height_m','gamma_pdc','sapm_mount','wind_powerlaw_exponent')
 BASIC=('scenario_id','seed','method','step','utc_iso','power_w','energy_kwh',
@@ -96,11 +97,14 @@ def export_detail(paths, outdir):
                          dni_wm2=info.get('dni_wm2'),dhi_wm2=info.get('dhi_wm2'),
                          ghi_wm2=info.get('ghi_wm2'),weather_condition=info.get('weather_condition'),
                          power_model=info.get('power_model','legacy'),
+                         weather_source=info.get('weather_source'),
+                         surface_albedo=info.get('surface_albedo'),
+                         albedo_source=info.get('albedo_source'),
                          poa_global=info.get('poa_global'),
                          poa_global_wm2=info.get('poa_global'),power_dc_w=info.get('power_dc_w'),
                          effective_irradiance_wm2=info.get('effective_irradiance_wm2'),
                          cell_temperature_c=info.get('cell_temperature_c'),
-                         ambient_temperature_c=info.get('ambient_temperature_c'),
+                         ambient_temperature_c=info.get('ambient_temperature_c',info.get('temperature_c')),
                          wind_speed_m_s=info.get('wind_speed_m_s'),
                          wind_speed_10m_ms=info.get('wind_speed_10m_ms'),
                          wind_reference_height_m=info.get('wind_reference_height_m'),
@@ -147,7 +151,9 @@ def _read_eval(folder):
             if source==legacy_rich:
                 row['utc_iso']=row.get('timestamp_utc_iso')
                 row['net_step_kwh']=row.get('reward_kwh') if method!='poa_instant_ideal' else None
-            parsed={k:(_float(row.get(k)) if k not in ('scenario_id','method','utc_iso','weather_condition','power_model','sapm_mount') else row.get(k)) for k in ALL}
+            parsed={k:(_float(row.get(k)) if k not in (
+                'scenario_id','method','utc_iso','weather_condition','power_model',
+                'sapm_mount','weather_source','albedo_source') else row.get(k)) for k in ALL}
             parsed['scenario_id']=key[0];parsed['seed']=key[1];parsed['method']=method
             parsed['step']=int(row['step']);parsed['utc_iso']=str(row['utc_iso'])
             grouped[key].append(parsed)
@@ -196,7 +202,8 @@ def _read_eval(folder):
         if rich:
             reference=methods['fixed_no_motion']
             for method, rr in methods.items():
-                for field in ('solar_zenith_deg','solar_azimuth_deg','dni_wm2','dhi_wm2','ghi_wm2'):
+                for field in ('solar_zenith_deg','solar_azimuth_deg','dni_wm2','dhi_wm2',
+                              'ghi_wm2','surface_albedo'):
                     a=np.array([r[field] for r in rr]);b=np.array([r[field] for r in reference])
                     # If a rich export contains the field, it must be complete for
                     # both paired methods; missing values are not weather evidence.
@@ -207,6 +214,14 @@ def _read_eval(folder):
                             raise ValueError('Partially missing weather / solar geometry: '+str((key,method,field)))
                         if not np.allclose(a,b,atol=1e-5):
                             raise ValueError('Nonpaired recorded weather / solar geometry: '+str((key,method,field)))
+                if reference[0].get('weather_source')=='nsrdb_multiyear':
+                    if (not np.isfinite([r['surface_albedo'] for r in rr]).all()
+                            or not np.isfinite([r['surface_albedo'] for r in reference]).all()
+                            or any(r.get('albedo_source')!='nsrdb_recorded' for r in rr)
+                            or any(r.get('albedo_source')!='nsrdb_recorded' for r in reference)):
+                        raise ValueError('Detailed NSRDB export lacks recorded albedo provenance')
+                    if [r.get('albedo_source') for r in rr] != [r.get('albedo_source') for r in reference]:
+                        raise ValueError('Nonpaired NSRDB albedo source')
     by_day=defaultdict(set)
     for sid,seed in keys:by_day[sid].add(seed)
     if len({tuple(sorted(v)) for v in by_day.values()})!=1:
@@ -404,7 +419,7 @@ def render_suite(eval_dir, outdir=None, *, mbpo_training_csv=None, sac_training_
         fig,ax=plt.subplots(figsize=(11,max(4.,min(13.,len(day_sids)*.07+2))))
         finite=np.abs(gap[np.isfinite(gap)]);vmax=max(1e-9,float(np.percentile(finite,98)))
         im=ax.imshow(gap,aspect='auto',cmap='RdBu_r',vmin=-vmax,vmax=vmax,interpolation='nearest')
-        ix=np.linspace(0,116,7).astype(int)
+        ix=np.linspace(0, episode_steps-1, min(7, episode_steps)).astype(int)
         ax.set_xticks(ix,[f'{hours[i]:.1f}' for i in ix]);ax.set(xlabel='UTC post-step hour',
             ylabel='Distinct sampled scenario day, sorted',title='Instantaneous DC upper bound minus MBPO DC power (W)')
         if len(day_sids)<=30:

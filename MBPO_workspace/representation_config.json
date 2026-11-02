@@ -1,6 +1,11 @@
 {
   "schema_version": 1,
-  "active_methods": ["mbpo", "sac", "fixed_no_motion", "poa_instant_ideal"],
+  "active_methods": [
+    "mbpo",
+    "sac",
+    "fixed_no_motion",
+    "poa_instant_ideal"
+  ],
   "oracle": {
     "method": "poa_instant_ideal",
     "quantity": "gross_energy_kwh",
@@ -11,8 +16,11 @@
     "day_variability": "sample_sd_across_distinct_days",
     "mean_uncertainty": "none_without_independent_sampling_replicates",
     "paired_comparison_unit": "scenario_id",
-    "horizon": "117_native_five_minute_control_steps"
+    "horizon": "195_native_five_minute_control_steps"
   },
-  "legacy_trackers": {"dual_axis_slew_limited": false, "dual_axis_instant_ideal": false},
+  "legacy_trackers": {
+    "dual_axis_slew_limited": false,
+    "dual_axis_instant_ideal": false
+  },
   "preserve_legacy_files": true
 }

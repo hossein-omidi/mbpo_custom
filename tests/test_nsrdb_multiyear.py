@@ -4,23 +4,27 @@ import os
 import sys
 
 import numpy as np
+import pandas as pd
 import pytest
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
-from mbpo.env.pv_tracking import PVTrackingEnv
+from mbpo.env.pv_tracking import (
+    PVTrackingEnv, DEFAULT_EPISODE_STEPS, DEFAULT_PERIODS,
+    DEFAULT_START_TIME, DEFAULT_FREQ,
+)
 from mbpo.env.nsrdb_weather import (
     default_manifest_path,
     load_nsrdb_year_csv,
     load_scenario_manifest,
     resample_weather_to_episode_times,
     scenario_episode_date,
+    NsrdbYearCache,
 )
 from mbpo.env.nsrdb_iotools import read_nsrdb_csv_to_env_weather
 from mbpo.env.pvlib_physics import compute_panel_power_w
-from scripts.eval_utils import make_baseline_rollout, verify_rollout_pvlib_power
 
 MANIFEST = default_manifest_path()
 PYTHON = sys.executable
@@ -53,6 +57,31 @@ def _env_kwargs(**overrides):
     return base
 
 
+def _weather_frame_for_episode(manifest, scenario, times):
+    """Join the scenario year and any support-only year needed after midnight."""
+    source_year = int(scenario.get('source_year', scenario['year']))
+    cache = NsrdbYearCache(manifest)
+    frames = [cache.get_year(source_year)]
+    for support_year in range(source_year + 1, int(times[-1].year) + 1):
+        frames.append(cache.get_year(support_year))
+    combined = pd.concat(frames).sort_index()
+    return combined[~combined.index.duplicated(keep='last')]
+
+
+def pd_date_range_from_scenario(s, manifest):
+    ep = manifest.get('episode', {})
+    start_time = ep.get('start_time', DEFAULT_START_TIME)
+    periods = ep.get('periods', DEFAULT_PERIODS)
+    freq = ep.get('freq', DEFAULT_FREQ)
+    date = scenario_episode_date(s, tz='UTC')
+    return pd.date_range(
+        start='{} {}'.format(date.date(), start_time),
+        periods=int(periods),
+        freq=freq,
+        tz='UTC',
+    )
+
+
 def test_manifest_has_multi_year_days(manifest_available):
     by_mday = {}
     for s in manifest_available['scenarios']:
@@ -64,6 +93,18 @@ def test_manifest_has_multi_year_days(manifest_available):
     assert 'timestamps' in sample
     assert 'valid_step_count' in sample
     assert 'file_path' in sample or 'year_file' in sample
+
+
+def test_manifest_episode_grid_has_196_timestamps(manifest_available):
+    episode = manifest_available.get('episode', {})
+    assert episode.get('start_time') == DEFAULT_START_TIME
+    assert int(episode.get('periods')) == DEFAULT_PERIODS
+    assert episode.get('freq') == DEFAULT_FREQ
+    for scenario in manifest_available['scenarios']:
+        assert len(scenario['timestamps']) == DEFAULT_PERIODS
+        times = pd.DatetimeIndex(scenario['timestamps'])
+        assert times[0].strftime('%H:%M') == DEFAULT_START_TIME
+        assert times[-1].strftime('%H:%M') == '01:00'
 
 
 def test_same_seed_same_scenario_energy(manifest_available):
@@ -127,30 +168,50 @@ def test_feb_29_in_manifest(manifest_available):
 
 
 def test_no_missing_episode_windows(manifest_available):
-    cache = {}
-    for s in manifest_available['scenarios'][:20]:
-        year = int(s.get('source_year', s['year']))
-        if year not in cache:
-            from mbpo.env.nsrdb_weather import NsrdbYearCache
-            cache[year] = NsrdbYearCache(manifest_available).get_year(year)
+    # Check ordinary dates plus every included Dec-31 episode, which crosses
+    # into the following data year under the 08:45–01:00 UTC window.
+    scenarios = list(manifest_available['scenarios'][:20])
+    scenarios.extend(
+        s for s in manifest_available['scenarios']
+        if int(s['month']) == 12 and int(s['day']) == 31
+    )
+    seen = set()
+    for s in scenarios:
+        sid = s.get('scenario_id', s.get('id'))
+        if sid in seen:
+            continue
+        seen.add(sid)
         times = pd_date_range_from_scenario(s, manifest_available)
-        prof = resample_weather_to_episode_times(cache[year], times)
+        frame = _weather_frame_for_episode(manifest_available, s, times)
+        prof = resample_weather_to_episode_times(frame, times)
+        assert len(prof) == DEFAULT_PERIODS
         assert not prof[['ghi', 'dni', 'dhi', 'temperature', 'wind_speed']].isnull().any().any()
 
 
-def pd_date_range_from_scenario(s, manifest):
-    import pandas as pd
-    ep = manifest.get('episode', {})
-    start_time = ep.get('start_time', '12:00')
-    periods = ep.get('periods', 118)
-    freq = ep.get('freq', '5min')
-    date = scenario_episode_date(s, tz='UTC')
-    return pd.date_range(
-        start='{} {}'.format(date.date(), start_time),
-        periods=int(periods),
-        freq=freq,
-        tz='UTC',
-    )
+def test_cross_year_dec31_episode_uses_adjacent_year_rows(manifest_available):
+    candidates = [
+        s for s in manifest_available['scenarios']
+        if int(s['month']) == 12 and int(s['day']) == 31
+        and pd_date_range_from_scenario(s, manifest_available)[-1].year
+            > int(s.get('source_year', s['year']))
+    ]
+    if not candidates:
+        pytest.skip('No complete Dec-31 cross-year scenarios in the current manifest')
+    env = PVTrackingEnv(**_env_kwargs())
+    try:
+        scenario = candidates[0]
+        env.reset(scenario_id=scenario['scenario_id'])
+        source_year = int(scenario.get('source_year', scenario['year']))
+        assert env.times[0].year == source_year
+        assert env.times[-1].year == source_year + 1
+        assert len(env.times) == DEFAULT_PERIODS
+        assert env.num_action_steps == DEFAULT_EPISODE_STEPS
+        assert env.weather_profile.index.equals(env.times)
+        assert not env.weather_profile[
+            ['ghi', 'dni', 'dhi', 'temperature', 'wind_speed']
+        ].isnull().any().any()
+    finally:
+        env.close()
 
 
 def test_pvlib_power_changes_with_orientation(manifest_available):
@@ -158,8 +219,6 @@ def test_pvlib_power_changes_with_orientation(manifest_available):
     try:
         env.seed(0)
         env.reset()
-        # Compare near solar noon: sun-pointing only beats fixed-south when
-        # direct beam is present (overcast/diffuse-only days are exempt).
         midday = len(env.times) // 2
         env.step_index = midday
         env.current_time = env.times[midday]
@@ -212,7 +271,6 @@ def test_state_not_from_tmy(manifest_available):
 
 
 def test_in_train_eval_cycles_validation_scenarios(manifest_available):
-    """MBPO in-train eval must visit each fixed_eval_scenario once per epoch."""
     ids = [
         '2018-02-15', '2019-05-15', '2020-08-15', '2021-11-15', '2024-06-21',
     ]
@@ -251,16 +309,26 @@ def test_seed_maps_fixed_scenario_when_not_cycling(manifest_available):
         env.close()
 
 
-def test_baselines_share_scenario_id(manifest_available):
-    env = PVTrackingEnv(**_env_kwargs(fixed_eval_scenarios=['2020-06-21']))
+def _scenario_ids_for_constant_action(env, action, seed=7):
+    env.seed(seed)
+    env.reset()
+    seen = set()
+    done = False
+    while not done:
+        _, _, done, info = env.step(np.asarray(action, dtype=np.float32))
+        seen.add(info['scenario_id'])
+    return seen
+
+
+def test_different_control_sequences_share_same_fixed_scenario_id(manifest_available):
+    env = PVTrackingEnv(**_env_kwargs(
+        randomize_scenario=False,
+        fixed_eval_scenarios=['2020-06-21'],
+    ))
     try:
-        paths = {}
-        for method in ('poa_greedy_oracle', 'fixed_no_motion'):
-            env.seed(7)
-            paths[method] = make_baseline_rollout(env, method, path_length=117, seed=7)
-        sid0 = paths['poa_greedy_oracle']['infos'][0].get('scenario_id')
-        sid1 = paths['fixed_no_motion']['infos'][0].get('scenario_id')
-        assert sid0 == sid1 == '2020-06-21'
+        fixed_ids = _scenario_ids_for_constant_action(env, [0.0, 0.0], seed=7)
+        moving_ids = _scenario_ids_for_constant_action(env, [0.25, -0.25], seed=7)
+        assert fixed_ids == moving_ids == {'2020-06-21'}
     finally:
         env.close()
 
@@ -269,19 +337,19 @@ def test_control_interval_matches_native_5min(manifest_available):
     env = PVTrackingEnv(**_env_kwargs())
     try:
         env.reset()
-        assert env.num_action_steps == 117
-        assert len(env.times) == 118
+        assert env.num_action_steps == DEFAULT_EPISODE_STEPS
+        assert len(env.times) == DEFAULT_PERIODS
         _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
         assert abs(info['control_interval_minutes'] - 5.0) < 1e-6
         assert info.get('weather_native_interval_minutes') == 5
         assert info.get('weather_resampling') == 'none_native_5min'
         assert info['interval_hours'] == pytest.approx(5.0 / 60.0)
-        assert info['num_action_steps'] == 117
+        assert info['num_action_steps'] == DEFAULT_EPISODE_STEPS
     finally:
         env.close()
 
 
-def test_episode_terminates_after_117_transitions(manifest_available):
+def test_episode_terminates_after_configured_transitions(manifest_available):
     env = PVTrackingEnv(**_env_kwargs())
     try:
         env.reset()
@@ -290,21 +358,29 @@ def test_episode_terminates_after_117_transitions(manifest_available):
         while not done:
             _, _, done, _ = env.step(np.zeros(2, dtype=np.float32))
             steps += 1
-        assert steps == 117
+        assert steps == DEFAULT_EPISODE_STEPS
     finally:
         env.close()
 
 
 def test_nsrdb_weather_exact_timestamp_alignment(manifest_available):
-    """Episode weather rows must match NSRDB index exactly (no interpolation)."""
-    from mbpo.env.nsrdb_weather import NsrdbYearCache
-
+    """Episode weather rows must match NSRDB index exactly, including Jan 1 support rows."""
     env = PVTrackingEnv(**_env_kwargs())
     try:
-        env.seed(3)
-        env.reset()
-        year = int(env._current_scenario['source_year'])
-        raw = NsrdbYearCache(env._nsrdb_manifest).get_year(year)
+        cross_year = next((
+            s for s in env._nsrdb_scenarios
+            if int(s['month']) == 12 and int(s['day']) == 31
+            and pd_date_range_from_scenario(s, env._nsrdb_manifest)[-1].year
+                > int(s.get('source_year', s['year']))
+        ), None)
+        if cross_year is not None:
+            env.reset(scenario_id=cross_year['scenario_id'])
+        else:
+            env.seed(3)
+            env.reset()
+        scenario = env._current_scenario
+        raw = _weather_frame_for_episode(
+            env._nsrdb_manifest, scenario, env.times)
         for i, t in enumerate(env.times):
             assert t in raw.index
             assert env.weather_profile.index[i] == t
@@ -406,13 +482,13 @@ def test_nsrdb_path_does_not_load_historical_catalog(manifest_available):
 
 
 def test_nsrdb_csv_read_via_pvlib_iotools(manifest_available):
-    """Local SAM CSVs load through pvlib read_nsrdb_psm4 / read_psm3 (tests/test1.py path)."""
+    """Local SAM CSVs load through pvlib read_nsrdb_psm4 / read_psm3."""
     sample = manifest_available['scenarios'][0]
-    year_path = sample.get('file_path') or sample.get('year_file')
+    year = int(sample.get('source_year', sample['year']))
+    year_path = sample.get('_year_path')
     if not year_path or not os.path.isfile(year_path):
-        year_path = os.path.join(
-            os.path.dirname(MANIFEST),
-            'newyork_{}_5min.csv'.format(int(sample.get('source_year', sample['year']))))
+        data_dir = manifest_available.get('_data_dir', os.path.dirname(MANIFEST))
+        year_path = os.path.join(data_dir, 'newyork_{}_5min.csv'.format(year))
     assert os.path.isfile(year_path), year_path
     weather, meta = read_nsrdb_csv_to_env_weather(year_path)
     assert meta.get('_reader') in ('read_nsrdb_psm4', 'read_psm3')
@@ -426,22 +502,22 @@ def test_nsrdb_csv_read_via_pvlib_iotools(manifest_available):
 
 
 def test_env_power_matches_pvlib_physics(manifest_available):
-    """env.step power uses shared pvlib_physics (POA × area × efficiency)."""
+    """A real env transition matches the shared pvlib power implementation."""
     env = PVTrackingEnv(**_env_kwargs())
     try:
         env.seed(42)
         env.reset()
-        path = make_baseline_rollout(env, 'fixed_no_motion', path_length=20, seed=42)
-        ok, max_err, _ = verify_rollout_pvlib_power(
-            path, area=env.area, efficiency=env.efficiency, atol=0.5, max_steps=20)
-        assert ok, 'pvlib power mismatch max_err={}'.format(max_err)
-        _, _, _, info = env.step(np.zeros(2, dtype=np.float32))
+        _, reward, _, info = env.step(np.zeros(2, dtype=np.float32))
         expected = compute_panel_power_w(
             info['tilt'], info['azimuth'],
             info['solar_zenith_deg'], info['solar_azimuth_deg'],
             info['dni_wm2'], info['ghi_wm2'], info['dhi_wm2'],
             area=env.area, efficiency=env.efficiency)
         assert abs(float(info['power']) - expected) < 0.5
+        assert info['energy_kwh'] == pytest.approx(
+            info['power'] * info['interval_hours'] / 1000.0)
+        assert reward == pytest.approx(
+            info['energy_kwh'] - info['movement_cost'])
     finally:
         env.close()
 

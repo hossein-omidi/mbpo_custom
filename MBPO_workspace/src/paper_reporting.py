@@ -35,7 +35,8 @@ LABELS = {
 IDEALS = set(METHODS) - set(FEASIBLE)
 FIELDS = (
     'scenario_id','seed','method','step','timestamp_utc_iso','clock_hour_utc',
-    'season','weather_condition','solar_zenith_deg','solar_azimuth_deg',
+    'season','weather_condition','weather_source','surface_albedo','albedo_source',
+    'solar_zenith_deg','solar_azimuth_deg',
     'solar_altitude_deg','dni_wm2','dhi_wm2','ghi_wm2',
     'power_model','poa_global','poa_global_wm2','power_dc_w','effective_irradiance_wm2',
     'cell_temperature_c','ambient_temperature_c','wind_speed_m_s','wind_speed_10m_ms',
@@ -46,7 +47,9 @@ FIELDS = (
     'action_tilt','action_azimuth','actual_delta_tilt_deg','actual_delta_azimuth_deg',
     'tilt_sun_target_deg','tilt_tracking_error_deg','azimuth_tracking_error_deg',
 )
-FLOATS = set(FIELDS)-{'scenario_id','seed','method','step','timestamp_utc_iso','season','weather_condition','power_model','sapm_mount'}
+FLOATS = set(FIELDS)-{'scenario_id','seed','method','step','timestamp_utc_iso',
+                           'season','weather_condition','weather_source','albedo_source',
+                           'power_model','sapm_mount'}
 
 
 def _hour(ts):
@@ -75,13 +78,20 @@ def expand_paths(paths):
     if not paths: raise ValueError('No evaluation paths')
     groups=defaultdict(dict)
     rows=[]
+    expected_horizon=None
     for path in paths:
         m=path['method']; sid=str(path['scenario_id']); seed=int(path['seed'])
         if m not in METHODS: raise ValueError('Unknown method '+m)
         if m in groups[(sid,seed)]:raise ValueError(f'Duplicate method for {sid}/{seed}: {m}')
         groups[(sid,seed)][m]=path
         n=len(path['infos'])
-        if n != 117: raise ValueError(f'Expected 117 steps, got {n} for {m}/{sid}')
+        if n <= 0:
+            raise ValueError(f'Empty episode for {m}/{sid}')
+        if expected_horizon is None:
+            expected_horizon=n
+        elif n != expected_horizon:
+            raise ValueError(
+                f'Inconsistent episode horizon: expected {expected_horizon}, got {n} for {m}/{sid}')
         for k in ('power','energy','reward','cost','tilt','azimuth','action_tilt',
                   'action_azimuth','delta_tilt_deg','delta_azimuth_deg'):
             if len(path[k])!=n:raise ValueError(f'Inconsistent {k} length in {m}/{sid}')
@@ -109,8 +119,11 @@ def expand_paths(paths):
                 raise ValueError('Nonfinite physical measurement')
             if tilt < -1e-5 or tilt > 90.+1e-5 or az < -1e-5 or az >=360.+1e-5:
                 raise ValueError('Out-of-bound panel pose')
-            if not np.isclose(en,pw*(5./60.)/1000.,atol=1e-6,rtol=1e-5):
-                raise ValueError('Energy/power/5-minute accounting mismatch')
+            interval_hours=float(info.get('interval_hours',5./60.))
+            if not np.isfinite(interval_hours) or interval_hours <= 0:
+                raise ValueError('Invalid transition interval in trajectory metadata')
+            if not np.isclose(en,pw*interval_hours/1000.,atol=1e-6,rtol=1e-5):
+                raise ValueError('Energy/power/interval accounting mismatch')
             a_t=_fixed_float(path['action_tilt'][i]);a_a=_fixed_float(path['action_azimuth'][i])
             d_t=_fixed_float(path['delta_tilt_deg'][i]);d_a=_fixed_float(path['delta_azimuth_deg'][i])
             if not is_ideal:
@@ -127,6 +140,9 @@ def expand_paths(paths):
             row=dict(scenario_id=sid,seed=seed,method=m,step=i+1,timestamp_utc_iso=ts,
                      clock_hour_utc=hour,season=info.get('season') or '',
                      weather_condition=info.get('weather_condition') or '',
+                     weather_source=info.get('weather_source') or '',
+                     surface_albedo=_fixed_float(info.get('surface_albedo')),
+                     albedo_source=info.get('albedo_source') or '',
                      solar_zenith_deg=zen,solar_azimuth_deg=sunaz,
                      solar_altitude_deg=_fixed_float(info.get('solar_altitude_deg')) if info.get('solar_altitude_deg') is not None else 90.-zen,
                      dni_wm2=_fixed_float(info.get('dni_wm2')),
@@ -138,7 +154,7 @@ def expand_paths(paths):
                      power_dc_w=_fixed_float(info.get('power_dc_w')),
                      effective_irradiance_wm2=_fixed_float(info.get('effective_irradiance_wm2')),
                      cell_temperature_c=_fixed_float(info.get('cell_temperature_c')),
-                     ambient_temperature_c=_fixed_float(info.get('ambient_temperature_c')),
+                     ambient_temperature_c=_fixed_float(info.get('ambient_temperature_c',info.get('temperature_c'))),
                      wind_speed_m_s=_fixed_float(info.get('wind_speed_m_s')),
                      wind_speed_10m_ms=_fixed_float(info.get('wind_speed_10m_ms')),
                      wind_reference_height_m=_fixed_float(info.get('wind_reference_height_m')),
@@ -157,8 +173,6 @@ def expand_paths(paths):
         for before,after in zip(times,times[1:]):
             if abs((after-before).total_seconds()-300.)>1e-6:
                 raise ValueError('Nonchronological/non-five-minute NSRDB timestamps')
-        if times[0].hour!=12 or times[0].minute!=5 or times[-1].hour!=21 or times[-1].minute!=45:
-            raise ValueError('Episode time grid is not the 12:05–21:45 UTC post-action grid')
         if not np.isclose(gross,path['gross_energy_kwh'],atol=1e-7):
             raise ValueError('Gross energy aggregation mismatch')
     expected=set(METHODS) if any('poa_instant_ideal' in g for g in groups.values()) else set(METHODS)-{'poa_instant_ideal'}
@@ -176,23 +190,35 @@ def expand_paths(paths):
                     if info.get(field) is not None and reference.get(field) is not None:
                         if not np.isclose(float(info[field]),float(reference[field]),atol=1e-6):
                             raise ValueError(f'Mismatch in paired physical conditions ({field}) at step {t}')
+                if reference.get('weather_source') == 'nsrdb_multiyear':
+                    if (info.get('surface_albedo') is None
+                            or reference.get('surface_albedo') is None
+                            or info.get('albedo_source') != 'nsrdb_recorded'
+                            or reference.get('albedo_source') != 'nsrdb_recorded'):
+                        raise ValueError(f'Missing/non-recorded NSRDB albedo for {m}/{sid}')
+                    if not np.isclose(float(info['surface_albedo']),
+                                      float(reference['surface_albedo']), atol=1e-8, rtol=0):
+                        raise ValueError(f'Mismatch in paired surface albedo at step {t}')
     return rows
 
 
 def _load_rows(path):
     with Path(path).open(newline='',encoding='utf-8') as f:
         rd=csv.DictReader(f)
-        # Accept the exact historical schema as a legacy-only source, while
-        # retaining all new PVWatts fields in newly exported reports.
-        new_fields={'power_model','poa_global','poa_global_wm2','power_dc_w',
-                    'effective_irradiance_wm2','cell_temperature_c',
-                    'ambient_temperature_c','wind_speed_m_s','wind_speed_10m_ms',
-                    'wind_reference_height_m','gamma_pdc','sapm_mount',
-                    'wind_powerlaw_exponent'}
+        new_fields={
+            'power_model','poa_global','poa_global_wm2','power_dc_w',
+            'effective_irradiance_wm2','cell_temperature_c',
+            'ambient_temperature_c','wind_speed_m_s','wind_speed_10m_ms',
+            'wind_reference_height_m','gamma_pdc','sapm_mount',
+            'wind_powerlaw_exponent',
+            'weather_source','surface_albedo','albedo_source',
+        }
         headers=set(rd.fieldnames or ())
-        if headers not in (set(FIELDS),set(FIELDS)-new_fields):
+        previous_rich=set(FIELDS)-{'weather_source','surface_albedo','albedo_source'}
+        legacy=set(FIELDS)-new_fields
+        if headers not in (set(FIELDS), previous_rich, legacy):
             raise ValueError('Unsupported rich trajectory CSV format')
-        historic=headers!=set(FIELDS)
+        historic=headers==legacy
         rows=[]
         for x in rd:
             v={k:(_fixed_float(x.get(k)) if k in FLOATS else x.get(k, ''))
@@ -211,9 +237,15 @@ def _validate_rows(rows):
         grouped[(str(row['scenario_id']),int(row['seed']),row['method'])].append(row)
     if not grouped:raise ValueError('Rich trajectory CSV is empty')
     by_pair=defaultdict(dict)
+    expected_horizon=None
     for (sid,seed,method), rr in grouped.items():
-        if len(rr)!=117 or [r['step'] for r in rr]!=list(range(1,118)):
+        horizon=len(rr)
+        if horizon <= 0 or [r['step'] for r in rr]!=list(range(1,horizon+1)):
             raise ValueError('Corrupted/misordered trajectory rows')
+        if expected_horizon is None:
+            expected_horizon=horizon
+        elif horizon!=expected_horizon:
+            raise ValueError('Inconsistent episode horizons across trajectory groups')
         times=[datetime.fromisoformat(str(r['timestamp_utc_iso']).replace('Z','+00:00')) for r in rr]
         if any(t.tzinfo is None or t.utcoffset().total_seconds()!=0 for t in times):
             raise ValueError('Non UTC time')
@@ -236,6 +268,19 @@ def _validate_rows(rows):
         clock=[r['timestamp_utc_iso'] for r in next(iter(methods.values()))]
         if any([r['timestamp_utc_iso'] for r in rr]!=clock for rr in methods.values()):
             raise ValueError('Paired timestamp mismatch')
+        reference=methods['fixed_no_motion']
+        if reference[0].get('weather_source')=='nsrdb_multiyear':
+            ref_albedo=_arr(reference,'surface_albedo')
+            ref_source=[r.get('albedo_source','') for r in reference]
+            if not np.isfinite(ref_albedo).all() or any(x!='nsrdb_recorded' for x in ref_source):
+                raise ValueError('NSRDB rich CSV lacks complete recorded surface albedo')
+            for method,rr in methods.items():
+                values=_arr(rr,'surface_albedo')
+                sources=[r.get('albedo_source','') for r in rr]
+                if (not np.isfinite(values).all()
+                        or not np.allclose(values,ref_albedo,atol=1e-8,rtol=0)
+                        or sources!=ref_source):
+                    raise ValueError('Unpaired/missing NSRDB surface albedo in rich CSV')
     if not set(FEASIBLE).issubset(set(next(iter(by_pair.values())))):
         raise ValueError('Missing feasible comparison methods')
     return grouped, by_pair
@@ -357,8 +402,10 @@ def render_from_csv(rich_csv, outdir):
                          vmax=max(vmax,1e-9),interpolation='nearest')
             ax.set_title(f'Dual-axis power − {LABELS[learn]} power')
             ax.set_xlabel('Post-step UTC clock hour')
-            pos=np.linspace(0,116,7,dtype=int);ax.set_xticks(pos)
-            ax.set_xticklabels([f'{12+(i+1)*5/60:.2f}' for i in pos])
+            clock=_arr(by_pair[pairs[0]]['fixed_no_motion'],'clock_hour_utc')
+            pos=np.linspace(0,len(clock)-1,min(7,len(clock)),dtype=int)
+            ax.set_xticks(pos)
+            ax.set_xticklabels([f'{clock[i]:.2f}' for i in pos])
         if len(pairs)<=35:
             axes[0].set_yticks(np.arange(len(pairs)))
             axes[0].set_yticklabels([k[0] for k in pairs],fontsize=7)
@@ -464,10 +511,11 @@ def render_from_csv(rich_csv, outdir):
             ax.set_ylabel('Mean net kWh / episode');ax.legend(fontsize=8,ncol=2)
             ax.grid(axis='y',alpha=.25);save(fig,'11_weather_conditions.png')
 
+    episode_horizon=len(next(iter(grouped.values())))
     report={'source_csv':str(Path(rich_csv).resolve()),'episode_pairs':len(pairs),
             'scenarios':len({sid for sid,_ in pairs}),
             'methods':summary,'plots':[Path(p).name for p in figures],
-            'protocol': 'UTC native 5min; 117 real simulator transitions per matched episode',
+            'protocol': f'UTC native 5min; {episode_horizon} real simulator transitions per matched episode',
             'limitations':[
                 'An instantaneous sun-pointing or POA ideal is gross-only; no feasible net-energy claim.',
                 'Per-scenario ratios exclude zero-denominator days.',

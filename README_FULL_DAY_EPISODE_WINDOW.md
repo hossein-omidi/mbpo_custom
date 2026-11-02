@@ -1,71 +1,82 @@
-# Full-daylight UTC episode-window update
+# Full-day episode-window repair overlay
 
-Target source layout: `hossein-omidi/mbpo_custom`, branch `PVwatt_dev`.
+Target repository: `hossein-omidi/mbpo_custom`, branch `PVwatt_dev`  
+Reviewed branch head: `9793dec1fcb37d12d8d6cd37318f4064e66d343c`
 
-## Why this is not a one-number change
+## What was already correct in the branch
 
-The old episode is `12:00–21:45 UTC` (118 timestamps, 117 transitions). Increasing only `periods` cannot restore the summer morning daylight omitted before 12:00 UTC. The fixed annual daylight envelope recommended here is:
+The shared episode window and most of its data/evaluation plumbing were already present:
 
-- Start: `08:45 UTC`
+- UTC start: `08:45`
+- 196 timestamps at native `5min` spacing
+- 195 environment transitions
 - Last timestamp: `01:00 UTC` on the following calendar date
-- Frequency: `5min`
-- `periods = 196` timestamps
-- `EPISODE_ACTION_STEPS = 195` transitions
-- Duration: `16h 15min`
+- NSRDB manifest builder and runtime loader already join adjacent-year rows for Dec-31 episodes.
+- SAC/MBPO training schedules derive their episode frequency from the shared 195-step constant.
+- The current MBPO paired evaluator and advanced trajectory exporter are horizon-aware.
 
-For New York (40.72 N, 74.01 W), approximate annual solar geometry over 2018–2024 gives earliest sunrise around 09:24 UTC and latest sunset around 00:31 UTC. The proposed window leaves about 39 minutes before earliest sunrise and 29 minutes after latest sunset. It covers apparent daylight, not civil twilight.
+## What this repair fixes
 
-## What the updater changes
+The earlier update missed a hard-coded check in `SAC_workspace/src/environment/environment.py`:
 
-The updater safely updates shared train/evaluation defaults and the hard-coded horizon checks in the SAC/MBPO evaluation pipeline. It also makes the NSRDB manifest builder and runtime weather loader join the next year's native NSRDB rows for episodes crossing midnight. It does not fabricate or interpolate weather.
+```python
+if self.horizon != 117:
+    raise ValueError(...)
+```
 
-The updater changes source files only. It does not modify checkpoints, training logs, year CSVs, or the existing manifest.
+That check caused the exact MBPO traceback reported by the user. This overlay replaces it with validation against the configured timestamp count and the resolved environment grid.
 
-## Apply
+The overlay also:
+- updates `MBPO_workspace/representation_config.json` from 117 to 195 transitions;
+- keeps the compact state at six features and corrects stale five-feature documentation;
+- makes the physical-observation solar-time decoder roll over midnight safely;
+- makes the Stage-A budget audit calculate transitions and replay-equivalent episodes from the resolved configuration;
+- updates the NSRDB integration tests to use 195 transitions and to test adjacent-year data for Dec-31 episodes.
 
-From the repository root, after extracting this ZIP:
+## Install
+
+This is a **drop-in overlay**, not a patch file.
+
+1. Extract this ZIP directly into the repository root.
+2. Keep the folder structure and allow the included files to overwrite their matching files.
+
+No `apply_full_day_episode_window.py` command is required. No code is committed to GitHub by this package. It does not overwrite datasets, manifests, checkpoints, training histories, or existing run directories.
+
+## Dataset boundary
+
+The NSRDB data loader uses real adjacent-year rows; it does not synthesize or interpolate weather. With the current 2018–2024 dataset, Dec-31 episodes for 2018–2023 can use the following year's CSV. The `2024-12-31` episode is correctly omitted unless an actual 2025 support CSV is present. This does not remove a season or affect the five fixed validation dates.
+
+The failed MBPO run got past environment construction/reset and reached the old 117-step adapter check, so at least the selected manifest scenario was already loadable. The integration test in this overlay checks the included Dec-31 scenarios against the adjacent-year data.
+
+## Training and old run directories
+
+The old 117-step checkpoints and run snapshots are historical records. Do not resume them under the 195-step MDP.
+
+The SAC error `FileExistsError` is independent: `SAC_workspace/runs/sac_full_day_seed0` already contains data. Keep it intact and use a new run directory, for example:
+
+- `SAC_workspace/runs/sac_full_day_seed0_r1`
+- `MBPO_workspace/runs/mbpo_full_day_seed0_r1`
+
+The Gym deprecation and CUDA-driver messages are warnings, not the causes of either traceback. CPU execution remains valid.
+
+## Verification
+
+The compact regression test can be run with:
 
 ```bash
-python scripts/apply_full_day_episode_window.py --check-only
-python scripts/apply_full_day_episode_window.py
 python -m pytest -q tests/test_full_day_episode_window.py
-python scripts/prepare_nsrdb_newyork_catalog.py --years 2018-2024
 ```
 
-The manifest builder uses next-year files already present in `data/pv_weather/nsrdb` for Dec 31 episodes in 2018–2023. If `newyork_2025_5min.csv` is absent, the 2024-12-31 episode is explicitly reported and omitted because its final 00:00–01:00 UTC weather rows are not in the 2024 file. Do not synthesize those rows. The downloader in this branch is limited to 2018–2024; obtaining 2025 support data would require a separately verified source.
-
-After regeneration, inspect the manifest:
+The NSRDB integration test requires the local canonical year CSVs and generated manifest:
 
 ```bash
-python - <<'PY'
-import json
-p='data/pv_weather/nsrdb/newyork_multiyear_manifest.json'
-m=json.load(open(p, encoding='utf-8'))
-print('episode:', m['episode'])
-print('scenarios:', len(m['scenarios']))
-print('Dec 31 scenarios:', [s['scenario_id'] for s in m['scenarios'] if s['month']==12 and s['day']==31])
-print('example:', m['scenarios'][0]['timestamps'][0], '->', m['scenarios'][0]['timestamps'][-1])
-PY
+python -m pytest -q tests/test_nsrdb_multiyear.py
 ```
 
-Expected episode metadata: `start_time=08:45`, `periods=196`, `freq=5min`, `action_steps=195`. For complete 2018–2024 scenario coverage, the 2024-12-31 boundary needs actual 2025 NSRDB support rows; otherwise that single scenario is omitted with a warning.
+The manifest should already report `start_time=08:45`, `periods=196`, and `freq=5min`. Do not regenerate it if those values and its 196-timestamp scenario rows are already present.
 
-## Important training consequences
+## Evaluation note
 
-1. The observation `tau` now runs across 195 actions instead of 117. This is a different finite-horizon MDP.
-2. Old SAC and MBPO checkpoints must **not** be resumed or compared as if they were trained on the same MDP. Use new run directories and train both from scratch.
-3. At 500 episodes, each algorithm now collects `500 × 195 = 97,500` real transitions, versus 58,500 previously.
-4. `epoch_length` and MBPO `model_train_freq` are derived from `EPISODE_ACTION_STEPS` in the shared base config and therefore become 195 automatically.
-5. The existing 50,000-transition replay capacity now holds about 256 full episodes instead of 427. This updater deliberately does not change replay or model hyperparameters because the requested change is the episode window only. Reassess buffer coverage after the first new training run.
-6. Winter episodes contain several hours of night-time zero-irradiance steps because a fixed-length UTC window must cover the longest summer daylight envelope. This is the trade-off for keeping one fixed horizon and a consistent `tau` definition across seasons.
+The current Stage-A MBPO paired evaluation (`MBPO_workspace/workflows/03_evaluate.py`) uses the horizon-aware MBPO evaluator. The separate legacy TensorFlow Monte-Carlo report script and the older Stage-5 diagnostic scripts contain older protocol assumptions and are not certified by this overlay.
 
-## Evaluation compatibility
-
-The update makes `scripts/eval_utils.py`, `MBPO_workspace/src/evaluation.py`, and `MBPO_workspace/src/advanced_suite.py` horizon-aware, including the post-midnight unwrapped UTC plot axis. The previously supplied Stage 5 diagnostic ZIP hard-codes 117 steps and the old 12:00–21:45 window. **Do not run that old Stage 5 script on new checkpoints.** The next action-conditioned diagnostic must be updated to read the new horizon and permit timestamps to cross midnight.
-
-## Safety
-
-- Make a Git commit or backup before applying.
-- Run `--check-only` first. It aborts without writing if any expected source block differs.
-- The updater does not edit any user data, checkpoint, or manifest.
-- Regenerate the manifest only after applying the source update.
+The branch tree also contains `SAC_workspace/SAC_workspace_evaluation.zip`, while `SAC_workspace/src/evaluation/` is absent from the tracked tree. If that archive has not already been extracted in the local working copy, the standalone/paired evaluation imports need that separate package restored before evaluation. This is separate from the 117-step training crash.

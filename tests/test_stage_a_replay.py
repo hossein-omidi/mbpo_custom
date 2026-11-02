@@ -1,6 +1,7 @@
 """Persistent MBPO ensemble validation membership and checkpoint roundtrip."""
 import numpy as np
 import pytest
+from mbpo.env.pv_tracking import DEFAULT_EPISODE_STEPS
 
 
 def _buffer():
@@ -10,7 +11,7 @@ def _buffer():
 
 def _add(buffer,sid,n=6):
     s=np.array([.5,.2,.1,.4,0.,1.],dtype=np.float32)
-    nxt=s.copy();nxt[5]-=1/117
+    nxt=s.copy();nxt[5]-=1.0/float(DEFAULT_EPISODE_STEPS)
     for _ in range(n):buffer.add(s,np.zeros(2,dtype=np.float32),.008,nxt,False,sid)
 
 

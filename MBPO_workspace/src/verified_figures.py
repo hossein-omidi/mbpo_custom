@@ -30,7 +30,7 @@ def render_verified(paths,plan,outdir):
             paths,m,'gross_energy_kwh'),plan) for m in names]
         fig,ax=plt.subplots(figsize=(10,5));xs=np.arange(len(names))
         ax.bar(xs,ys,alpha=.75)
-        ax.set_xticks(xs,[LABELS[x] for x in names]);ax.set(ylabel='Mean gross DC energy (kWh / 117-step window)',
+        ax.set_xticks(xs,[LABELS[x] for x in names]);ax.set(ylabel='Mean gross DC energy (kWh / episode)',
                title='Matched gross DC energy, including unconstrained upper bound')
         ax.text(.01,.98,'No confidence bars: one sampled date per stratum cannot estimate design variance.',transform=ax.transAxes,va='top',fontsize=8)
         ax.grid(axis='y',alpha=.2);save(fig,'01_weighted_mean_energy.png')
@@ -47,7 +47,7 @@ def render_verified(paths,plan,outdir):
                 values=day_summary_from_paths(paths,m,metric)
                 ax.boxplot(list(values.values()),positions=[index],widths=.5,showmeans=True)
             ax.set_xticks(range(len(methods)),[LABELS[x] for x in methods])
-            ax.set(ylabel='kWh / 117-step window',title=heading)
+            ax.set(ylabel='kWh / episode',title=heading)
             ax.grid(axis='y',alpha=.2);save(fig,filename)
         fig,ax=plt.subplots(figsize=(9,5));pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion')]
         for j,(a,b) in enumerate(pairs):
@@ -69,7 +69,7 @@ def render_verified(paths,plan,outdir):
                 y=np.array([v[s['selected_scenario_id']] for s in strata])
                 vals.append(float(np.average(y,weights=w)) if len(y) else np.nan)
             ax.plot(months,vals,marker='o',label=LABELS[m])
-        ax.set_xticks(list(months));ax.set(xlabel='Month',ylabel='Weighted mean gross DC energy (kWh / window)',
+        ax.set_xticks(list(months));ax.set(xlabel='Month',ylabel='Weighted mean gross DC energy (kWh / episode)',
                title='Month-stratified gross DC energy, matched metric; no unsupported CI')
         ax.legend();ax.grid(alpha=.2);save(fig,'04_monthly_weighted_energy.png')
     return {'figures':figfiles,'statistics':summary}

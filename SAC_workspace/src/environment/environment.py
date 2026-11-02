@@ -19,9 +19,43 @@ class SACEnvironment:
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
         self.horizon = int(self.env.num_action_steps)
-        if self.horizon != 117 or self.observation_space.shape != (6,) or self.action_space.shape != (2,):
-            raise ValueError('Resolved MDP does not match compact 117-step reference')
-        if not np.array_equal(np.asarray(self.action_space.low), np.array([-1, -1])) or not np.array_equal(np.asarray(self.action_space.high), np.array([1, 1])):
+
+        # Validate the resolved finite-horizon grid against the requested
+        # configuration. Do not hard-code the former 117-transition horizon.
+        expected_periods = int(env_kwargs.get('periods', self.env.periods))
+        actual_periods = int(self.env.periods)
+        timestamp_count = len(self.env.times)
+        expected_horizon = expected_periods - 1
+        expected_start = str(env_kwargs.get('start_time', self.env.start_time))
+        expected_freq = str(env_kwargs.get('freq', self.env.freq))
+        expected_tz = str(env_kwargs.get('tz', self.env.location.tz))
+        expected_times = pd.date_range(
+            start='{} {}'.format(self.env.current_date.date(), expected_start),
+            periods=expected_periods,
+            freq=expected_freq,
+            tz=expected_tz,
+        )
+        if (expected_periods < 2
+                or actual_periods != expected_periods
+                or timestamp_count != expected_periods
+                or self.horizon != expected_horizon
+                or not self.env.times.equals(expected_times)):
+            raise ValueError(
+                'Resolved MDP episode grid mismatch: expected {} timestamps / '
+                '{} transitions from {} UTC at {}; got {} configured periods, '
+                '{} timestamps, {} transitions.'.format(
+                    expected_periods, expected_horizon, expected_start,
+                    expected_freq, actual_periods, timestamp_count, self.horizon))
+        if self.observation_space.shape != (6,):
+            raise ValueError(
+                'Resolved MDP must use the six-feature compact representation; '
+                'got observation shape {}'.format(self.observation_space.shape))
+        if self.action_space.shape != (2,):
+            raise ValueError(
+                'Resolved MDP must use the two-dimensional action space; '
+                'got action shape {}'.format(self.action_space.shape))
+        if (not np.array_equal(np.asarray(self.action_space.low), np.array([-1, -1]))
+                or not np.array_equal(np.asarray(self.action_space.high), np.array([1, 1]))):
             raise ValueError('Unexpected reference action bounds')
         self.steps = 0
         # Record the effective PVTrackingEnv parameters, including defaults

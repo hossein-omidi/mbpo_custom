@@ -151,8 +151,14 @@ class DynamicsEnsemble:
         idx=self.rng.integers(len(self.elites),size=len(states));rows=np.arange(len(states))
         chosen=means[idx,rows]
         if stochastic: chosen=chosen+stds[idx,rows]*self.rng.normal(size=chosen.shape)
-        uncertainty=means.std(axis=0).mean(axis=1)
-        return chosen.astype(np.float32),uncertainty.astype(np.float32)
+        # Express ensemble disagreement in standardized target coordinates.
+        # DNI, DHI and power deltas have different empirical scales; averaging
+        # their raw standard deviations would make max_std unit-dependent.
+        epistemic_std = means.std(axis=0)
+        uncertainty = (epistemic_std / np.maximum(self.ystd[None, :], 1e-8)).mean(axis=1)
+        if not np.isfinite(chosen).all() or not np.isfinite(uncertainty).all():
+            raise FloatingPointError('Non-finite probabilistic dynamics prediction')
+        return chosen.astype(np.float32), uncertainty.astype(np.float32)
 
     def state_dict(self):
         return {'num_models':self.num_models,'num_elites':self.num_elites,
@@ -190,16 +196,35 @@ class StructuredFakeEnv:
         self.slew_rate_azimuth_deg_s=float(e.slew_rate_azimuth_deg_s)
         self.interval_hours=float(e.interval_hours)
         self.power_norm=float(__import__('mbpo.env.pv_tracking',fromlist=['POWER_NORM']).POWER_NORM)
-        self.horizon=int(reference_env.horizon)
-        if self.horizon!=117:raise ValueError('Incorrect simulator horizon')
+        self.horizon = int(reference_env.horizon)
+        expected_steps = int(getattr(e, 'num_action_steps', self.horizon))
+        periods = getattr(e, 'periods', None)
+        if (self.horizon <= 0 or self.horizon != expected_steps
+                or (periods is not None and self.horizon != int(periods) - 1)):
+            raise ValueError(
+                'MBPO synthetic horizon does not match the real PV environment: '
+                'wrapper={}, num_action_steps={}, periods={}'.format(
+                    self.horizon, expected_steps, periods)
+            )
+        if not math.isfinite(self.interval_hours) or self.interval_hours <= 0:
+            raise ValueError('Invalid control interval in MBPO synthetic environment')
+        if not math.isfinite(self.power_norm) or self.power_norm <= 0:
+            raise ValueError('Invalid PV power normalization in MBPO synthetic environment')
 
     def step(self, states, actions, max_std=None):
         from mbpo.env.pvlib_physics import (energy_kwh_from_power_w,actuator_movement_cost_kwh)
         states=np.asarray(states,dtype=np.float32);actions=np.asarray(actions,dtype=np.float32)
         if states.ndim!=2 or states.shape[1]!=6 or actions.shape!=(len(states),2):
             raise ValueError('Fake environment input shape mismatch')
-        if not np.isfinite(states).all() or not np.isfinite(actions).all() or np.any(np.abs(actions)>1.00001):
-            raise ValueError('Non-finite or out-of-bound imaginary action/state')
+        if not np.isfinite(states).all() or not np.isfinite(actions).all():
+            raise ValueError('Non-finite imaginary action/state')
+        if np.any(np.abs(actions) > 1.00001):
+            raise ValueError('Out-of-bound imaginary action')
+        tol = 1e-5
+        if (np.any(states[:, :4] < -tol) or np.any(states[:, :4] > 1.0 + tol)
+                or np.any(states[:, 4] < -1.0 - tol) or np.any(states[:, 4] > 1.0 + tol)
+                or np.any(states[:, 5] <= 0.0) or np.any(states[:, 5] > 1.0 + tol)):
+            raise ValueError('Compact state is outside the real environment bounds or is terminal')
         delta,uncertainty=self.ensemble.predict_delta(states,actions)
         nxt=np.empty_like(states)
         nxt[:,:3]=np.clip(states[:,:3]+delta,0.,1.)

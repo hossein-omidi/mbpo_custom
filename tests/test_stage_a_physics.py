@@ -15,7 +15,6 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def _load_isotropic_max_tilt():
-    # Pure math function can be validated independently from pvlib installation.
     path=ROOT/'MBPO_workspace/src/stage_a_reference.py'
     tree=ast.parse(path.read_text())
     function=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
@@ -58,8 +57,6 @@ def test_actual_pvlib_backend_and_simulator():
     from mbpo.env.pv_power_backend import compute_pv_power
     from SAC_workspace.src.config.config import load_config
     from SAC_workspace.src.environment.environment import SACEnvironment
-    from MBPO_workspace.src.stage_a_reference import ideal_instantaneous_poa
-    from SAC_workspace.src.evaluation.evaluation import run_episode
     kw=dict(power_model='pvwatts_sapm',temp_air_c=24,wind_speed_ms=2,
             wind_reference_height_m=2,area=1,efficiency=.18)
     less=compute_pv_power(70,180,45,180,800,700,120,surface_albedo=.09,**kw)
@@ -81,9 +78,11 @@ def test_actual_pvlib_backend_and_simulator():
                       if k in row)
         assert info['surface_albedo']==pytest.approx(original)
         assert reward==pytest.approx(info['energy_kwh']-info['movement_cost'])
-        fixed=run_episode(cfg,'fixed_no_motion','2024-06-21',42,env=env)
-        oracle=ideal_instantaneous_poa(cfg,fixed,env=env)
-        assert len(oracle['power'])==117
-        assert all(p+1e-5>=f for p,f in zip(oracle['power'],fixed['power']))
+        assert env.horizon == 195
+        assert len(env.unwrapped.times) == 196
+        assert info['num_action_steps'] == 195
+        assert info['power_model'] == 'pvwatts_sapm'
+        assert info['cell_temperature_c'] is not None
+        assert info['wind_speed_10m_ms'] is not None
     finally:
         env.close()

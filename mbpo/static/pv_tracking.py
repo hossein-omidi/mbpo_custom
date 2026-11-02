@@ -19,7 +19,7 @@ PHYSICAL_CYCLIC_SLICES = (
     (8, 10),   # panel azimuth
 )
 
-COMPACT_CYCLIC_SLICES = ()  # compact 5D has no sin/cos pairs
+COMPACT_CYCLIC_SLICES = ()  # compact 6D has no sin/cos pairs
 # Match PVTrackingEnv defaults (used only for solar-time decoding in StaticFns).
 DEFAULT_LATITUDE = 40.72
 DEFAULT_LONGITUDE = -74.01
@@ -86,11 +86,11 @@ class StaticFns:
 
     @staticmethod
     def time_angle_from_obs(obs):
-        """Raw atan2(sin, cos) for time-of-day indices.
-        
-        Compact: time angle computed from tau (index 4) and episode timing
-        Legacy: indices (11,12) for time sin/cos
-        Physical: indices (1,2) for solar azimuth sin/cos, no time angle
+        """Raw time angle.
+
+        Compact: computed from tau at index 5 and the configured episode grid.
+        Legacy: indices (11,12) for time sin/cos.
+        Physical: indices (1,2) are solar azimuth; no direct time angle.
         """
         obs = np.asarray(obs)
         mode = observation_mode_from_obs(obs)
@@ -99,32 +99,26 @@ class StaticFns:
                 return np.arctan2(obs[11], obs[12])
             return np.arctan2(obs[:, 11], obs[:, 12])
         if mode == 'physical':
-            # Physical obs has no time angle encoded
             raise ValueError("Physical observation mode has no time angle")
         if mode == 'compact':
-            # Compact 6D: tau at index 5 (0-indexed), compute time from remaining steps
+            # Compact 6D: tau at index 5 (0-indexed), compute unwrapped time.
             if obs.ndim == 1:
                 tau = obs[5]
             else:
                 tau = obs[:, 5]
-            # tau = remaining_steps / H, so remaining_steps = tau * H
-            # current_step = H - remaining_steps = H * (1 - tau)
-            # time_of_day = start_hour + current_step * step_hours
-            from mbpo.env.pv_tracking import DEFAULT_EPISODE_STEPS, DEFAULT_START_HOUR, DEFAULT_STEP_HOURS
             H = DEFAULT_EPISODE_STEPS
             current_step = H * (1.0 - tau)
             time_of_day = DEFAULT_START_HOUR + current_step * DEFAULT_STEP_HOURS
-            time_angle = 2.0 * np.pi * time_of_day / 24.0
-            return time_angle
+            return 2.0 * np.pi * time_of_day / 24.0
         raise ValueError("Unknown observation mode")
 
     @staticmethod
     def time_of_day_from_obs(obs):
         """Time of day in hours (UTC) from observation.
-        
-        Compact: computed from tau
-        Legacy: from time sin/cos at indices (11,12)
-        Physical: raises ValueError (no time encoded)
+
+        Compact: computed from tau and retains values beyond 24:00.
+        Legacy: from time sin/cos at indices (11,12).
+        Physical: raises ValueError (no time encoded).
         """
         angle = StaticFns.time_angle_from_obs(obs)
         return angle * 24.0 / (2.0 * np.pi)
@@ -139,7 +133,7 @@ class StaticFns:
             num_actions=DEFAULT_NUM_ACTIONS,
             step_hours=DEFAULT_STEP_HOURS,
             reference_date=DEFAULT_REFERENCE_DATE):
-        """Reconstruct time from solar geometry (physical obs)."""
+        """Reconstruct time from solar geometry, including next-day UTC hours."""
         single = obs.ndim == 1
         if single:
             obs = obs.reshape(1, -1)
@@ -155,22 +149,22 @@ class StaticFns:
             dtype=np.float64,
         )
 
+        # Build timestamps by adding elapsed hours to midnight. Constructing
+        # Timestamp(hour=24/25) is invalid; Timedelta correctly rolls into the
+        # following calendar date while preserving the requested timezone.
+        reference_midnight = pd.Timestamp(reference_date)
+        if reference_midnight.tzinfo is None:
+            reference_midnight = reference_midnight.tz_localize(tz)
+        else:
+            reference_midnight = reference_midnight.tz_convert(tz)
+        reference_midnight = reference_midnight.normalize()
+        timestamps = pd.DatetimeIndex([
+            reference_midnight + pd.Timedelta(hours=float(hour))
+            for hour in hour_grid
+        ])
+
         location = Location(latitude, longitude, tz=tz)
-        timestamps = []
-        for hour in hour_grid:
-            hour_int = int(hour)
-            minute = int(round((hour - hour_int) * 60.0))
-            timestamps.append(
-                pd.Timestamp(
-                    year=pd.Timestamp(reference_date).year,
-                    month=pd.Timestamp(reference_date).month,
-                    day=pd.Timestamp(reference_date).day,
-                    hour=hour_int,
-                    minute=minute,
-                    tz=tz,
-                )
-            )
-        solar_position = location.get_solarposition(pd.DatetimeIndex(timestamps))
+        solar_position = location.get_solarposition(timestamps)
         grid_zenith = solar_position['zenith'].values
         grid_azimuth = solar_position['azimuth'].values % 360.0
 

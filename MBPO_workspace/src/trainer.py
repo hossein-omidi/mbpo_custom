@@ -21,46 +21,110 @@ from MBPO_workspace.src.dynamics import DynamicsEnsemble,StructuredFakeEnv
 from MBPO_workspace.src.replay import ScenarioReplayBuffer,mix_batches
 
 
+def validate_model_fit_frequency(model_train_freq, horizon):
+    """Require model refits at complete episode boundaries."""
+    frequency = int(model_train_freq)
+    steps = int(horizon)
+    if frequency <= 0 or steps <= 0 or frequency % steps != 0:
+        raise ValueError(
+            'model_train_freq must be a positive integer multiple of the '
+            'real episode horizon'
+        )
+    return frequency
+
+
 class MBPOTrainer:
     def __init__(self, cfg: MBPOConfig, outdir, seed=0, device='cpu', resume=None,
                  env_factory=SACEnvironment):
         seed_all(int(seed))
-        self.cfg=cfg;self.seed=int(seed);self.device=device
-        self.outdir=Path(outdir).resolve()
-        self.outdir.mkdir(parents=True,exist_ok=True)
-        self.history_path=self.outdir/'episodes.csv'
-        self.cfg_path=self.outdir/'config.json'
+        self.cfg = cfg
+        self.seed = int(seed)
+        self.device = device
+        self.outdir = Path(outdir).resolve()
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        self.history_path = self.outdir / 'episodes.csv'
+        self.cfg_path = self.outdir / 'config.json'
+        self.resolved_path = self.outdir / 'resolved_mdp.json'
+
         if resume is None:
-            if self.history_path.exists() or self.cfg_path.exists():
-                raise FileExistsError('A run already exists. Use --resume or a new run directory.')
-            self.cfg_path.write_text(json.dumps(cfg.to_dict(),indent=2,sort_keys=True),encoding='utf-8')
+            existing = [
+                self.history_path, self.cfg_path, self.resolved_path,
+                *self.outdir.glob('*.pt'),
+            ]
+            if any(path.exists() for path in existing):
+                raise FileExistsError(
+                    'Run data already exists in {}; choose a fresh run or --resume'.format(
+                        self.outdir)
+                )
         else:
-            if not self.cfg_path.is_file(): raise FileNotFoundError('Run config.json is missing')
-            if json.loads(self.cfg_path.read_text())!=json.loads(json.dumps(cfg.to_dict())):
+            if not self.cfg_path.is_file():
+                raise FileNotFoundError('Run config.json is missing')
+            saved_cfg = json.loads(self.cfg_path.read_text(encoding='utf-8'))
+            requested_cfg = json.loads(json.dumps(cfg.to_dict()))
+            if saved_cfg != requested_cfg:
                 raise ValueError('The requested configuration differs from the original run')
-        self.env=env_factory(cfg.sac.train_env)
-        self.env.seed(seed)
-        self.resolved_path=self.outdir/'resolved_mdp.json'
-        if resume is None:
-            self.resolved_path.write_text(json.dumps(self.env.resolved_mdp,indent=2,sort_keys=True),encoding='utf-8')
-        elif not self.resolved_path.is_file() or json.loads(self.resolved_path.read_text())!=self.env.resolved_mdp:
-            raise ValueError('The physical simulator differs from the checkpoint run')
-        a=cfg.sac.algo
-        self.agent=SACAgent(hidden_sizes=a['hidden_sizes'],lr=a['lr'],gamma=a['gamma'],tau=a['tau'],
-            reward_scale=a['reward_scale'],alpha_init=a['alpha_init'],
-            target_entropy=a['target_entropy'],min_alpha=a['min_alpha'],device=device)
-        m=cfg.model
-        self.dynamics=DynamicsEnsemble(num_models=m.num_models,num_elites=m.num_elites,
-            hidden_dim=m.hidden_dim,lr=m.model_lr,device=device,seed=seed+100)
-        self.fake_env=StructuredFakeEnv(self.dynamics,self.env)
-        self.real_pool=ScenarioReplayBuffer(capacity=a['replay_size'],seed=seed+1)
-        self.model_pool=ReplayBuffer(capacity=min(m.model_pool_capacity,
-              m.model_retain_epochs*m.rollout_batch_size*m.rollout_length),seed=seed+2)
-        self.rng=np.random.default_rng(seed+3)
-        self.epoch=0;self.env_steps=0
-        self.latest_model_metrics={}
-        self.last_model_step=0
-        if resume is not None:self.load(resume)
+
+        self.env = env_factory(cfg.sac.train_env)
+        try:
+            self.env.seed(seed)
+            horizon = int(self.env.horizon)
+            if horizon <= 0:
+                raise ValueError('The real PV environment has an invalid episode horizon')
+
+            # Model fitting/validation must happen only after complete solar days.
+            # A multiple of the horizon allows fitting every day or every k days.
+            fit_frequency = validate_model_fit_frequency(
+                cfg.model.model_train_freq, horizon)
+
+            a = cfg.sac.algo
+            self.agent = SACAgent(
+                hidden_sizes=a['hidden_sizes'], lr=a['lr'], gamma=a['gamma'],
+                tau=a['tau'], reward_scale=a['reward_scale'],
+                alpha_init=a['alpha_init'], target_entropy=a['target_entropy'],
+                min_alpha=a['min_alpha'], device=device,
+            )
+            m = cfg.model
+            self.dynamics = DynamicsEnsemble(
+                num_models=m.num_models, num_elites=m.num_elites,
+                hidden_dim=m.hidden_dim, lr=m.model_lr, device=device, seed=seed + 100,
+            )
+            self.fake_env = StructuredFakeEnv(self.dynamics, self.env)
+            self.real_pool = ScenarioReplayBuffer(capacity=a['replay_size'], seed=seed + 1)
+            self.model_pool = ReplayBuffer(
+                capacity=min(m.model_pool_capacity,
+                             m.model_retain_epochs * m.rollout_batch_size * m.rollout_length),
+                seed=seed + 2,
+            )
+            self.rng = np.random.default_rng(seed + 3)
+            self.epoch = 0
+            self.env_steps = 0
+            self.latest_model_metrics = {}
+            self.last_model_step = 0
+
+            if resume is None:
+                # Do not leave a poisoned, apparently initialized run directory if
+                # construction/validation fails before the trainer is usable.
+                cfg_tmp = self.cfg_path.with_name(self.cfg_path.name + '.tmp')
+                mdp_tmp = self.resolved_path.with_name(self.resolved_path.name + '.tmp')
+                cfg_tmp.write_text(
+                    json.dumps(cfg.to_dict(), indent=2, sort_keys=True), encoding='utf-8')
+                mdp_tmp.write_text(
+                    json.dumps(self.env.resolved_mdp, indent=2, sort_keys=True),
+                    encoding='utf-8')
+                os.replace(cfg_tmp, self.cfg_path)
+                os.replace(mdp_tmp, self.resolved_path)
+            else:
+                if (not self.resolved_path.is_file()
+                        or json.loads(self.resolved_path.read_text(encoding='utf-8'))
+                        != self.env.resolved_mdp):
+                    raise ValueError('The physical simulator differs from the checkpoint run')
+                self.load(resume)
+        except Exception:
+            try:
+                self.env.close()
+            except Exception:
+                pass
+            raise
 
     def _fit_and_rollout(self):
         m=self.cfg.model

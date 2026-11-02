@@ -1,14 +1,9 @@
-"""conf_compact — NSRDB multi-year with compact 5-component state space.
+"""conf_compact — NSRDB multi-year with compact six-feature state space.
 
-Finite-horizon MDP with 5-component state (zenith_norm, ghi_norm, rel_azimuth_sin, tilt_norm, tau).
+Finite-horizon MDP with state
+[DNI_norm, DHI_norm, power_norm, panel_tilt_norm, panel_azimuth_norm, tau].
 Anchored to stage3_multiyear_nsrdb_scenario: discount=1.0, rollout length 1.
-
-Key differences from conf3:
-- Compact 5D state space (zenith_norm, ghi_norm, rel_azimuth_sin, tilt_norm, tau)
-- Smaller networks (64-wide) for faster training
-- Same physics-based reward and movement cost
 """
-
 from examples.config.pv_tracking._nsrdb_base import (
     NSRDB_MANIFEST,
     NSRDB_VALIDATION_SCENARIO_IDS,
@@ -21,7 +16,7 @@ assert_nsrdb_validation_scenarios(NSRDB_MANIFEST, NSRDB_VALIDATION_SCENARIO_IDS)
 CONFIG_VERSION = 'pv_tracking_conf_compact_nsrdb_2026'
 TRAINING_STAGE = 'conf_compact'
 
-# Compact networks for faster training with 5D state
+# Compact six-feature state; actor and critic dimensions remain unchanged.
 _SAC_HIDDEN = (64, 64)
 
 params = build_nsrdb_params(
@@ -52,15 +47,15 @@ params = build_nsrdb_params(
     },
     eval_env_kwargs={
         'observation_mode': 'compact',
-        'fixed_eval_scenarios': None,  # For MC eval: use full manifest, not fixed scenarios
-        'randomize_scenario': True,  # For MC eval: randomize scenarios
+        'fixed_eval_scenarios': None,
+        'randomize_scenario': True,
     },
     run_params_kwargs={
         'checkpoint_replay_pool': True,
     },
     replay_pool_params_kwargs={
         'kwargs': {
-            'max_size': 50000,  # capped at 50k for 8GB node
+            'max_size': 50000,
         }
     },
 )

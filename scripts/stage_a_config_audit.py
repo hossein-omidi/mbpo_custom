@@ -39,7 +39,14 @@ def main():
 
     a, m = sac.algo, mbpo.model
     epochs = int(a["epochs"] if args.epochs is None else args.epochs)
-    horizon = 117
+    periods = int(sac.train_env["periods"])
+    horizon = periods - 1
+    if horizon < 1:
+        raise SystemExit("ERROR: configured episode must contain at least one transition")
+    if int(m.model_train_freq) != horizon:
+        raise SystemExit(
+            "ERROR: MBPO model_train_freq={} does not match the {}-transition episode.".format(
+                m.model_train_freq, horizon))
     steps = epochs * horizon
     warmup = int(a["start_steps"])
     updates_per_step = int(a["updates_per_step"])
@@ -53,9 +60,11 @@ def main():
     report = {
         "power_model": args.power_model,
         "same_sac_config_for_sac_and_mbpo": True,
+        "episode_start_time_utc": sac.train_env["start_time"],
+        "episode_periods_timestamps": periods,
+        "transitions_per_episode": horizon,
         "epochs_requested_absolute": epochs,
         "config_default_epochs": int(a["epochs"]),
-        "transitions_per_episode": horizon,
         "real_environment_transitions": steps,
         "random_exploration_transitions": min(steps, warmup),
         "random_exploration_equivalent_episodes": round(warmup / horizon, 2),
@@ -97,7 +106,7 @@ def main():
         "notes": [
             "--epochs is the absolute final episode count, not additional episodes.",
             "SAC update count is estimated from the current trainer schedule; the checkpoint records the exact count.",
-            "MBPO fit count is estimated from its once-per-117-step schedule after warm-up.",
+            "MBPO fit count is estimated from its configured model_train_freq schedule after warm-up.",
             "The standalone trainer does not run validation just because eval_interval exists in config.",
             "movement_penalty=0 means logged net reward equals gross DC energy, not actuator-adjusted net generation.",
         ],
