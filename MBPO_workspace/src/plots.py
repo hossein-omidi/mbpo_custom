@@ -1,3 +1,4 @@
+# PVWATT_DEV_REPAIR_V3
 """Modern 2D/3D plotting and shared SAC plotting reuse; legacy scripts remain intact.
 No TensorFlow, Ray, or legacy policy imports. Output uses actual saved physical
 rollout metadata (timestamps, irradiance-driven power, and kWh).
@@ -39,6 +40,16 @@ def _history(path):
     return rows or None
 
 
+def _balanced(paths,method,field):
+    by_day=defaultdict(list)
+    for p in paths:
+        if p['method']==method:
+            by_day[str(p['scenario_id'])].append(float(p[field]))
+    if not by_day:
+        raise ValueError(f'Method {method} has no evaluation trajectories')
+    return float(np.mean([np.mean(v) for v in by_day.values()]))
+
+
 def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
     outdir=Path(outdir);outdir.mkdir(parents=True,exist_ok=True)
     # Direct reuse of SAC's fully-tested plotting system for its four methods:
@@ -71,16 +82,16 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
     # Gross energy can include the unconstrained ideal reference.
     fig,ax=plt.subplots(figsize=(10,5))
     ax.bar([LABELS[m] for m in available],
-           [np.mean([p['gross_energy_kwh'] for p in paths if p['method']==m]) for m in available])
-    ax.set_title('Gross energy — same NSRDB scenarios, same pvlib irradiance model')
+           [_balanced(paths,m,'gross_energy_kwh') for m in available])
+    ax.set_title('Gross energy — descriptive equal-day averages')
     ax.set_ylabel('Mean gross energy (kWh / episode)')
     ax.tick_params(axis='x',rotation=17);ax.grid(axis='y',alpha=.2)
     save(fig,'01_gross_energy.png')
 
     fig,ax=plt.subplots(figsize=(10,5))
     ax.bar([LABELS[m] for m in FEASIBLE],
-           [np.mean([p['net_energy_kwh'] for p in paths if p['method']==m]) for m in FEASIBLE])
-    ax.set_title('Net energy — only feasible controllers with identical reward')
+           [_balanced(paths,m,'net_energy_kwh') for m in FEASIBLE])
+    ax.set_title('Net energy — descriptive equal-day averages')
     ax.set_ylabel('Mean net energy (kWh / episode)')
     ax.tick_params(axis='x',rotation=17);ax.grid(axis='y',alpha=.2)
     save(fig,'02_net_energy.png')
@@ -88,8 +99,11 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
     fig,ax=plt.subplots(figsize=(11,5))
     refs=('sac','fixed_no_motion','dual_axis_slew_limited')
     for j,ref in enumerate(refs):
-        dy=[by[(sid,sd,'mbpo')]['net_energy_kwh']-by[(sid,sd,ref)]['net_energy_kwh']
-            for sid,sd in pairs]
+        day_differences=defaultdict(list)
+        for sid,sd in pairs:
+            day_differences[str(sid)].append(
+                by[(sid,sd,'mbpo')]['net_energy_kwh']-by[(sid,sd,ref)]['net_energy_kwh'])
+        dy=np.asarray([np.mean(v) for v in day_differences.values()],dtype=float)
         ax.scatter(np.full(len(dy),j),dy,alpha=.5,s=16)
         ax.plot([j-.2,j+.2],[float(np.mean(dy))]*2,linewidth=3)
     ax.axhline(0,color='black',linewidth=1,linestyle='--')
@@ -153,8 +167,11 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
     for m in FEASIBLE:
         season_means=[]
         for season in seasons:
-            vals=[p['net_energy_kwh'] for p in paths if p['method']==m
-                  and p['infos'][0].get('season')==season]
+            days=defaultdict(list)
+            for p in paths:
+                if p['method']==m and p['infos'][0].get('season')==season:
+                    days[str(p['scenario_id'])].append(float(p['net_energy_kwh']))
+            vals=[np.mean(v) for v in days.values()]
             season_means.append(np.mean(vals) if vals else np.nan)
         ax.plot(seasons,season_means,marker='o',label=LABELS[m])
     ax.set_title('Calendar-season net energy, paired NSRDB scenarios')

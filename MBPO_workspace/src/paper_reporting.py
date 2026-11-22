@@ -1,3 +1,4 @@
+# PVWATT_DEV_REPAIR_V3
 """Ray/TF-free scientific figures adapted from the repository's historic plots.
 
 Sources of plot ideas and verified semantics:
@@ -56,7 +57,8 @@ def _hour(ts):
     dt=datetime.fromisoformat(str(ts).replace('Z','+00:00'))
     if dt.tzinfo is None or dt.utcoffset().total_seconds()!=0:
         raise ValueError('Expected an explicit UTC-aware post-step timestamp')
-    return dt.hour+dt.minute/60+dt.second/3600
+    clock = dt.hour+dt.minute/60+dt.second/3600
+    return clock + (24.0 if clock < 8.75 else 0.0)
 
 
 def _shortest(a):
@@ -299,19 +301,35 @@ def _arr(rows,key):return np.asarray([r[key] for r in rows],dtype=float)
 
 
 def _stats(rows):
+    """Descriptive equal-scenario means; NOT design-weighted annual estimates.
+
+    Multiple seeds of the same weather day are first averaged, so unequal
+    numbers of seeds do not change the sampling weight of a date.
+    """
     grouped,by_pair=_validate_rows(rows)
     results={}
     for m in METHODS:
-        rr=[r for r in rows if r['method']==m]
-        if not rr:continue
-        episodes=[v for k,v in grouped.items() if k[2]==m]
-        agg=lambda name:float(np.mean([sum(_arr(p,name)) for p in episodes]))
-        result={'n':len(episodes),'mean_gross_kwh':agg('energy_kwh')}
+        episodes=[(k,v) for k,v in grouped.items() if k[2]==m]
+        if not episodes:continue
+        def mean_over_days(field,absolute_motion=False):
+            days=defaultdict(list)
+            for k,ep in episodes:
+                if absolute_motion:
+                    value=float(np.sum(np.abs(_arr(ep,'actual_delta_tilt_deg'))
+                                      +np.abs(_arr(ep,'actual_delta_azimuth_deg'))))
+                else:
+                    value=float(_arr(ep,field).sum())
+                days[str(k[0])].append(value)
+            return float(np.mean([np.mean(values) for values in days.values()]))
+        res={'n':len(episodes),'n_scenarios':len({k[0] for k,v in episodes}),
+             'mean_gross_kwh':mean_over_days('energy_kwh')}
         if m in FEASIBLE:
-            result.update(mean_net_kwh=agg('reward_kwh'),mean_movement_cost_kwh=agg('movement_cost_kwh'),
-                          mean_abs_motion_deg=float(np.mean([np.sum(np.abs(_arr(p,'actual_delta_tilt_deg'))+np.abs(_arr(p,'actual_delta_azimuth_deg'))) for p in episodes])))
-        else:result.update(mean_net_kwh=None,mean_movement_cost_kwh=None,mean_abs_motion_deg=None)
-        results[m]=result
+            res.update(mean_net_kwh=mean_over_days('reward_kwh'),
+                       mean_movement_cost_kwh=mean_over_days('movement_cost_kwh'),
+                       mean_abs_motion_deg=mean_over_days(None,absolute_motion=True))
+        else:
+            res.update(mean_net_kwh=None,mean_movement_cost_kwh=None,mean_abs_motion_deg=None)
+        results[m]=res
     per_pair={}
     for key,methods in by_pair.items():
         per_pair[key]={m:{'net':float(_arr(rr,'reward_kwh').sum()) if m in FEASIBLE else None,
@@ -334,6 +352,15 @@ def render_from_csv(rich_csv, outdir):
     figures=[]
     methods=[m for m in METHODS if m in summary]
     pairs=sorted(by_pair)
+    per_day=defaultdict(lambda:defaultdict(list))
+    for (sid,seed),methods in per_pair.items():
+        for method,vals in methods.items():
+            per_day[sid][method].append(vals)
+    balanced={sid:{method:{'net':float(np.mean([v['net'] for v in values if v['net'] is not None]))
+                               if any(v['net'] is not None for v in values) else None,
+                            'gross':float(np.mean([v['gross'] for v in values]))}
+                      for method,values in methods.items()}
+              for sid,methods in per_day.items()}
     with PdfPages(out/'advanced_paper_figures.pdf') as pdf:
         def save(fig,name):
             if name not in ('03_orientation_occupancy.png','04_hourly_power_gap.png'):
@@ -363,9 +390,9 @@ def render_from_csv(rich_csv, outdir):
         for ax,m,title in zip(axes,('fixed_no_motion','dual_axis_slew_limited'),
                               ('SAC / MBPO vs fixed','SAC / MBPO vs dual axis')):
             for learn in ('mbpo','sac'):
-                gain=[per_pair[k][learn]['net']-per_pair[k][m]['net'] for k in pairs]
+                gain=[balanced[sid][learn]['net']-balanced[sid][m]['net'] for sid in sorted(balanced)]
                 ax.hist(gain,bins=min(15,max(4,int(np.sqrt(len(gain))*2))),alpha=.55,
-                        label=f'{LABELS[learn]} mean={np.mean(gain):.3f} kWh')
+                        label=f'{LABELS[learn]} equal-day mean={np.mean(gain):.3f} kWh')
             ax.axvline(0,color='black',ls='--',lw=1);ax.legend(fontsize=8)
             ax.set_title(title);ax.set_xlabel('Paired daily net energy gain (kWh)')
             ax.set_ylabel('Number of daily scenarios');ax.grid(axis='y',alpha=.25)
@@ -415,9 +442,9 @@ def render_from_csv(rich_csv, outdir):
 
         # Performance ratio vs slew-limited dual axis; no ideal reference net.
         fig,ax=plt.subplots(figsize=(11,5))
-        valid=[k for k in pairs if per_pair[k]['dual_axis_slew_limited']['net']>1e-9]
+        valid=[sid for sid in sorted(balanced) if balanced[sid]['dual_axis_slew_limited']['net']>1e-9]
         for m,marker in [('mbpo','o'),('sac','s'),('fixed_no_motion','^')]:
-            vals=np.array([per_pair[k][m]['net']/per_pair[k]['dual_axis_slew_limited']['net'] for k in valid])
+            vals=np.array([balanced[sid][m]['net']/balanced[sid]['dual_axis_slew_limited']['net'] for sid in valid])
             ax.scatter(np.arange(len(valid)),vals,label=LABELS[m],marker=marker,s=24,alpha=.7)
         ax.axhline(1,color='black',ls='--',lw=1)
         ax.set_ylabel('Net kWh / feasible dual-axis net kWh')
@@ -439,7 +466,7 @@ def render_from_csv(rich_csv, outdir):
             ax.scatter(xx,yy,s=20,alpha=.65,label=LABELS[m])
         ax.set_xlabel('Total applied angular movement (degrees / episode)')
         ax.set_ylabel('Net energy (kWh / episode)')
-        ax.set_title('Motion versus net energy (movement penalty may be zero)')
+        ax.set_title('Actuator movement versus net energy (descriptive)')
         ax.legend();ax.grid(alpha=.25);save(fig,'06_movement_energy_scatter.png')
 
         # Tracking-action diagnostics & pre/post alignment from diagnose_tracking.py.
@@ -484,8 +511,11 @@ def render_from_csv(rich_csv, outdir):
         for m in FEASIBLE:
             vv=[]
             for season in seasons:
-                vals=[float(np.sum(_arr(rr,'reward_kwh'))) for (sid,sd,method),rr in grouped.items()
-                      if method==m and rr[0]['season']==season]
+                days=defaultdict(list)
+                for (sid,sd,method),rr in grouped.items():
+                    if method==m and rr[0]['season']==season:
+                        days[sid].append(float(np.sum(_arr(rr,'reward_kwh'))))
+                vals=[np.mean(v) for v in days.values()]
                 vv.append(np.mean(vals) if vals else np.nan)
             ax.plot(seasons,vv,marker='o',label=LABELS[m])
         ax.set_ylabel('Mean daily net energy (kWh)')
@@ -502,8 +532,11 @@ def render_from_csv(rich_csv, outdir):
             for j,m in enumerate(FEASIBLE):
                 values=[]
                 for cond in conditions:
-                    z=[float(np.sum(_arr(rr,'reward_kwh'))) for (sid,sd,mm),rr in grouped.items()
-                       if mm==m and _dominant_condition(rr)==cond]
+                    days=defaultdict(list)
+                    for (sid,sd,mm),rr in grouped.items():
+                        if mm==m and _dominant_condition(rr)==cond:
+                            days[sid].append(float(np.sum(_arr(rr,'reward_kwh'))))
+                    z=[np.mean(v) for v in days.values()]
                     values.append(np.mean(z) if z else np.nan)
                 ax.bar(positions+(j-1.5)*w,values,w,label=LABELS[m])
             ax.set_xticks(positions);ax.set_xticklabels(conditions)
@@ -515,13 +548,14 @@ def render_from_csv(rich_csv, outdir):
     report={'source_csv':str(Path(rich_csv).resolve()),'episode_pairs':len(pairs),
             'scenarios':len({sid for sid,_ in pairs}),
             'methods':summary,'plots':[Path(p).name for p in figures],
+            'aggregation':'descriptive equal-scenario means; seeds averaged within scenario; NOT design-weighted population estimates',
             'protocol': f'UTC native 5min; {episode_horizon} real simulator transitions per matched episode',
             'limitations':[
                 'An instantaneous sun-pointing or POA ideal is gross-only; no feasible net-energy claim.',
                 'Per-scenario ratios exclude zero-denominator days.',
                 'Scenario overlap with training is possible; not a held-out claim.',
                 'Solar pointing error uses post-step sun position and is diagnostic, not an optimal action label.',
-                'Movement penalty may be zero: movement scatter is not an energy-efficiency ranking.',
+                'Actuator consumption covers commanded motion only; no holding or standby power.',
                 'Episode weather conditions are diagnostics only; they are not forecast data for the agent.',
             ]}
     (out/'advanced_summary.json').write_text(json.dumps(report,indent=2,allow_nan=False),encoding='utf-8')

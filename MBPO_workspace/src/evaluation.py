@@ -1,3 +1,4 @@
+# PVWATT_DEV_REPAIR_V3
 """Paired learned-policy and PV baseline evaluation; no model rollouts in eval.
 Every *feasible* controller is stepped using the same PVTrackingEnv, NSRDB
 scenario, UTC clock, and physical initial orientation. An unconstrained
@@ -46,7 +47,7 @@ def _check_physics(saved, actual):
 def load_mbpo_agent(cfg: MBPOConfig, checkpoint,device='cpu'):
     """For evaluation only the MBPO-trained SAC actor/critic are needed."""
     data=torch.load(checkpoint,map_location='cpu',weights_only=False)
-    if data.get('schema')!=1 or data.get('config',{}).get('sac')!=cfg.sac.to_dict():
+    if data.get('schema')!=2 or data.get('config',{}).get('sac')!=cfg.sac.to_dict():
         raise ValueError('MBPO checkpoint does not match shared reference MDP')
     a=cfg.sac.algo
     agent=SACAgent(hidden_sizes=a['hidden_sizes'],lr=a['lr'],gamma=a['gamma'],

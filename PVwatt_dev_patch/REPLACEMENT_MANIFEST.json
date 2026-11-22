@@ -1,0 +1,46 @@
+{
+  "MBPO_workspace/src/config.py": {
+    "original_git_blob_sha1": "5aaf53c4a39063c9f762200bf0450c7090283de2",
+    "replacement_sha256": "390f1f1f97d41561e5e3c759fa315b2d9aa7dbc80197409fcd479e5883de5c04"
+  },
+  "MBPO_workspace/src/dynamics.py": {
+    "original_git_blob_sha1": "70982c104c58f8d7819ade49a00ac4e2c69fd7e2",
+    "replacement_sha256": "1fc7093542b79a10171e43f71382f2fe99eb1ee988b3fac0a0142792551d2a14"
+  },
+  "MBPO_workspace/src/evaluation.py": {
+    "original_git_blob_sha1": "befa3cbe5f9f2acc39f9f62414c39bc98778b732",
+    "replacement_sha256": "7468b38bdb5c486081b45af72fa4ad4ec151404e3b1ee31f560526e0c0ea6f78"
+  },
+  "MBPO_workspace/src/paper_reporting.py": {
+    "original_git_blob_sha1": "6988366999e1b484ad3e325c531761f4d1e9da01",
+    "replacement_sha256": "4c680c44a4dc1d7d08883672424623eb5b0f67cd763ecb6b8e3eb006d76383a4"
+  },
+  "MBPO_workspace/src/plots.py": {
+    "original_git_blob_sha1": "dbf5bb2e4327a4860ba5771e391c2a3960990ba7",
+    "replacement_sha256": "58673cc66b2015327b971156e0ad315cdfe9c163430dfae254c164d1cd8f3caf"
+  },
+  "MBPO_workspace/src/replay.py": {
+    "original_git_blob_sha1": "5c26d71c03774f3350ec824d8f8f0e6ff967e99b",
+    "replacement_sha256": "1481ba08bd540e782bda500e993b1206cc9f4cbf4eef0ea6cc0d06b0c568ec9e"
+  },
+  "MBPO_workspace/src/trainer.py": {
+    "original_git_blob_sha1": "22d50292c3b6977d27ab9987fd7ae5873674af2b",
+    "replacement_sha256": "fbb7b83e9e83f85ad9d59ea6a2e559e0a7bb8a0e661eef9e93f2466b5a0ebf92"
+  },
+  "SAC_workspace/src/agents/sac_agent.py": {
+    "original_git_blob_sha1": "b5f3da0d2c525546fbc264c5151ddebedf7728b3",
+    "replacement_sha256": "080e4c06c1a496e9534c3b0091601153b40ee4fd7e5077904602ae7b0f19721f"
+  },
+  "SAC_workspace/src/config/config.py": {
+    "original_git_blob_sha1": "5af612b69aae00bcf04a655ae51099def342d03a",
+    "replacement_sha256": "8f0699043f4fefa8e550125635cc34c0aa04a2703778b188a0d1d8b705e7613d"
+  },
+  "SAC_workspace/src/evaluation/plots.py": {
+    "original_git_blob_sha1": "760e2ef531ff3735856bea145d8497d8dfa0287d",
+    "replacement_sha256": "a6b270cf66064a83e7355500b62510c0d0838608545121c1da3092e7d3d835ce"
+  },
+  "SAC_workspace/src/training/trainer.py": {
+    "original_git_blob_sha1": "44daec7e60af102a354e2ded0c3902a8eb0f5814",
+    "replacement_sha256": "9b1b3783adea1e0cf5f941fa98aa638224efd7643f4a0b867727970cbc28db7a"
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "source": "NSRDB local multi-year CSV, version from repository manifest",
+  "site": {
+    "latitude": 40.72,
+    "longitude": -74.01
+  },
+  "power_backend": "pvwatts_sapm",
+  "model_type": "recorded-weather conditional DC simulation; not field forecast verification",
+  "poa_model": "isotropic, recorded 5-min NSRDB surface albedo",
+  "sun_normal_comparison": "instantaneous geometric pointing, no slew constraint or motor cost",
+  "periods": 196,
+  "horizon": 195,
+  "interval_minutes": 5.0,
+  "physical_parameters": {
+    "area_m2": 1.0,
+    "efficiency_STC": 0.18,
+    "power_nominal_STC_W": 180.0,
+    "wind_reference_height_m": 2.0,
+    "sapm_mount": "open_rack_glass_polymer",
+    "gamma_pdc_per_C": -0.004,
+    "wind_powerlaw_exponent": 0.14
+  },
+  "days": {
+    "2019-12-15": {
+      "num_timestamps": 196,
+      "num_control_transitions": 195,
+      "net_fixed_zero_motion_kwh": 0.2723006693624783,
+      "gross_fixed_right_endpoint_kwh": 0.27230066936247826,
+      "gross_fixed_trapezoidal_diagnostic_kwh": 0.27230066936247826,
+      "right_minus_trapezoidal_kwh": 0.0,
+      "gross_sun_normal_no_actuator_kwh": 0.25983591198432315,
+      "mean_ghi_wm2": 76.57142857142857,
+      "mean_dni_wm2": 42.95918367346939,
+      "mean_dhi_wm2": 60.285714285714285,
+      "median_abs_irradiance_closure_residual_wm2": 0.0,
+      "max_abs_irradiance_closure_residual_wm2": 1.095111524953495,
+      "max_independent_pvlib_power_parity_error_w": 0.0
+    },
+    "2019-12-16": {
+      "num_timestamps": 196,
+      "num_control_transitions": 195,
+      "net_fixed_zero_motion_kwh": 0.07817440337076556,
+      "gross_fixed_right_endpoint_kwh": 0.07817440337076553,
+      "gross_fixed_trapezoidal_diagnostic_kwh": 0.07817440337076553,
+      "right_minus_trapezoidal_kwh": 0.0,
+      "gross_sun_normal_no_actuator_kwh": 0.06364315713127201,
+      "mean_ghi_wm2": 25.1734693877551,
+      "mean_dni_wm2": 2.9948979591836733,
+      "mean_dhi_wm2": 24.510204081632654,
+      "median_abs_irradiance_closure_residual_wm2": 0.0,
+      "max_abs_irradiance_closure_residual_wm2": 1.2407313561198947,
+      "max_independent_pvlib_power_parity_error_w": 0.0
+    },
+    "2019-12-17": {
+      "num_timestamps": 196,
+      "num_control_transitions": 195,
+      "net_fixed_zero_motion_kwh": 0.04043869924593725,
+      "gross_fixed_right_endpoint_kwh": 0.04043869924593725,
+      "gross_fixed_trapezoidal_diagnostic_kwh": 0.04043869924593725,
+      "right_minus_trapezoidal_kwh": 0.0,
+      "gross_sun_normal_no_actuator_kwh": 0.032909028459455175,
+      "mean_ghi_wm2": 13.198979591836734,
+      "mean_dni_wm2": 0.025510204081632654,
+      "mean_dhi_wm2": 13.188775510204081,
+      "median_abs_irradiance_closure_residual_wm2": 0.0,
+      "max_abs_irradiance_closure_residual_wm2": 1.0,
+      "max_independent_pvlib_power_parity_error_w": 0.0
+    }
+  },
+  "validation_limitations": [
+    "Direct pvlib parity checks implementation consistency, not accuracy against field data",
+    "NSRDB time series are satellite/reanalysis model products",
+    "Right-endpoint energy integration is a five-minute discrete approximation",
+    "Instantaneous sun-normal output is not a feasible actuator-limited policy"
+  ]
+}

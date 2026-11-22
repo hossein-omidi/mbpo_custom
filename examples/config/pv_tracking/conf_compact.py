@@ -1,3 +1,4 @@
+# PVWATT_DEV_REPAIR_V3
 """conf_compact — NSRDB multi-year with compact six-feature state space.
 
 Finite-horizon MDP with state
@@ -44,11 +45,15 @@ params = build_nsrdb_params(
     },
     train_env_kwargs={
         'observation_mode': 'compact',
+        'movement_penalty': 1.0,
+        'movement_cost_mode': 'geometry',
     },
     eval_env_kwargs={
         'observation_mode': 'compact',
         'fixed_eval_scenarios': None,
         'randomize_scenario': True,
+        'movement_penalty': 1.0,
+        'movement_cost_mode': 'geometry',
     },
     run_params_kwargs={
         'checkpoint_replay_pool': True,

@@ -1,3 +1,4 @@
+# PVWATT_DEV_REPAIR_V3
 """Read the existing PV configuration without importing Ray or TensorFlow.
 
 Only literal dictionaries from the committed configuration modules are loaded.
@@ -147,10 +148,12 @@ class SACConfig:
     algo: dict
     manifest: Path
     config_paths: tuple[Path, ...]
+    protocol: dict
 
     def to_dict(self) -> dict:
         return {'train_env': self.train_env, 'eval_env': self.eval_env,
-                'algo': self.algo, 'manifest': str(self.manifest),
+                'algo': self.algo, 'protocol': self.protocol,
+                'manifest': str(self.manifest),
                 'reference_configs': [str(p) for p in self.config_paths]}
 
 
@@ -200,6 +203,11 @@ def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
         raise ValueError('Reference actor/critic hidden layer dimensions missing or inconsistent')
     if nsrdb.get('observation_mode') != 'compact' or eval_env.get('observation_mode') != 'compact':
         raise ValueError('SAC requires the same compact observation mode as MBPO reference')
+    # Shared physical actuator objective in both training and evaluation.
+    for name, env in (('training',nsrdb),('evaluation',eval_env)):
+        if (not np_isclose(env.get('movement_penalty'),1.0)
+                or env.get('movement_cost_mode') != 'geometry'):
+            raise ValueError(f'{name} reference must enable physical movement cost')
     if float(skeleton['discount']) != 1.0:
         raise ValueError('Reference discount changed; audit finite-horizon objective first')
     # SAC-only settings are named separately; do not copy model-based settings.
@@ -210,7 +218,20 @@ def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
             'replay_size': int(replay.get('kwargs', {}).get('max_size', 50000)),
             'lr': 3e-4, 'alpha_init': 1.0, 'target_entropy': -2.0,
             'min_alpha': float(skeleton['min_alpha']),
-            'eval_interval': 10, 'checkpoint_interval': 50}
+            'eval_interval': 50, 'checkpoint_interval': 50}
+    protocol = {
+        'version': 'pv_nsrdb_month_stratified_v1',
+        'split_seed': 2026,
+        'validation_days_per_month': 1,
+        'test_days_per_month': 2,
+        'preferred_validation_ids': list(_constant(_BASE, 'NSRDB_VALIDATION_SCENARIO_IDS')),
+        'evaluation_interval_episodes': 50,
+        'target_fraction': 0.90,
+        'sustain_checkpoints': 2,
+        'bootstrap_replicates': 2000,
+    }
+    if protocol['evaluation_interval_episodes'] != algo['eval_interval']:
+        raise ValueError('Periodic evaluation and checkpoint protocol intervals disagree')
     expected_start = str(_constant(_BASE, 'EPISODE_START_TIME'))
     expected_periods = int(_constant(_BASE, 'EPISODE_PERIODS'))
     expected_freq = str(_constant(_BASE, 'EPISODE_FREQ'))
@@ -247,7 +268,7 @@ def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
             path = Path(row['_year_path'])
             if not path.is_file():
                 raise FileNotFoundError(f'NSRDB year data missing: {path}')
-    return SACConfig(nsrdb, eval_env, algo, manifest, (_BASE, _COMPACT, _SKELETON))
+    return SACConfig(nsrdb, eval_env, algo, manifest, (_BASE, _COMPACT, _SKELETON), protocol)
 
 
 def np_isclose(actual, expected) -> bool:

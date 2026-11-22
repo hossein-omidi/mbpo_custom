@@ -1,7 +1,9 @@
+# PVWATT_DEV_REPAIR_V3
 """Ray-free MBPO configuration; shared SAC MDP and optimizer from conf_compact."""
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 import json
+import math
 from SAC_workspace.src.config.config import (
     load_config as load_sac_config, _SKELETON, _BASE, _COMPACT,
     _literal_mapping_fields, _updated_dict, _call_kwargs,
@@ -26,7 +28,7 @@ class ModelConfig:
     model_batch_size:int=512
     model_max_train_samples:int=6000
     model_holdout_fraction:float=0.2
-    min_holdout_scenarios:int=2
+    min_holdout_scenarios:int=8
     uncertainty_max_std:float|None=None
 
     def validate(self):
@@ -42,8 +44,19 @@ class ModelConfig:
             if n<=0:raise ValueError('Nonpositive ensemble training parameter')
         if not 0<self.model_holdout_fraction<.5:raise ValueError('Invalid holdout fraction')
         if self.min_holdout_scenarios<2:raise ValueError('Need >=2 scenarios for day holdout')
-        if self.uncertainty_max_std is not None and self.uncertainty_max_std<=0:
-            raise ValueError('uncertainty_max_std must be positive')
+        if not math.isfinite(float(self.model_lr)) or self.model_lr <= 0:
+            raise ValueError('model_lr must be finite and positive')
+        if not math.isfinite(float(self.model_holdout_fraction)) or not 0 < self.model_holdout_fraction < .5:
+            raise ValueError('model_holdout_fraction must be finite and in (0, 0.5)')
+        if self.model_max_train_samples < 2 * self.model_batch_size:
+            raise ValueError('model_max_train_samples must be at least twice model_batch_size')
+        effective_pool_capacity = min(self.model_pool_capacity,
+            self.model_retain_epochs * self.rollout_batch_size * self.rollout_length)
+        required_fake_batch = 256 - int(256 * self.real_ratio)
+        if effective_pool_capacity < required_fake_batch:
+            raise ValueError('Synthetic replay capacity is too small to fill the configured MBPO batch fraction')
+        if self.uncertainty_max_std is not None and (not math.isfinite(float(self.uncertainty_max_std)) or self.uncertainty_max_std<=0):
+            raise ValueError('uncertainty_max_std must be finite and positive')
 
 
 @dataclass(frozen=True)
@@ -53,7 +66,7 @@ class MBPOConfig:
 
     def to_dict(self):
         return {'sac':self.sac.to_dict(),'model':asdict(self.model),
-                'schema':'mbpo-torch-structured-v1'}
+                'schema':'mbpo-torch-separated-exogenous-v3'}
 
 
 def load_config(require_data=True,model_overrides=None,*,power_model='pvwatts_sapm',

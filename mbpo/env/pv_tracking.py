@@ -1,3 +1,4 @@
+# PVWATT_DEV_REPAIR_V3
 import logging
 import numpy as np
 import gym
@@ -246,6 +247,13 @@ class PVTrackingEnv(gym.Env):
         self.actuator_power_w = float(actuator_power_w)
         self.slew_rate_tilt_deg_s = float(slew_rate_tilt_deg_s)
         self.slew_rate_azimuth_deg_s = float(slew_rate_azimuth_deg_s)
+        movement_values = (self.movement_penalty, self.actuator_power_w,
+                           self.slew_rate_tilt_deg_s, self.slew_rate_azimuth_deg_s)
+        if not np.isfinite(movement_values).all():
+            raise ValueError('Non-finite movement-cost parameters')
+        if (self.movement_penalty < 0 or self.actuator_power_w <= 0
+                or self.slew_rate_tilt_deg_s <= 0 or self.slew_rate_azimuth_deg_s <= 0):
+            raise ValueError('Invalid physical actuator parameters')
         # Optional bounded augmentation on catalog irradiance (0 = deterministic weather(d)).
         self.irradiance_perturbation_std = float(irradiance_perturbation_std)
         self.observation_noise_std = float(observation_noise_std)
@@ -901,12 +909,15 @@ class PVTrackingEnv(gym.Env):
 
     def step(self, action):
         previous_tilt = float(self.tilt)
+        previous_azimuth = float(self.azimuth)
         delta_tilt = float(action[0]) * self.max_delta_tilt
         delta_azimuth = float(action[1]) * self.max_delta_azimuth
 
         self.tilt = clip_panel_tilt_deg(self.tilt + delta_tilt)
         executed_delta_tilt = float(self.tilt - previous_tilt)
         self.azimuth = wrap_panel_azimuth_deg(self.azimuth + delta_azimuth)
+        executed_delta_azimuth = float(
+            (self.azimuth - previous_azimuth + 180.0) % 360.0 - 180.0)
 
         self.step_index += 1
         done = self.step_index >= len(self.times) - 1
@@ -927,7 +938,7 @@ class PVTrackingEnv(gym.Env):
         elif self.movement_cost_mode == 'geometry':
             movement_cost = actuator_movement_cost_kwh(
                 executed_delta_tilt,
-                delta_azimuth,
+                executed_delta_azimuth,
                 actuator_power_w=self.actuator_power_w,
                 slew_rate_tilt_deg_s=self.slew_rate_tilt_deg_s,
                 slew_rate_azimuth_deg_s=self.slew_rate_azimuth_deg_s,
@@ -935,8 +946,8 @@ class PVTrackingEnv(gym.Env):
             )
         else:
             movement_cost = self.movement_penalty * (
-                abs(delta_tilt) / self.max_delta_tilt
-                + abs(delta_azimuth) / self.max_delta_azimuth
+                abs(executed_delta_tilt) / self.max_delta_tilt
+                + abs(executed_delta_azimuth) / self.max_delta_azimuth
             )
         reward = energy_kwh - movement_cost
 
@@ -1022,8 +1033,10 @@ class PVTrackingEnv(gym.Env):
             'dhi_wm2': float(weather['dhi']),
             'ghi_wm2': float(weather['ghi']),
             'temperature_c': float(weather['temperature']),
-            'delta_tilt_deg': float(delta_tilt),
-            'delta_azimuth_deg': float(delta_azimuth),
+            'delta_tilt_deg': float(executed_delta_tilt),
+            'delta_azimuth_deg': float(executed_delta_azimuth),
+            'requested_delta_tilt_deg': float(delta_tilt),
+            'requested_delta_azimuth_deg': float(delta_azimuth),
             'interval_hours': float(self.interval_hours),
             'freq': str(self.freq),
             'control_interval_minutes': float(self.interval_hours * 60.0),

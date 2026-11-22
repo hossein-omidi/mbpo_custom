@@ -1,3 +1,4 @@
+# PVWATT_DEV_REPAIR_V3
 """Paired SAC/MBPO/fixed/albedo-aware POA evaluation on real NSRDB rows.
 
 No model synthetic transition is used in evaluation. Both agents, fixed pose,
@@ -17,6 +18,9 @@ def main():
     p.add_argument('--mbpo-checkpoint',required=True)
     p.add_argument('--sac-checkpoint',required=True)
     p.add_argument('--outdir',default='MBPO_workspace/evaluation/stage_a_paired')
+    p.add_argument('--scenario-split-json',default=None,
+                   help='Use the frozen train/validation/test partition from a training run')
+    p.add_argument('--split-role',choices=('validation','test'),default='test')
     from SAC_workspace.src.evaluation.scenario_sampling import add_selection_arguments
     add_selection_arguments(p)
     p.add_argument('--seed',type=int,default=42)
@@ -31,31 +35,68 @@ def main():
     p.add_argument('--gamma-pdc',type=float,default=-0.004)
     p.add_argument('--sapm-mount',default='open_rack_glass_polymer')
     p.add_argument('--wind-powerlaw-exponent',type=float,default=0.14)
+    p.add_argument('--model-epochs',type=int,default=None)
+    p.add_argument('--model-max-train-samples',type=int,default=None)
     args=p.parse_args()
     for flag, val in (('--sac-training-csv',args.sac_training_csv),
                       ('--mbpo-training-csv',args.mbpo_training_csv)):
         if val is not None and not Path(val).is_file():
             p.error(f'{flag}: file not found: {val}')
-    if args.exclude_training_days and not (args.mbpo_training_csv and args.sac_training_csv):
+    if args.exclude_training_days and not (args.mbpo_training_csv and args.sac_training_csv) and not args.scenario_split_json:
         p.error('Independent held-out selection requires BOTH training histories')
     profile=json.loads(Path(args.representation_config).read_text(encoding='utf-8'))
     if set(profile.get('active_methods',[]))!={'mbpo','sac','fixed_no_motion','poa_instant_ideal'}:
         p.error('Stage A supports the current four-method verified profile')
     if args.skip_poa_opt:
         p.error('The required POA upper reference cannot be skipped')
-    cfg=load_config(power_model=args.power_model,
+    model_overrides={}
+    if args.model_epochs is not None:model_overrides['model_epochs']=args.model_epochs
+    if args.model_max_train_samples is not None:model_overrides['model_max_train_samples']=args.model_max_train_samples
+    cfg=load_config(model_overrides=model_overrides,power_model=args.power_model,
         wind_reference_height_m=args.wind_reference_height_m,
         gamma_pdc=args.gamma_pdc,sapm_mount=args.sapm_mount,
         wind_powerlaw_exponent=args.wind_powerlaw_exponent)
     from mbpo.env.nsrdb_weather import load_scenario_manifest
     from SAC_workspace.src.evaluation.scenario_sampling import resolve_cli_selection,save_selection
-    scenarios,plan=resolve_cli_selection(
-        args,load_scenario_manifest(cfg.sac.manifest),
-        training_csvs=[x for x in (args.mbpo_training_csv,args.sac_training_csv) if x])
-    if plan is not None:
-        save_selection(plan,args.outdir)
-        print('Selected',plan['selected_count'],'of',plan['population_count'],
-              'days, protocol=',plan['protocol'])
+    manifest = load_scenario_manifest(cfg.sac.manifest)
+    split_protocol_sha256 = None
+    split_selection = None
+    if args.scenario_split_json:
+        from SAC_workspace.src.training.experiment_protocol import build_scenario_protocol
+        saved_split = json.loads(Path(args.scenario_split_json).read_text(encoding='utf-8'))
+        expected_split = build_scenario_protocol(cfg.sac.manifest, cfg.sac.protocol)
+        if saved_split != expected_split:
+            raise ValueError('Scenario split does not match the current NSRDB manifest/configuration')
+        role_ids = list(saved_split[f"{args.split_role}_ids"])
+        by_id = {str(row['scenario_id']): row for row in manifest['scenarios']}
+        missing = sorted(set(role_ids) - set(by_id))
+        if missing:
+            raise ValueError(f'Scenario split references IDs missing from manifest: {missing}')
+        scenarios = [by_id[sid] for sid in role_ids]
+        if len(scenarios) != len(role_ids) or not scenarios:
+            raise ValueError('Frozen scenario split selection is empty or contains duplicates')
+        plan = None
+        split_protocol_sha256 = saved_split['protocol_sha256']
+        split_selection = {
+            'selection_protocol': 'frozen_scenario_split_v1',
+            'role': args.split_role,
+            'scenario_protocol_sha256': split_protocol_sha256,
+            'selected_count': len(scenarios),
+            'selected_scenario_ids': role_ids,
+        }
+        out_path = Path(args.outdir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / 'scenario_split_selection.json').write_text(
+            json.dumps(split_selection, indent=2, sort_keys=True), encoding='utf-8')
+        print('Selected frozen', args.split_role, 'partition:', len(scenarios), 'days')
+    else:
+        scenarios,plan=resolve_cli_selection(
+            args,manifest,
+            training_csvs=[x for x in (args.mbpo_training_csv,args.sac_training_csv) if x])
+        if plan is not None:
+            save_selection(plan,args.outdir)
+            print('Selected',plan['selected_count'],'of',plan['population_count'],
+                  'days, protocol=',plan['protocol'])
     # Old MBPO _check_physics compares simulator source hashes but does not
     # compare annual NSRDB file hashes. Enforce the stronger Stage A dataset
     # contract for *both* trusted checkpoints before any expensive rollout.
@@ -118,7 +159,11 @@ def main():
         'DC_kWh_less_modelled_actuator_consumption')
     report['albedo_contract']='recorded_NSRDB_surface_albedo_per_native_5min_sample'
     report['oracle_physics']='isotropic_POA_with_recorded_albedo_monotone_PVWatts_DC'
-    report['independent_training_day_exclusion']=bool(args.exclude_training_days)
+    report['independent_training_day_exclusion']=bool(args.exclude_training_days or (args.scenario_split_json and args.split_role=='test'))
+    if split_selection is not None:
+        report['scenario_split_role']=args.split_role
+        report['scenario_protocol_sha256']=split_protocol_sha256
+        report['selected_scenario_ids']=split_selection['selected_scenario_ids']
     report_path.write_text(json.dumps(report,indent=2,sort_keys=True,
                               allow_nan=False),encoding='utf-8')
     from MBPO_workspace.src.advanced_suite import export_detail

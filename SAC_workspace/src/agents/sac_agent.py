@@ -1,7 +1,8 @@
+# PVWATT_DEV_REPAIR_V3
 """Model-free Soft Actor-Critic (SAC-v2): reparameterized tanh actor, clipped
 Double-Q target, automatic entropy adjustment, Polyak-averaged target critics.
 
-Reference task: gamma=1, terminal episodes at 117 steps, learned reward scale=100.
+Reference task: gamma=1, finite horizon validated from the shared environment config, learned reward scale=100.
 No BNN, model pool, fake environment, or imaginary rollouts.
 """
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# PVWATT_DEV_REPAIR_V3
 """Shared pvlib POA irradiance and panel power (used by env, eval, verification).
 
 Angle conventions (uniform across NSRDB, pvlib, env state, observations, baselines)
@@ -230,11 +231,17 @@ def actuator_movement_cost_kwh(
     """Electrical actuator energy [kWh] for one control step.
 
     E = P_motor * (|Δtilt|/ω_tilt + |Δaz|/ω_az) / 3600 / 1000, scaled by ``scale``.
-  At max env deltas (5° tilt + 10° azimuth) this is ~0.07 Wh — ~1% of a typical
-  5-min harvest step on the NYC NSRDB window (comparable to literature parasitic
-  losses for dual-axis trackers).
+    Power is consumed only during commanded motion. Both axes are assumed
+    to move sequentially with the same active power. The scale is a dimensionless
+    sensitivity factor; scale=1 gives the physical movement-only estimate.
     """
-    tilt_time_s = abs(float(delta_tilt_deg)) / float(slew_rate_tilt_deg_s)
-    az_time_s = abs(float(delta_azimuth_deg)) / float(slew_rate_azimuth_deg_s)
-    energy_kwh = float(actuator_power_w) * (tilt_time_s + az_time_s) / 3.6e6
-    return float(scale) * energy_kwh
+    # This is movement-only electricity, not idle or holding consumption.
+    params = (float(delta_tilt_deg), float(delta_azimuth_deg),
+              float(actuator_power_w), float(slew_rate_tilt_deg_s),
+              float(slew_rate_azimuth_deg_s), float(scale))
+    if not np.isfinite(params).all():
+        raise ValueError('Non-finite actuator-energy input')
+    dt, da, power, tilt_rate, az_rate, gain = params
+    if power <= 0 or tilt_rate <= 0 or az_rate <= 0 or gain < 0:
+        raise ValueError('Actuator power/rates must be positive; gain nonnegative')
+    return gain * power * (abs(dt) / tilt_rate + abs(da) / az_rate) / 3.6e6

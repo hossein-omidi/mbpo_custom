@@ -1,6 +1,8 @@
+# PVWATT_DEV_REPAIR_V3
 """Run from repository root: python -m SAC_workspace.workflows.01_setup_config"""
 from pathlib import Path
 from SAC_workspace.src.config.config import ROOT, load_config, write_snapshot
+from SAC_workspace.src.training.experiment_protocol import build_scenario_protocol
 
 
 def main():
@@ -20,7 +22,10 @@ def main():
     dest = ROOT / 'SAC_workspace' / 'runs' / 'reference_config.json'
     write_snapshot(c, dest)
     print(f'VALIDATED: compact 6D, NSRDB manifest and reference files. Snapshot: {dest}')
-    print(f'117 steps | gamma={c.algo["gamma"]} | reward_scale={c.algo["reward_scale"]}')
+    horizon = int(c.train_env['periods']) - 1
+    print(f'{horizon} transitions | eval every {c.protocol["evaluation_interval_episodes"]} episodes | gamma={c.algo["gamma"]} | reward_scale={c.algo["reward_scale"]}')
+    protocol = build_scenario_protocol(c.manifest, c.protocol)
+    print(f'Frozen scenario split: train={len(protocol["train_ids"])}, validation={len(protocol["validation_ids"])}, test={len(protocol["test_ids"])}, sha256={protocol["protocol_sha256"][:12]}')
 
 if __name__ == '__main__':
     main()
