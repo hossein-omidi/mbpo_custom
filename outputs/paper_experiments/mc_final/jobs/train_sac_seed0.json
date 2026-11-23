@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/home/ecer/miniconda3/envs/simple-worm/bin/python",
+    "-m",
+    "MBPO_workspace.workflows.08_monte_carlo_train",
+    "--algorithm",
+    "sac",
+    "--uncertainty-spec",
+    "/home/ecer/projects/PVLIB_Paper/mbpo_custom/outputs/paper_experiments/mc_final/uncertainty_spec.json",
+    "--run-dir",
+    "/home/ecer/projects/PVLIB_Paper/mbpo_custom/outputs/paper_experiments/mc_final/runs/sac_seed0",
+    "--seed",
+    "0",
+    "--epochs",
+    "2000",
+    "--device",
+    "cpu"
+  ],
+  "experiment": "mc_final",
+  "finished_utc": "2026-11-23T13:52:54+00:00",
+  "kind": "train_sac",
+  "log_relative_path": "logs/train_sac_seed0.log",
+  "schema": 1,
+  "seed": 0,
+  "started_utc": "2026-11-23T13:51:25+00:00",
+  "status": "failed"
+}

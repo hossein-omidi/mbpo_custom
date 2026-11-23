@@ -1,3 +1,4 @@
+# POSTPROCESSING_MC_CURVE_STATS_AND_VERIFY_FIX_V1
 """Empirical sample-complexity and compute-cost analysis for paired SAC/MBPO runs.
 
 The independent variable is REAL PV simulator transitions. Synthetic MBPO samples
@@ -69,6 +70,14 @@ def _load_run(run_dir: str | Path, expected_algorithm: str) -> dict:
     daily = _read_csv(eval_root / "evaluation_days.csv")
     references = _read_csv(eval_root / "evaluation_references.csv")
     episodes = _read_csv(root / "episodes.csv")
+    allowed_training_days=set(map(str,split.get('train_ids',[])))
+    if not allowed_training_days:
+        raise ValueError(f'{root}: frozen split has no training scenarios')
+    unexpected_training=[str(r.get('scenario_id','')) for r in episodes
+                         if str(r.get('scenario_id','')) not in allowed_training_days]
+    if unexpected_training:
+        raise ValueError(f'{root}: training log includes non-training historical day IDs: '
+                         f'{sorted(set(unexpected_training))[:10]}')
     if not aggregate or not daily or not references:
         raise ValueError(f"{root}: periodic evaluation files are empty")
     if len(episodes) != int(metadata.get("final_epoch", -1)):
@@ -438,6 +447,20 @@ def analyze_sample_complexity(
             "AUC is normalized over the common observed interaction interval, not extrapolated to zero interactions.",
         ],
     }
+    # Additional publication-oriented descriptive ±1 SD curves. Separate
+    # SD across independent training seeds from SD across historical days.
+    # The existing two-way bootstrap 95% CIs remain unchanged and are NOT SD.
+    from MBPO_workspace.src.curve_statistics import write_sample_complexity_mean_sd
+    report['descriptive_mean_sd_reporting'] = write_sample_complexity_mean_sd(
+        out, steps, sac_matrix, mbpo_matrix, target)
+    report['bootstrap_interval_caveat'] = (
+        'Original two-way bootstrap intervals resample independent training seeds and a '
+        'deterministically selected month-stratified set of validation days. They are '
+        'resampling sensitivity intervals, not design-validated 95% coverage for '
+        'all NSRDB days, future years, or weather-error realizations.')
+    report['periodic_validation_weather'] = (
+        'One frozen weather realization_id=0 per historical validation day; '
+        'descriptive seed/day SD excludes within-day Monte Carlo draws')
     (out / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
     _render_figures(out, steps, sac_mean, sac_lo, sac_hi, mbpo_mean, mbpo_lo, mbpo_hi,
                     diff_mean, diff_lo, diff_hi, per_seed_rows, compute_rows, target)
@@ -452,9 +475,9 @@ def _render_figures(out: Path, steps, sac_mean, sac_lo, sac_hi, mbpo_mean, mbpo_
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     ax.plot(steps, sac_mean, label="SAC", linewidth=2)
-    ax.fill_between(steps, sac_lo, sac_hi, alpha=0.18)
+    ax.fill_between(steps, sac_lo, sac_hi, alpha=0.18, label="SAC 95% two-way bootstrap band")
     ax.plot(steps, mbpo_mean, label="MBPO", linewidth=2)
-    ax.fill_between(steps, mbpo_lo, mbpo_hi, alpha=0.18)
+    ax.fill_between(steps, mbpo_lo, mbpo_hi, alpha=0.18, label="MBPO 95% two-way bootstrap band")
     ax.axhline(target, linestyle="--", linewidth=1.2, label="Predefined target")
     ax.set(xlabel="Real PV simulator transitions", ylabel="Mean validation net energy (kWh / episode)",
            title="Empirical sample-efficiency learning curves")
@@ -463,7 +486,7 @@ def _render_figures(out: Path, steps, sac_mean, sac_lo, sac_hi, mbpo_mean, mbpo_
 
     fig, ax = plt.subplots(figsize=(9, 4.8))
     ax.plot(steps, diff_mean, linewidth=2, label="MBPO − SAC")
-    ax.fill_between(steps, diff_lo, diff_hi, alpha=0.2)
+    ax.fill_between(steps, diff_lo, diff_hi, alpha=0.2, label="Paired 95% two-way bootstrap band")
     ax.axhline(0, linestyle="--", linewidth=1)
     ax.set(xlabel="Real PV simulator transitions", ylabel="Net-energy difference (kWh / episode)",
            title="Paired MBPO–SAC validation performance")

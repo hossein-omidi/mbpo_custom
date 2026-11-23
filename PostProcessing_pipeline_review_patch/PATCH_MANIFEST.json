@@ -1,0 +1,20 @@
+{
+  "name": "PostProcessing pipeline representation and sample-complexity correctness review",
+  "reviewed_repo": "hossein-omidi/mbpo_custom",
+  "reviewed_branch": "PostProcessing",
+  "reviewed_branch_sha": "b0c01ec13e0568d0bf37476af5480bda8e3a40fa",
+  "depends_on": "Applied PostProcessing_MC_critical_review_v2_no_backup.zip",
+  "backup_created": false,
+  "github_write": false,
+  "existing_source_files_patched": 4,
+  "new_source_files": 1,
+  "v2_offline_tests_passed": 20,
+  "new_offline_tests_passed": 10,
+  "total_offline_tests_passed": 30,
+  "real_nsrdb_full_runtime_validation": "NOT EXECUTED",
+  "training_algorithm_changed": false,
+  "environment_model_changed": false,
+  "official_bootstrap_intervals_preserved": true,
+  "new_sd_shading_interpretation": "Separate seed-means, historical-day-means, and pooled day x assumed-weather-draw descriptive SD",
+  "critical_fix": "Direct-file verifier ModuleNotFoundError because repository root absent from Python sys.path"
+}

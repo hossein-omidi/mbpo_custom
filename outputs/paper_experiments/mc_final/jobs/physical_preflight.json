@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/home/ecer/miniconda3/envs/simple-worm/bin/python",
+    "-m",
+    "PostProcessing_MC_patch.tools.verify_mc_environment",
+    "--uncertainty-spec",
+    "/home/ecer/projects/PVLIB_Paper/mbpo_custom/outputs/paper_experiments/mc_final/uncertainty_spec.json",
+    "--out",
+    "/home/ecer/projects/PVLIB_Paper/mbpo_custom/outputs/paper_experiments/mc_final/preflight/environment_audit.json"
+  ],
+  "experiment": "mc_final",
+  "finished_utc": "2026-11-23T13:51:25+00:00",
+  "kind": "physical_preflight",
+  "log_relative_path": "logs/physical_preflight.log",
+  "returncode": 0,
+  "schema": 1,
+  "seed": null,
+  "started_utc": "2026-11-23T13:51:18+00:00",
+  "status": "completed"
+}

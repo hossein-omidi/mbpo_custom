@@ -1,3 +1,4 @@
+# POSTPROCESSING_MC_CURVE_STATS_AND_VERIFY_FIX_V1
 # POSTPROCESSING_SPLIT_UTC_COMPAT_V2
 # PVWATT_DEV_REPAIR_V3
 """Modern 2D/3D plotting and shared SAC plotting reuse; legacy scripts remain intact.
@@ -197,7 +198,7 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
             if w>1:ax.plot(x[w-1:],np.convolve(y,np.ones(w)/w,'valid'),label=LABELS[m])
         ax.set_xlabel('REAL environment transitions (imaginary rollout steps excluded)')
         ax.set_ylabel('Training episode net energy (kWh)')
-        ax.set_title('Learning curves (weather distributions may differ by sampled episode)')
+        ax.set_title('Single-run training returns: rolling mean only (not mean ± SD)')
         ax.legend();ax.grid(alpha=.2)
         save(fig,'08_training_learning_curves.png')
     if histories['mbpo']:

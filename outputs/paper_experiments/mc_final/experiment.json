@@ -1,0 +1,25 @@
+{
+  "created_utc": "2026-11-23T13:51:18+00:00",
+  "device": "cpu",
+  "epochs": 2000,
+  "model_epochs": null,
+  "model_max_train_samples": null,
+  "name": "mc_final",
+  "repository_workflows": {
+    "evaluation": "MBPO_workspace.workflows.09_monte_carlo_evaluate",
+    "model_validation": "MBPO_workspace.workflows.06_model_validation",
+    "sample_complexity": "MBPO_workspace.workflows.05_sample_complexity",
+    "training": "MBPO_workspace.workflows.08_monte_carlo_train"
+  },
+  "run_layout": "runs/{algorithm}_seed{seed}",
+  "schema": 1,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "uncertainty_original_input": "PostProcessing_MC_patch/examples/hypothetical_uncertainty_5pct.json",
+  "uncertainty_sha256": "bdd2e6426285f180e1ed973cbfa05ddd0ec8da9e5d151a68485db994a6648eb6"
+}

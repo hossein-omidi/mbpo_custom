@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# POSTPROCESSING_MC_CURVE_STATS_AND_VERIFY_FIX_V1
 """Real-data Monte Carlo environment integration test (NO training required).
 
 Run from the root of the PostProcessing repo after applying the patch:
@@ -81,6 +82,16 @@ def main(argv=None):
                         help='Optional TRAIN-only historical day; never inspect test days during tuning')
     parser.add_argument('--out',default='outputs/monte_carlo_environment_audit.json')
     args=parser.parse_args(argv)
+    # Direct-file execution does not automatically add the repo root to
+    # sys.path. Validate the expected checkout layout before importing the
+    # project. `python -m PostProcessing_MC_patch.tools.verify_mc_environment`
+    # also works and does not need this adjustment.
+    import sys
+    repo_root=Path(__file__).resolve().parents[2]
+    if not (repo_root/'mbpo'/'env').is_dir() or not (repo_root/'SAC_workspace'/'src').is_dir():
+        raise RuntimeError(f'This verifier must be placed inside a complete PostProcessing checkout: {repo_root}')
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0,str(repo_root))
     from mbpo.env.trajectory_uncertainty import normalized_spec
     from SAC_workspace.src.config.config import load_config
     from SAC_workspace.src.environment.environment import SACEnvironment

@@ -1,0 +1,198 @@
+{
+  "algo": {
+    "alpha_init": 1.0,
+    "batch_size": 256,
+    "checkpoint_interval": 50,
+    "epochs": 2000,
+    "eval_interval": 50,
+    "gamma": 1.0,
+    "hidden_sizes": [
+      64,
+      64
+    ],
+    "lr": 0.0003,
+    "min_alpha": 0.001,
+    "replay_size": 50000,
+    "reward_scale": 100.0,
+    "start_steps": 8000,
+    "target_entropy": -2.0,
+    "tau": 0.005,
+    "updates_per_step": 2
+  },
+  "eval_env": {
+    "altitude": 12.0,
+    "end_date": "2024-12-31",
+    "fixed_eval_scenarios": null,
+    "freq": "5min",
+    "gamma_pdc": -0.004,
+    "irradiance_perturbation_std": 0.0,
+    "latitude": 40.72,
+    "longitude": -74.01,
+    "movement_cost_mode": "geometry",
+    "movement_penalty": 1.0,
+    "observation_mode": "compact",
+    "observation_noise_std": 0.0,
+    "periods": 196,
+    "power_model": "pvwatts_sapm",
+    "randomize_day": false,
+    "randomize_initial_orientation": false,
+    "randomize_scenario": true,
+    "sapm_mount": "open_rack_glass_polymer",
+    "scenario_manifest": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_multiyear_manifest.json",
+    "start_date": "2018-01-01",
+    "start_time": "08:45",
+    "tz": "UTC",
+    "weather_scenario_mode": "nsrdb_multiyear",
+    "weather_source": "nsrdb_multiyear",
+    "weather_uncertainty": {
+      "albedo_sd": 0.02,
+      "ar1": 0.9,
+      "day_fraction": 0.5,
+      "dhi_cv": 0.05,
+      "dni_cv": 0.05,
+      "enabled": true,
+      "latent_correlation": [
+        [
+          1.0,
+          0.2,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.2,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "schema": "correlated_weather_assumption_v1",
+      "seed": 2026,
+      "temperature_sd_c": 1.0,
+      "wind_cv": 0.05
+    },
+    "wind_powerlaw_exponent": 0.14,
+    "wind_reference_height_m": 2.0
+  },
+  "manifest": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_multiyear_manifest.json",
+  "protocol": {
+    "bootstrap_replicates": 2000,
+    "evaluation_interval_episodes": 50,
+    "preferred_validation_ids": [
+      "2018-02-15",
+      "2019-05-15",
+      "2020-08-15",
+      "2021-11-15",
+      "2024-06-21"
+    ],
+    "split_seed": 2026,
+    "sustain_checkpoints": 2,
+    "target_fraction": 0.9,
+    "test_days_per_month": 2,
+    "validation_days_per_month": 1,
+    "version": "pv_nsrdb_month_stratified_v1"
+  },
+  "reference_configs": [
+    "/home/ecer/projects/PVLIB_Paper/mbpo_custom/examples/config/pv_tracking/_nsrdb_base.py",
+    "/home/ecer/projects/PVLIB_Paper/mbpo_custom/examples/config/pv_tracking/conf_compact.py",
+    "/home/ecer/projects/PVLIB_Paper/mbpo_custom/examples/config/pv_tracking/0.py"
+  ],
+  "train_env": {
+    "altitude": 12.0,
+    "end_date": "2024-12-31",
+    "freq": "5min",
+    "gamma_pdc": -0.004,
+    "irradiance_perturbation_std": 0.0,
+    "latitude": 40.72,
+    "longitude": -74.01,
+    "movement_cost_mode": "geometry",
+    "movement_penalty": 1.0,
+    "observation_mode": "compact",
+    "observation_noise_std": 0.0,
+    "periods": 196,
+    "power_model": "pvwatts_sapm",
+    "randomize_day": false,
+    "randomize_initial_orientation": true,
+    "randomize_scenario": true,
+    "sapm_mount": "open_rack_glass_polymer",
+    "scenario_manifest": "/home/ecer/projects/PVLIB_Paper/mbpo_custom/data/pv_weather/nsrdb/newyork_multiyear_manifest.json",
+    "start_date": "2018-01-01",
+    "start_time": "08:45",
+    "tz": "UTC",
+    "weather_scenario_mode": "nsrdb_multiyear",
+    "weather_source": "nsrdb_multiyear",
+    "weather_uncertainty": {
+      "albedo_sd": 0.02,
+      "ar1": 0.9,
+      "day_fraction": 0.5,
+      "dhi_cv": 0.05,
+      "dni_cv": 0.05,
+      "enabled": true,
+      "latent_correlation": [
+        [
+          1.0,
+          0.2,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.2,
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "schema": "correlated_weather_assumption_v1",
+      "seed": 2026,
+      "temperature_sd_c": 1.0,
+      "wind_cv": 0.05
+    },
+    "wind_powerlaw_exponent": 0.14,
+    "wind_reference_height_m": 2.0
+  }
+}

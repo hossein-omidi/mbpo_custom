@@ -1,3 +1,4 @@
+# POSTPROCESSING_MC_CURVE_STATS_AND_VERIFY_FIX_V1
 """Nested Monte Carlo test of *trained*, deterministic SAC and MBPO policies.
 
 For every held-out historical day e and uncertainty realization m, identical
@@ -352,6 +353,12 @@ def main(argv=None):
     out=Path(args.outdir);out.mkdir(parents=True,exist_ok=True)
     write_csv(out/'all_day_draw_method.csv',rows)
     write_csv(out/'daily_power_mean_std_by_utc_step.csv',clock_rows)
+    # The original file gives mean/SD across M weather realizations for each
+    # named historical day. This complementary output pools days and MC draws
+    # without treating 195 sequential timestamps as independent observations.
+    from MBPO_workspace.src.curve_statistics import aggregate_mc_power_profiles
+    pooled_clock_rows=aggregate_mc_power_profiles(clock_rows,args.draws)
+    write_csv(out/'mc_pooled_power_mean_sd_by_utc_step.csv',pooled_clock_rows)
     write_csv(out/'first_day_power_mean_sd.csv',
               [r for r in clock_rows if r['scenario_id']==days[0]])
     refs={(r['scenario_id'],r['draw'],r['method']):r['net_kwh'] for r in rows}
@@ -376,6 +383,10 @@ def main(argv=None):
             'max_baseline_irradiance_closure_residual_wm2':baseline_closure,
             'max_post_irradiance_closure_residual_wm2':worst_closure},
         'power_output':'daily_power_mean_std_by_utc_step.csv (every selected historical day)',
+        'pooled_power_output':'mc_pooled_power_mean_sd_by_utc_step.csv (equal day and draw weights)',
+        'pooled_power_sd_interpretation':(
+            'Descriptive SD over tested historical day × assumed weather draw mixture; '
+            'not a standard error or a confidence interval and not training-seed SD'),
         'note':'Descriptive uncertainty under assumed weather-error distribution; no field-data calibration claimed.',
         'evaluation_model':'Original pvlib Stage A physical environment; no MBPO fake rollouts',
         'common_random_numbers':'Same uncertainty realization_id and weather profile SHA across paired controllers',
@@ -383,6 +394,8 @@ def main(argv=None):
     (out/'mc_summary.json').write_text(json.dumps(report,indent=2,allow_nan=False),encoding='utf-8')
     if not args.skip_figures:
         plot_diagnostics(out,rows,first_day_clock_rows,paired)
+        from MBPO_workspace.src.curve_statistics import plot_pooled_mc_power_profiles
+        plot_pooled_mc_power_profiles(out,pooled_clock_rows)
     print('Monte Carlo summary:',(out/'mc_summary.json').resolve())
 
 if __name__=='__main__':main()

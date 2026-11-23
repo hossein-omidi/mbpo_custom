@@ -1,0 +1,26 @@
+{
+  "bootstrap_replicates": 2000,
+  "energy_objective": "DC_kWh_less_configured_movement_cost",
+  "environment": "original StageAPVTrackingEnv; no learned model transitions",
+  "evaluation_interval_episodes": 50,
+  "movement_cost_mode": "geometry",
+  "policy_evaluation": "deterministic_actor_mean_tanh",
+  "protocol_version": "pv_nsrdb_month_stratified_v1",
+  "scenario_protocol_sha256": "2b892d1f680e853f0c18686c435db2e336b583a0c86cf7f2607368a2d1ae5031",
+  "sustain_checkpoints": 2,
+  "target_fraction": 0.9,
+  "validation_scenario_ids": [
+    "2018-02-15",
+    "2019-04-27",
+    "2019-05-15",
+    "2020-08-15",
+    "2020-09-20",
+    "2020-12-16",
+    "2021-03-02",
+    "2021-11-15",
+    "2022-07-31",
+    "2022-10-26",
+    "2023-01-11",
+    "2024-06-21"
+  ]
+}
