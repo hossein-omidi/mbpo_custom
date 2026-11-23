@@ -1,10 +1,12 @@
+# POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 """Narrow Stage-A extension of the *existing* PVTrackingEnv.
 
 Uses original discrete-time kinematics, reward, observational POMDP interface,
 NSRDB scenario sampler, and terminal/time conventions without modification.
 The only physical change is using *recorded* per-timestep NSRDB albedo in the
-canonical isotropic POA and PVWatts/SAPM backend. No on-line API, synthetic
-weather, or additional observation/action channels are introduced.
+canonical isotropic POA and PVWatts/SAPM backend. Optional hypothesized
+weather-error realizations are generated once per episode at reset; the
+six-feature controller interface and physical power backend are unchanged.
 """
 from __future__ import annotations
 
@@ -12,18 +14,71 @@ import numpy as np
 import pandas as pd
 from mbpo.env.pv_tracking import PVTrackingEnv
 from mbpo.env.pv_power_backend import compute_pv_power, PHYSICS_REVISION, DEFAULT_ALBEDO
+from mbpo.env.trajectory_uncertainty import (normalized_spec, realization_seed,
+    spec_fingerprint, generate_weather_profile)
+import hashlib
+import json
 
 ALBEDO_COLUMNS = ('surface_albedo', 'albedo', 'Surface Albedo', 'Surface_Albedo')
 
 
 class StageAPVTrackingEnv(PVTrackingEnv):
     def __init__(self,*args,**kwargs):
+        self.weather_uncertainty = normalized_spec(kwargs.pop('weather_uncertainty',None))
+        self._requested_realization_id = None
+        self._weather_realization_seed = None
+        self._weather_realization_id = None
+        self._weather_profile_sha256 = None
+        if self.weather_uncertainty['enabled'] and not (
+                kwargs.get('weather_source')=='nsrdb_multiyear' or
+                kwargs.get('weather_scenario_mode')=='nsrdb_multiyear'):
+            raise ValueError('Trajectory uncertainty requires historical NSRDB source')
         if (kwargs.get('weather_source')=='nsrdb_multiyear'
                 or kwargs.get('weather_scenario_mode')=='nsrdb_multiyear'):
             for key in ('irradiance_perturbation_std','observation_noise_std'):
                 if float(kwargs.get(key,0.0))!=0.0:
                     raise ValueError(f'Stage A requires zero synthetic NSRDB augmentation: {key}')
         super().__init__(*args,**kwargs)
+
+    def set_weather_realization(self, realization_id=None):
+        # Explicit identity for common-random-numbers evaluation. Training
+        # passes None, drawing a new episode seed from the checkpointed RNG.
+        if realization_id is not None and (
+                isinstance(realization_id,bool) or
+                not isinstance(realization_id,(int,np.integer)) or int(realization_id)<0):
+            raise ValueError('realization_id must be a nonnegative integer or None')
+        self._requested_realization_id = (None if realization_id is None else int(realization_id))
+
+    def _apply_episode_weather_stochasticity(self):
+        if not self.weather_uncertainty['enabled']:
+            self._weather_realization_seed = None
+            self._weather_realization_id = None
+            self._weather_profile_sha256 = None
+            return super()._apply_episode_weather_stochasticity()
+        from mbpo.env.nsrdb_weather import scenario_id as nsrdb_scenario_id
+        sid=nsrdb_scenario_id(self._current_scenario)
+        identity=self._requested_realization_id
+        if identity is None:
+            rg=self.np_random
+            seed=(int(rg.integers(0,2**63-1)) if hasattr(rg,'integers')
+                  else int(rg.randint(0,2**31-1)))
+        else:
+            seed=realization_seed(self.weather_uncertainty,sid,identity)
+        solar=self.location.get_solarposition(self.times)
+        cosz=np.maximum(np.cos(np.deg2rad(np.asarray(solar['zenith'],dtype=float))),0.0)
+        frame,diag=generate_weather_profile(
+            self.weather_profile,cosz,self.weather_uncertainty,seed=seed)
+        self.weather_profile=frame
+        self._weather_realization_seed=int(seed)
+        self._weather_realization_id=identity
+        self._weather_uncertainty_diagnostics=diag
+        # Hash entire exogenous sequence; independent of policy actions.
+        fields=('dni','dhi','ghi','temperature','wind_speed','surface_albedo')
+        present=[k for k in fields if k in frame]
+        albedo_col=next((c for c in ALBEDO_COLUMNS if c in frame),None)
+        if albedo_col is not None and albedo_col not in present:present.append(albedo_col)
+        matrix=np.column_stack([np.asarray(frame[k],dtype='<f8') for k in present])
+        self._weather_profile_sha256=hashlib.sha256(matrix.tobytes()).hexdigest()
 
     def _surface_albedo_at_current_time(self):
         if self.weather_source != 'nsrdb_multiyear':
@@ -78,4 +133,15 @@ class StageAPVTrackingEnv(PVTrackingEnv):
         info['surface_albedo'] = float(self._stage_a_last_albedo)
         info['albedo_source'] = self._stage_a_albedo_source
         info['physics_revision'] = PHYSICS_REVISION
+        if self.weather_uncertainty['enabled'] and self.weather_uncertainty['albedo_sd']>0:
+            info['albedo_source'] = 'nsrdb_recorded_with_assumed_uncertainty'
+        info['weather_condition_source'] = 'original_nsrdb_label'
+        info['weather_uncertainty_enabled'] = bool(self.weather_uncertainty['enabled'])
+        info['weather_realization_seed'] = self._weather_realization_seed
+        info['weather_realization_id'] = self._weather_realization_id
+        info['weather_profile_sha256'] = self._weather_profile_sha256
+        info['weather_uncertainty_spec_sha256'] = spec_fingerprint(self.weather_uncertainty)
+        info['weather_uncertainty_clip_count'] = int(getattr(self,'_weather_uncertainty_diagnostics',{}).get('clip_count',0))
+        info['weather_uncertainty_baseline_closure_max_wm2'] = getattr(
+            self,'_weather_uncertainty_diagnostics',{}).get('max_baseline_closure_residual_wm2')
         return obs, reward, done, info

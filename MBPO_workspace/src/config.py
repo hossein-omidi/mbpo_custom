@@ -1,3 +1,4 @@
+# POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 # PVWATT_DEV_REPAIR_V3
 """Ray-free MBPO configuration; shared SAC MDP and optimizer from conf_compact."""
 from __future__ import annotations
@@ -71,10 +72,12 @@ class MBPOConfig:
 
 def load_config(require_data=True,model_overrides=None,*,power_model='pvwatts_sapm',
                 wind_reference_height_m=2.0,gamma_pdc=-0.004,
-                sapm_mount='open_rack_glass_polymer',wind_powerlaw_exponent=0.14)->MBPOConfig:
+                sapm_mount='open_rack_glass_polymer',wind_powerlaw_exponent=0.14,
+                weather_uncertainty=None)->MBPOConfig:
     sac=load_sac_config(require_data=require_data,power_model=power_model,
         wind_reference_height_m=wind_reference_height_m,gamma_pdc=gamma_pdc,
-        sapm_mount=sapm_mount,wind_powerlaw_exponent=wind_powerlaw_exponent)
+        sapm_mount=sapm_mount,wind_powerlaw_exponent=wind_powerlaw_exponent,
+        weather_uncertainty=weather_uncertainty)
     keys={'real_ratio','num_networks','num_elites','hidden_dim',
           'max_model_rollout_length','model_train_freq','rollout_batch_size','model_retain_epochs'}
     orig=_literal_mapping_fields(_SKELETON,'params',keys)

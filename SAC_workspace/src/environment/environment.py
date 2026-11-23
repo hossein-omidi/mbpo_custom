@@ -1,3 +1,4 @@
+# POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 """Minimal adapter over PVTrackingEnv plus recorded-NSRDB-albedo Stage A subclass.
 
 Normalized actions stay [-1,1]^2. Degrees and rewards are computed by the
@@ -79,6 +80,7 @@ class SACEnvironment:
             'start_time': value('start_time'), 'periods': value('periods'),
             'freq': str(value('freq')),
             'weather_source': value('weather_source'),
+            'weather_uncertainty': value('weather_uncertainty'),
             'area': value('area'), 'efficiency': value('efficiency'),
             'max_delta_tilt': value('max_delta_tilt'),
             'max_delta_azimuth': value('max_delta_azimuth'),
@@ -93,17 +95,22 @@ class SACEnvironment:
         if source.weather_source == 'nsrdb_multiyear':
             from mbpo.env.stage_a_data_contract import nsrdb_dataset_fingerprint
             self.resolved_mdp.update(nsrdb_dataset_fingerprint(source.scenario_manifest_path))
-            self.resolved_mdp['nsrdb_albedo_contract'] = 'recorded_per_5min_strict'
+            self.resolved_mdp['nsrdb_albedo_contract'] = (
+                'recorded_with_hypothetical_uncertainty'
+                if source.weather_uncertainty['enabled'] and source.weather_uncertainty['albedo_sd']>0
+                else 'recorded_per_5min_strict')
         if source.power_model == 'pvwatts_sapm':
             import hashlib
             from pathlib import Path
-            from mbpo.env import pv_power_backend, pvlib_physics, pv_tracking, stage_a_pv_tracking, stage_a_data_contract
+            from mbpo.env import pv_power_backend, pvlib_physics, pv_tracking, stage_a_pv_tracking, stage_a_data_contract, trajectory_uncertainty
             digest = hashlib.sha256()
-            for module in (pv_power_backend, pvlib_physics, pv_tracking, stage_a_pv_tracking, stage_a_data_contract):
+            for module in (pv_power_backend, pvlib_physics, pv_tracking, stage_a_pv_tracking, stage_a_data_contract, trajectory_uncertainty):
                 digest.update(Path(module.__file__).read_bytes())
             self.resolved_mdp.update(
                 power_model=source.power_model,
-                albedo_model='nsrdb_recorded_strict',
+                albedo_model=('nsrdb_recorded_with_hypothetical_uncertainty'
+                    if source.weather_uncertainty['enabled'] and source.weather_uncertainty['albedo_sd']>0
+                    else 'nsrdb_recorded_strict'),
                 physics_revision=pv_power_backend.PHYSICS_REVISION,
                 wind_reference_height_m=float(source.wind_reference_height_m),
                 gamma_pdc=float(source.gamma_pdc),
@@ -119,8 +126,9 @@ class SACEnvironment:
     def seed(self, seed: int) -> None:
         self.env.seed(seed)
 
-    def reset(self, scenario_id: str | None = None) -> np.ndarray:
+    def reset(self, scenario_id: str | None = None, realization_id: int | None = None) -> np.ndarray:
         self.steps = 0
+        self.env.set_weather_realization(realization_id)
         observation = encode(self.env.reset(scenario_id=scenario_id))
         if not np.isclose(observation[5], 1., atol=1e-6):
             raise RuntimeError('Finite-horizon observation must begin with tau=1')

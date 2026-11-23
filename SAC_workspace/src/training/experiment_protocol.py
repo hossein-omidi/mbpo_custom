@@ -1,3 +1,4 @@
+# POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 """Reproducible scenario partitioning and deterministic periodic policy evaluation.
 
 This module deliberately leaves SAC/MBPO learning updates unchanged. It makes the
@@ -359,7 +360,9 @@ class PeriodicEvaluator:
         })
 
     def _run_episode(self, scenario_id: str, *, policy=None, controller: str = "fixed") -> dict:
-        obs = self.env.reset(scenario_id=scenario_id)
+        # A fixed common uncertainty realization maintains identical
+        # reference and learned-policy weather at every checkpoint.
+        obs = self.env.reset(scenario_id=scenario_id, realization_id=0)
         gross = 0.0
         movement = 0.0
         net = 0.0

@@ -1,3 +1,4 @@
+# POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 # PVWATT_DEV_REPAIR_V3
 """Standalone finite-horizon SAC trainer; never calls a learned dynamics model."""
 from __future__ import annotations
@@ -136,7 +137,10 @@ class SACTrainer:
         self.epoch += 1
         result = {
             'epoch': self.epoch, 'env_steps': self.env_steps, 'updates': self.agent.updates,
-            'scenario_id': scenario_id, 'return_kwh': float(sum(rewards)),
+            'scenario_id': scenario_id,
+            'weather_realization_seed': self.env.unwrapped._weather_realization_seed,
+            'weather_uncertainty_enabled': bool(self.env.unwrapped.weather_uncertainty['enabled']),
+            'return_kwh': float(sum(rewards)),
             'gross_energy_kwh': float(sum(energies)), 'movement_cost_kwh': float(sum(costs)),
             'alpha': self.agent.alpha, 'episode_seconds': float(time.perf_counter() - started),
         }

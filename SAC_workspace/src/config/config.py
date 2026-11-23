@@ -1,3 +1,4 @@
+# POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 # PVWATT_DEV_REPAIR_V3
 """Read the existing PV configuration without importing Ray or TensorFlow.
 
@@ -160,7 +161,7 @@ class SACConfig:
 def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
                 wind_reference_height_m=2.0, gamma_pdc=-0.004,
                 sapm_mount='open_rack_glass_polymer',
-                wind_powerlaw_exponent=0.14) -> SACConfig:
+                wind_powerlaw_exponent=0.14, weather_uncertainty=None) -> SACConfig:
     """Materialize the effective *compact MBPO task* for an independent SAC run.
 
     Only optimizer and replay implementation are SAC-specific; environmental
@@ -191,6 +192,11 @@ def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
                        wind_reference_height_m=float(wind_reference_height_m),
                        gamma_pdc=float(gamma_pdc), sapm_mount=str(sapm_mount),
                        wind_powerlaw_exponent=float(wind_powerlaw_exponent))
+    if weather_uncertainty is not None:
+        from mbpo.env.trajectory_uncertainty import normalized_spec
+        spec = normalized_spec(weather_uncertainty)
+        nsrdb['weather_uncertainty'] = dict(spec)
+        eval_env['weather_uncertainty'] = dict(spec)
     skeleton = _literal_mapping_fields(_SKELETON, 'params', {'discount', 'tau', 'reward_scale', 'n_train_repeat', 'n_epochs', 'n_initial_exploration_steps', 'min_alpha'})
     base_algo = _updated_dict(_BASE, 'default_nsrdb_algo_kwargs', 'kw')
     # The default NSRDB algorithm block is a literal dict, and conf_compact overrides it.

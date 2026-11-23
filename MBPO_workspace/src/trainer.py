@@ -1,3 +1,4 @@
+# POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 # PVWATT_DEV_REPAIR_V3
 """Modern, Ray-free MBPO runner. Reference MDP + SAME PyTorch SAC optimizer.
 Real interactions are chronological; model samples are generated separately and
@@ -275,7 +276,10 @@ class MBPOTrainer:
         self.epoch += 1
         row = {
             'epoch': self.epoch, 'env_steps': self.env_steps, 'updates': self.agent.updates,
-            'scenario_id': scenario, 'return_kwh': float(sum(episode_rewards)),
+            'scenario_id': scenario,
+            'weather_realization_seed': self.env.unwrapped._weather_realization_seed,
+            'weather_uncertainty_enabled': bool(self.env.unwrapped.weather_uncertainty['enabled']),
+            'return_kwh': float(sum(episode_rewards)),
             'gross_energy_kwh': float(sum(gross)), 'movement_cost_kwh': float(sum(cost)),
             'alpha': self.agent.alpha, 'real_replay_size': len(self.real_pool),
             'model_replay_size': len(self.model_pool), 'model_fits': self.dynamics.fit_count,
