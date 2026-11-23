@@ -1,3 +1,4 @@
+# POSTPROCESSING_SPLIT_UTC_COMPAT_V2
 # PVWATT_DEV_REPAIR_V3
 """Modern 2D/3D plotting and shared SAC plotting reuse; legacy scripts remain intact.
 No TensorFlow, Ray, or legacy policy imports. Output uses actual saved physical
@@ -68,6 +69,9 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
     from SAC_workspace.src.evaluation.plots import plot_results
     plot_results([p for p in paths if p['method'] in ('sac','fixed_no_motion','dual_axis_slew_limited','dual_axis_instant_ideal')],outdir/'sac_reference',sac_training_csv)
     available=[m for m in METHODS if any(p['method']==m for p in paths)]
+    feasible=[m for m in FEASIBLE if m in available]
+    if not {'mbpo','sac','fixed_no_motion'}.issubset(available):
+        raise ValueError('MBPO/SAC/fixed methods are required for the comparison figures')
     by={(p['scenario_id'],p['seed'],p['method']):p for p in paths}
     pairs=sorted({(p['scenario_id'],p['seed']) for p in paths})
     fig_paths=[]
@@ -89,15 +93,15 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
     save(fig,'01_gross_energy.png')
 
     fig,ax=plt.subplots(figsize=(10,5))
-    ax.bar([LABELS[m] for m in FEASIBLE],
-           [_balanced(paths,m,'net_energy_kwh') for m in FEASIBLE])
+    ax.bar([LABELS[m] for m in feasible],
+           [_balanced(paths,m,'net_energy_kwh') for m in feasible])
     ax.set_title('Net energy — descriptive equal-day averages')
     ax.set_ylabel('Mean net energy (kWh / episode)')
     ax.tick_params(axis='x',rotation=17);ax.grid(axis='y',alpha=.2)
     save(fig,'02_net_energy.png')
 
     fig,ax=plt.subplots(figsize=(11,5))
-    refs=('sac','fixed_no_motion','dual_axis_slew_limited')
+    refs=tuple(m for m in ('sac','fixed_no_motion','dual_axis_slew_limited') if m in available)
     for j,ref in enumerate(refs):
         day_differences=defaultdict(list)
         for sid,sd in pairs:
@@ -128,34 +132,37 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
                   'Tilt (degrees)','Azimuth (degrees)')):
         ax.set_ylabel(ylabel);ax.grid(alpha=.2)
     axs[0].legend(fontsize=8,ncol=2)
-    axs[-1].set_xlabel('Post-action time (UTC hours)')
+    axs[-1].set_xlabel('Unwrapped post-action UTC hour (24+ = next UTC date)')
     fig.suptitle(f'Matched trajectory — {sid}, seed={seed}')
     save(fig,'04_physical_trajectories.png')
 
     fig=plt.figure(figsize=(10,7));ax=fig.add_subplot(111,projection='3d')
-    for m in ('mbpo','sac','dual_axis_slew_limited'):
+    for m in (k for k in ('mbpo','sac','dual_axis_slew_limited') if k in available):
         p=by[(sid,seed,m)]
         ax.plot(np.asarray(p['tilt']),np.asarray(p['azimuth']),t,label=LABELS[m])
     ax.set_xlabel('Tilt (degrees)');ax.set_ylabel('Azimuth (degrees)')
-    ax.set_zlabel('UTC clock hour')
+    ax.set_zlabel('Unwrapped UTC hour')
     ax.set_title('3D solar tracking orientation path (real pvlib simulator)')
     ax.legend()
     save(fig,'05_orientation_3d.png')
 
     # Calendar grouping; scenario-level heatmap normalized to achievable dual-axis.
     sids=sorted({sid for sid,_ in pairs})
-    grid=np.zeros((len(sids),3),float)
+    comparison_ref=('dual_axis_slew_limited' if 'dual_axis_slew_limited' in available
+                    else 'fixed_no_motion')
+    heat_methods=tuple(m for m in ('mbpo','sac','fixed_no_motion') if m in feasible)
+    grid=np.zeros((len(sids),len(heat_methods)),float)
     for i,scenario in enumerate(sids):
         subset=[(s,seed) for s,seed in pairs if s==scenario]
-        for j,m in enumerate(('mbpo','sac','fixed_no_motion')):
-            diff=[by[(s,z,m)]['net_energy_kwh']-by[(s,z,'dual_axis_slew_limited')]['net_energy_kwh']
+        for j,m in enumerate(heat_methods):
+            diff=[by[(s,z,m)]['net_energy_kwh']-by[(s,z,comparison_ref)]['net_energy_kwh']
                   for s,z in subset]
             grid[i,j]=np.mean(diff)
     fig,ax=plt.subplots(figsize=(8,max(4.0,min(14.,len(sids)*.18+1))))
     lim=max(np.abs(grid).max(),1e-10)
     heat=ax.imshow(grid,cmap='coolwarm',vmin=-lim,vmax=lim,aspect='auto')
-    fig.colorbar(heat,ax=ax,label='Net kWh relative to slew-limited dual axis')
-    ax.set_xticks(range(3));ax.set_xticklabels(['MBPO','SAC','Fixed'])
+    fig.colorbar(heat,ax=ax,label=f'Net kWh relative to {LABELS[comparison_ref]}')
+    ax.set_xticks(range(len(heat_methods)));ax.set_xticklabels([LABELS[k] for k in heat_methods])
     if len(sids)<=55:
         ax.set_yticks(range(len(sids)));ax.set_yticklabels(sids,fontsize=7)
     else:ax.set_ylabel('NSRDB scenario index (sorted)')
@@ -164,7 +171,7 @@ def make_figures(paths,outdir,mbpo_training_csv=None,sac_training_csv=None):
 
     fig,ax=plt.subplots(figsize=(10,5))
     seasons=('winter','spring','summer','fall')
-    for m in FEASIBLE:
+    for m in feasible:
         season_means=[]
         for season in seasons:
             days=defaultdict(list)

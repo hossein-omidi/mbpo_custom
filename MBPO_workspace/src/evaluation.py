@@ -1,3 +1,4 @@
+# POSTPROCESSING_SPLIT_UTC_COMPAT_V2
 # PVWATT_DEV_REPAIR_V3
 """Paired learned-policy and PV baseline evaluation; no model rollouts in eval.
 Every *feasible* controller is stepped using the same PVTrackingEnv, NSRDB
@@ -142,8 +143,8 @@ def paired_summary(paths, plan=None):
                   'Instantaneous DC reference maximizes single-step gross DC power for the '
                   'isotropic, monotone-PVWatts model (or legacy POA model); it is '
                   'unconstrained and not a finite-horizon net-energy policy.',
-                  'Training and evaluation scenarios may overlap; do not claim a held-out result '
-                  'without a disjoint training protocol.']}
+                  'Declare independent testing only when selection was verified against the persisted '
+                  'scenario_split.json from both SAC and MBPO runs.']}
     available=[m for m in METHODS if m in next(iter(keys.values()))]
     if plan is not None:
         from SAC_workspace.src.evaluation.statistical_inference import (
@@ -172,29 +173,43 @@ def paired_summary(paths, plan=None):
             day_net_values=list(day_net.values()) if day_net is not None else []
             descriptive_sd=float(np.std(day_net_values,ddof=1)) if len(day_net_values)>1 else None
         else:
-            mu_gross=float(gross.mean());mu_net=float(net.mean()) if len(net) else None
-            mu_move=float(movement.mean()) if len(movement) else None
-            descriptive_sd=float(net.std(ddof=1)) if len(net)>1 else None
+            # Historical scenario days, not repeated random seeds, are the
+            # unit of aggregation. A seed-duplicated day never gains weight.
+            def scenario_values(field):
+                by_day=defaultdict(list)
+                for episode in records:
+                    value=episode.get(field)
+                    if value is not None:
+                        by_day[str(episode['scenario_id'])].append(float(value))
+                return np.asarray([np.mean(v) for v in by_day.values()],dtype=float)
+            day_gross=scenario_values('gross_energy_kwh')
+            day_net=scenario_values('net_energy_kwh')
+            day_move=scenario_values('movement_cost_kwh')
+            mu_gross=float(day_gross.mean()) if len(day_gross) else None
+            mu_net=float(day_net.mean()) if len(day_net) else None
+            mu_move=float(day_move.mean()) if len(day_move) else None
+            descriptive_sd=float(day_net.std(ddof=1)) if len(day_net)>1 else None
         out['methods'][method]={'count':len(records),
+          'n_historical_scenarios':len({str(p['scenario_id']) for p in records}),
           'mean_gross_kwh':mu_gross,'mean_net_kwh':mu_net,
           'std_net_kwh':descriptive_sd,
-          'std_interpretation':'unweighted sampled-day descriptive SD; not the standard error' if plan is not None else 'sample descriptive SD; not the standard error',
+          'std_interpretation':'unweighted historical-day descriptive SD; not the standard error or a confidence interval',
           'mean_movement_cost_kwh':mu_move}
     comparisons=[('mbpo','sac'),('mbpo','dual_axis_slew_limited'),
                  ('mbpo','fixed_no_motion'),('sac','dual_axis_slew_limited'),
                  ('sac','fixed_no_motion')]
     comparisons=[(a,b) for a,b in comparisons if a in available and b in available]
     for lhs,rhs in comparisons:
-        clustered=defaultdict(list);ratios=[]
+        clustered=defaultdict(list);ratios_by_day=defaultdict(list)
         for (sid,_),g in keys.items():
             left=g[lhs]['net_energy_kwh'];right=g[rhs]['net_energy_kwh']
             clustered[sid].append(left-right)
-            if right>1e-10:ratios.append(100.*(left-right)/right)
+            if right>1e-10:ratios_by_day[str(sid)].append(100.*(left-right)/right)
         if plan is None:
             mean,lo,hi=_ci_clustered(clustered)
             out['paired_net_kwh'][f'{lhs}_minus_{rhs}']={
                 'mean_difference_kwh':mean,'bootstrap_ci_95pct_kwh':[lo,hi],
-                'mean_percent_gain':float(np.mean(ratios)) if ratios else None}
+                'mean_percent_gain':float(np.mean([np.mean(v) for v in ratios_by_day.values()])) if ratios_by_day else None}
         else:
             from SAC_workspace.src.evaluation.statistical_inference import (
                 day_summary_from_paths, stratified_point_estimate)

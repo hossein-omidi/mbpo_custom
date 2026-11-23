@@ -1,3 +1,4 @@
+# POSTPROCESSING_SPLIT_UTC_COMPAT_V2
 # PVWATT_DEV_REPAIR_V3
 """Ray/TF-free scientific figures adapted from the repository's historic plots.
 
@@ -53,12 +54,16 @@ FLOATS = set(FIELDS)-{'scenario_id','seed','method','step','timestamp_utc_iso',
                            'power_model','sapm_mount'}
 
 
-def _hour(ts):
+def _hour(ts, origin):
     dt=datetime.fromisoformat(str(ts).replace('Z','+00:00'))
-    if dt.tzinfo is None or dt.utcoffset().total_seconds()!=0:
-        raise ValueError('Expected an explicit UTC-aware post-step timestamp')
-    clock = dt.hour+dt.minute/60+dt.second/3600
-    return clock + (24.0 if clock < 8.75 else 0.0)
+    first=datetime.fromisoformat(str(origin).replace('Z','+00:00'))
+    if (dt.tzinfo is None or dt.utcoffset().total_seconds()!=0
+            or first.tzinfo is None or first.utcoffset().total_seconds()!=0):
+        raise ValueError('Expected explicit UTC-aware post-action timestamps')
+    if dt<first:
+        raise ValueError('Post-action timestamps cannot precede the first record')
+    base=first.hour+first.minute/60+first.second/3600
+    return base+(dt-first).total_seconds()/3600
 
 
 def _shortest(a):
@@ -114,7 +119,8 @@ def expand_paths(paths):
         for i in range(n):
             info=path['infos'][i]
             ts=str(info['timestamp_utc_iso'])
-            hour=_hour(ts);times.append(datetime.fromisoformat(ts.replace('Z','+00:00')))
+            hour=_hour(ts,path['infos'][0]['timestamp_utc_iso'])
+            times.append(datetime.fromisoformat(ts.replace('Z','+00:00')))
             tilt=float(path['tilt'][i]);az=float(path['azimuth'][i])
             pw=float(path['power'][i]);en=float(path['energy'][i]);rw=float(path['reward'][i]);cost=float(path['cost'][i])
             if not all(np.isfinite(x) for x in (tilt,az,pw,en,rw,cost)):
