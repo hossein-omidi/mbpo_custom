@@ -144,6 +144,16 @@ def generate_weather_profile(frame, cos_zenith, spec, *, seed):
         alb=np.asarray(frame[alb_col],dtype=float)
         if not np.isfinite(alb).all() or np.any((alb<0)|(alb>1)):
             raise ValueError('Source albedo must be in [0,1]')
+        # Do not silently harmonize conflicting aliases. The unmodified
+        # Stage-A physical evaluator rejects disagreement; augmentation must
+        # respect the same data-integrity contract.
+        aliases=[c for c in ('surface_albedo','albedo','Surface Albedo','Surface_Albedo')
+                 if c in frame]
+        for other in aliases[1:]:
+            compare=np.asarray(frame[other],dtype=float)
+            if not np.isfinite(compare).all() or not np.allclose(
+                    compare,alb,rtol=0.,atol=1e-8):
+                raise ValueError('Conflicting NSRDB surface-albedo column aliases')
     if not s['enabled']:
         return out,{'enabled':False,'seed':None,'clip_count':0,'max_baseline_closure_residual_wm2':float(np.max(np.abs(
              np.asarray(frame['ghi'],float)-np.asarray(frame['dhi'],float)-np.asarray(frame['dni'],float)*cosz)))}
@@ -157,10 +167,13 @@ def generate_weather_profile(frame, cos_zenith, spec, *, seed):
     ghi=np.asarray(frame['ghi'],float)
     dninew=dni*multiplier(s['dni_cv'],shocks[:,0]);dhinew=dhi*multiplier(s['dhi_cv'],shocks[:,1])
     ghinew=ghi+(dninew-dni)*cosz+(dhinew-dhi)
-    # Preserve original closure residual exactly unless unphysical source
-    # values require a bound; report the number of floor projections.
-    cut=ghinew<0
-    ghinew=np.maximum(0.,ghinew)
+    # Preserve the source GHI/DHI/DNI closure residual where feasible.
+    # Physically, nonnegative beam-horizontal irradiance implies GHI >= DHI.
+    # Preserve source values as reference; project only the stochastic output
+    # when the sampled residual would imply negative beam-horizontal energy.
+    # Every projection is counted because closure may cease to be preserved.
+    projected=ghinew<dhinew
+    ghinew=np.maximum(ghinew,dhinew)
     out['dni']=dninew;out['dhi']=dhinew;out['ghi']=ghinew
     out['temperature']=np.asarray(frame['temperature'],float)+s['temperature_sd_c']*shocks[:,2]
     out['wind_speed']=np.asarray(frame['wind_speed'],float)*multiplier(s['wind_cv'],shocks[:,3])
@@ -172,10 +185,16 @@ def generate_weather_profile(frame, cos_zenith, spec, *, seed):
         for col in ('surface_albedo','albedo','Surface Albedo','Surface_Albedo'):
             if col in out:out[col]=new_albedo
     diagnostics={
-        'enabled':True,'seed':int(seed),'clip_count':int(np.count_nonzero(cut))+albedo_clips,
+        'enabled':True,'seed':int(seed),
+        'clip_count':int(np.count_nonzero(projected))+albedo_clips,
+        'ghi_dhi_projection_count':int(np.count_nonzero(projected)),
+        'albedo_projection_count':int(albedo_clips),
         'max_baseline_closure_residual_wm2':float(np.max(np.abs(ghi-dhi-dni*cosz))),
         'max_post_closure_residual_wm2':float(np.max(np.abs(ghinew-dhinew-dninew*cosz))),
+        'max_ghi_below_dhi_wm2':float(np.max(np.maximum(dhinew-ghinew,0.))),
         'uncertainty_spec_sha256':spec_fingerprint(s),
         'interpretation':'hypothetical correlated trajectory uncertainty, not calibrated NSRDB error',
     }
+    if not (np.isfinite(out[list(required)]).to_numpy(dtype=float)).all():
+        raise FloatingPointError('Nonfinite weather values after uncertainty propagation')
     return out,diagnostics

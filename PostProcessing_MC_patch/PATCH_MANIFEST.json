@@ -1,0 +1,51 @@
+{
+  "patch_title": "PostProcessing v2 – correlated Monte Carlo weather with counterfactual replay and statistical corrections",
+  "version": "2.0-critical-review-2026-11-23",
+  "repository": "hossein-omidi/mbpo_custom",
+  "target_branch": "PostProcessing",
+  "modified_existing_modules": [
+    "mbpo/env/stage_a_pv_tracking.py",
+    "SAC_workspace/src/environment/environment.py",
+    "SAC_workspace/src/config/config.py",
+    "MBPO_workspace/src/config.py",
+    "SAC_workspace/src/training/experiment_protocol.py",
+    "SAC_workspace/src/training/trainer.py",
+    "MBPO_workspace/src/trainer.py",
+    "MBPO_workspace/workflows/06_model_validation.py"
+  ],
+  "new_modules": [
+    "mbpo/env/trajectory_uncertainty.py",
+    "MBPO_workspace/workflows/08_monte_carlo_train.py",
+    "MBPO_workspace/workflows/09_monte_carlo_evaluate.py"
+  ],
+  "train_and_test_split": "Original PostProcessing month-stratified disjoint historical scenario protocol retained",
+  "weather_generation": "Gaussian correlated AR(1)+day latent errors; mean-one lognormal DNI/DHI/wind; additive temperature and albedo; bound-projected GHI>=DHI and albedo; original irradiance closure residual preserved unless projected",
+  "statistical_claim": "Sensitivity distribution is hypothetical, not NSRDB error calibrated",
+  "controller_observation_dim": 6,
+  "controller_action_dim": 2,
+  "episode_horizon": 195,
+  "model_based_ensemble_changes": "None. Existing one-step MBPO learning preserved; stochastic physical transitions enter real replay and its existing ensemble fit.",
+  "new_weather_snapshot_per_episode": true,
+  "periodic_eval_realization_id": 0,
+  "paired_evaluation": "Identical scenario/realization ID, full weather SHA, UTC grid and initial pose",
+  "backup_files": false,
+  "git_actions": false,
+  "offline_unit_tests_passed": 20,
+  "source_anchor_verification": "GitHub read-only blob hashes and unique anchors verified for eight modified PostProcessing source files, including model validation",
+  "full_nsrdb_pvlib_runtime_verification": "NOT RUN: no user seven-year NSRDB CSVs and no pvlib or gym in this environment",
+  "v1_upgrade_supported": "Exact V1 package new modules only; changes are guarded by original V1 SHA-1",
+  "critical_fixes": [
+    "Model validation counterfactual replay uses same fixed weather realization",
+    "Model validation accepts matching MC uncertainty config",
+    "Solar slew baseline matches current-time periodic-evaluation convention",
+    "Finite draw Monte Carlo variance and conditional MC SE reported separately",
+    "Power profiles output for every historical day",
+    "GHI>=DHI projection diagnostics and strict duplicate-albedo validation",
+    "Checkpoint scenario protocol must match requested split"
+  ],
+  "new_tools": [
+    "tools/verify_mc_environment.py (runs on user NSRDB/pvlib environment)"
+  ],
+  "model_validation_uncertainty": true,
+  "v1_checkpoints": "Do not reuse previous Monte Carlo v1 checkpoints after v2 weather QA/physical fingerprint changes; retrain both policies"
+}

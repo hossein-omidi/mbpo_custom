@@ -29,9 +29,10 @@ def action_for(method,env,obs,agent):
     if method!='sun_slew_limited':raise ValueError(method)
     from mbpo.env.pvlib_physics import dual_axis_tracking_targets
     u=env.unwrapped
-    # Physical energy is computed at post-action t+1, so target that time.
-    nxt=u.times[min(u.step_index+1,len(u.times)-1)]
-    sp=u._solar_position(nxt)
+    # Match the existing PeriodicEvaluator astronomical baseline: the
+    # sun position at the CURRENT decision timestamp determines the action.
+    # The plant then advances to t+1 and computes the resulting power.
+    sp=u._solar_position(u.current_time)
     if float(sp.zenith)>=90.:return np.zeros(2,dtype=np.float32)
     tilt,az=dual_axis_tracking_targets(float(sp.zenith),float(sp.azimuth))
     dt=np.clip((tilt-u.tilt)/u.max_delta_tilt,-1,1)
@@ -57,6 +58,8 @@ def run_one(env,method,sid,draw,policy=None):
         utc=datetime.fromisoformat(info['timestamp_utc_iso'].replace('Z','+00:00'))
         if utc.utcoffset().total_seconds()!=0:
             raise RuntimeError('Expected zero UTC offset')
+        if utc!=u.times[t+1]:
+            raise RuntimeError('Recorded UTC timestamp does not match exact configured episode grid')
         if times and (utc-times[-1]).total_seconds()!=300:
             raise RuntimeError('Non-chronological 5-minute power trajectory')
         times.append(utc)
@@ -74,7 +77,8 @@ def run_one(env,method,sid,draw,policy=None):
     return {**totals,'pose':first_pose,'profile_sha256':profile_sha,
             'timestamps_utc':[s.isoformat() for s in times],
             'power_w':np.asarray(power),'weather':np.asarray(weather),
-            'step_reward_kwh':np.asarray(rewards)}
+            'step_reward_kwh':np.asarray(rewards),
+            'realization_seed':int(u._weather_realization_seed)}
 
 
 def descriptive(values):
@@ -87,37 +91,81 @@ def descriptive(values):
             'mc_se_mean':float(x.std(ddof=1)/math.sqrt(len(x))) if len(x)>1 else None}
 
 
-def nested_summary(records,field,paired=None):
-    """Equal weight to each historical day, then equal weight to each draw."""
-    grouped=defaultdict(list)
+def nested_summary(records, field, paired=None):
+    """Nested Monte Carlo estimates with fixed, equal-weight historical days.
+
+    Two different quantities are reported deliberately:
+    - empirical/plug-in pooled variance of all day×draw results (exact identity);
+    - finite-M corrected between-day variance, which removes contribution
+      of simulated within-day uncertainty to noisy estimates of day means.
+
+    Conditional Monte Carlo SE describes integration error for these fixed
+    historical days, NOT uncertainty about a new random future day and NOT
+    a policy performance confidence interval over training seeds.
+    """
+    grouped=defaultdict(dict)
     for row in records:
+        sid=str(row['scenario_id']); rid=int(row['draw'])
         if paired is None:
             if row['method']!=field:continue
-            x=float(row['net_kwh'])
+            val=float(row['net_kwh'])
         else:
             if row['method']!=paired[0]:continue
-            ref=paired[1]
-            key=(row['scenario_id'],row['draw'],ref)
+            key=(sid,rid,paired[1])
             if key not in field:raise ValueError('Missing common-realization paired reference')
-            x=float(row['net_kwh'])-float(field[key])
-        grouped[row['scenario_id']].append(x)
+            val=float(row['net_kwh'])-float(field[key])
+        if not np.isfinite(val):raise ValueError('Nonfinite Monte Carlo return')
+        if rid in grouped[sid]:
+            raise ValueError(f'Duplicate Monte Carlo draw: {sid}/{rid}')
+        grouped[sid][rid]=val
     if not grouped:raise ValueError('No nested Monte Carlo records')
-    sizes={len(x) for x in grouped.values()}
-    if len(sizes)!=1:raise ValueError('Draw counts differ across historical scenarios')
-    daymeans=np.asarray([np.mean(v) for v in grouped.values()])
-    pooled=np.concatenate([np.asarray(v) for v in grouped.values()])
-    overall=float(daymeans.mean())
-    vb=float(np.mean((daymeans-overall)**2))
-    vw=float(np.mean([np.mean((np.asarray(v)-np.mean(v))**2) for v in grouped.values()]))
-    res={'n_historical_days':len(grouped),'draws_per_day':next(iter(sizes)),
-         'mean_net_kwh':overall,'between_day_variance_kwh2':vb,
-         'within_day_uncertainty_variance_kwh2':vw,
-         'total_descriptive_sd_kwh':math.sqrt(vb+vw),
-         'pooled_quantiles_kwh':{'q05':float(np.quantile(pooled,.05)),
-              'median':float(np.median(pooled)),'q95':float(np.quantile(pooled,.95))},
-         'each_day':{sid:descriptive(x) for sid,x in grouped.items()}}
-    res['note']='Within/between components are descriptive for assumed uncertainty, not a calibrated future-weather CI.'
-    return res
+    ids=sorted(grouped)
+    drawsets=[set(grouped[sid]) for sid in ids]
+    if any(ids_!=drawsets[0] for ids_ in drawsets[1:]):
+        raise ValueError('Unmatched Monte Carlo draws across historical days')
+    M=len(drawsets[0]);K=len(ids)
+    if M<2:raise ValueError('At least two independent draws are required for Monte Carlo SD')
+    array=np.asarray([[grouped[sid][rid] for rid in sorted(drawsets[0])] for sid in ids],dtype=float)
+    daymeans=array.mean(axis=1)
+    mean=float(daymeans.mean())
+    # Exact empirical law of total variance when empirical distribution puts
+    # probability 1/K on each day and 1/M on each draw within that day.
+    between_empirical=float(np.mean((daymeans-mean)**2))
+    within_empirical=float(np.mean((array-daymeans[:,None])**2))
+    total_empirical=float(np.mean((array-mean)**2))
+    if not np.isclose(total_empirical,between_empirical+within_empirical,
+                      rtol=1e-10,atol=1e-12):
+        raise ArithmeticError('Empirical total-variance identity failed')
+    # Monte Carlo integration error: each day's mean has variance s_day^2/M.
+    # These draws are independent between days by construction (unique seeds).
+    within_unbiased=np.var(array,axis=1,ddof=1)
+    mc_var_mean=float(within_unbiased.sum()/(K*K*M))
+    # Finite-M correction for the empirical between-day variance estimator.
+    # The uncorrected day-mean variance also includes MC noise, whose
+    # contribution has expectation (1-1/K)*E[s_day^2]/M.
+    finite_m_bias=(1.-1./K)*float(within_unbiased.mean())/M
+    between_corrected=between_empirical-finite_m_bias
+    results={
+        'n_historical_days':K,'draws_per_day':M,
+        'mean_net_kwh':mean,
+        'between_day_variance_kwh2':between_empirical,
+        'within_day_uncertainty_variance_kwh2':within_empirical,
+        'total_descriptive_sd_kwh':math.sqrt(total_empirical),
+        'total_empirical_variance_kwh2':total_empirical,
+        'between_day_variance_corrected_kwh2':float(max(0.,between_corrected)),
+        'between_day_untruncated_correction_kwh2':float(between_corrected),
+        'within_day_unbiased_variance_kwh2':float(within_unbiased.mean()),
+        'mc_se_mean_fixed_days_kwh':math.sqrt(mc_var_mean),
+        'pooled_quantiles_kwh':{
+            'q05':float(np.quantile(array,.05)),
+            'median':float(np.median(array)),
+            'q95':float(np.quantile(array,.95))},
+        'each_day':{sid:descriptive(array[i]) for i,sid in enumerate(ids)},
+        'note':('Empirical decomposition uses finite Monte Carlo draws; the corrected '
+                'between-day component removes estimated finite-draw noise. '
+                'All quantities are conditional on the assumed weather error model '
+                'and fixed held-out historical days, not calibrated field accuracy.')}
+    return results
 
 
 def write_csv(path,rows):
@@ -128,7 +176,7 @@ def write_csv(path,rows):
         writer.writeheader();writer.writerows(rows)
 
 
-def load_policy(cfg,which,checkpoint,device):
+def load_policy(cfg,which,checkpoint,device,expected_protocol_sha256=None):
     import torch
     from SAC_workspace.src.agents.sac_agent import SACAgent
     from SAC_workspace.src.training.trainer import config_hash
@@ -137,6 +185,9 @@ def load_policy(cfg,which,checkpoint,device):
     data=torch.load(checkpoint,map_location='cpu',weights_only=False)
     if data.get('schema')!=2:
         raise ValueError('Unrecognized checkpoint schema; train new policies with updated code')
+    if (expected_protocol_sha256 is not None and
+            data.get('scenario_protocol_sha256')!=expected_protocol_sha256):
+        raise ValueError('SAC/MBPO checkpoint training partition differs from selected frozen scenario split')
     if which=='sac':
         if data.get('hash')!=config_hash(cfg.sac):
             raise ValueError('SAC checkpoint was not trained with this uncertainty configuration')
@@ -155,33 +206,66 @@ def load_policy(cfg,which,checkpoint,device):
     return agent
 
 
-def evaluate_paths(cfg,agents,scenario_ids,draws,selected_time_scenario):
+def evaluate_paths(cfg,agents,scenario_ids,draws,selected_time_scenario=None):
+    """Evaluate every historical day with common-random-number weather draws.
+
+    Keep all power draws only for ONE day at a time; calculate daily
+    time-resolved descriptive statistics before advancing to the next day.
+    This avoids storing O(days*draws*methods*horizon) raw trajectories.
+    """
     from SAC_workspace.src.environment.environment import SACEnvironment
     env=SACEnvironment(cfg.sac.eval_env)
-    rows=[];profiles={};time_output=[]
+    rows=[];clock_rows=[]
     try:
         if not env.unwrapped.weather_uncertainty['enabled']:
             raise ValueError('Monte Carlo evaluator requires enabled uncertainty')
         for day_ix,sid in enumerate(scenario_ids):
+            daily_power={method:[] for method in METHODS}
+            common_grid=None
             for rid in range(draws):
                 paired_ref=None
+                paired_weather=None
                 for method in METHODS:
                     result=run_one(env,method,sid,rid,agents.get(method))
                     signature=(result['profile_sha256'],tuple(result['timestamps_utc']),result['pose'])
                     if paired_ref is None:paired_ref=signature
                     if paired_ref!=signature:
                         raise RuntimeError(f'Controller weather/clock/pose mismatch on {sid} draw {rid}')
+                    if paired_weather is None:
+                        paired_weather=result['weather']
+                    elif not np.array_equal(result['weather'],paired_weather):
+                        raise RuntimeError(f'Controller meteorological values differ on {sid} draw {rid}')
+                    if common_grid is None:common_grid=result['timestamps_utc']
+                    elif common_grid!=result['timestamps_utc']:
+                        raise RuntimeError(f'UTC clock changed within {sid} Monte Carlo comparison')
+                    diag=env.unwrapped._weather_uncertainty_diagnostics
                     row={'scenario_id':sid,'draw':rid,'method':method,
                          'net_kwh':result['net_kwh'],'gross_kwh':result['gross_kwh'],
                          'movement_kwh':result['movement_kwh'],
-                         'profile_sha256':result['profile_sha256']}
+                         'profile_sha256':result['profile_sha256'],
+                         'realization_seed':result['realization_seed'],
+                         'uncertainty_clip_count':int(diag.get('clip_count',0)),
+                         'baseline_closure_max_wm2':float(diag.get('max_baseline_closure_residual_wm2',0.)),
+                         'post_closure_max_wm2':float(diag.get('max_post_closure_residual_wm2',0.))}
                     rows.append(row)
-                    if sid==selected_time_scenario:
-                        time_output.append((method,rid,result['timestamps_utc'],result['power_w']))
+                    daily_power[method].append(result['power_w'])
+            if common_grid is None:raise RuntimeError('Empty weather realization set')
+            for method in METHODS:
+                mat=np.asarray(daily_power[method],dtype=float)
+                if mat.shape!=(draws,env.horizon):
+                    raise RuntimeError('Incomplete Monte Carlo power matrix')
+                mean=mat.mean(axis=0); sd=mat.std(axis=0,ddof=1)
+                q05=np.quantile(mat,.05,axis=0);q95=np.quantile(mat,.95,axis=0)
+                for t,utc in enumerate(common_grid):
+                    clock_rows.append({'scenario_id':sid,'method':method,
+                          'time_utc':utc,'step':t+1,
+                          'power_mean_w':float(mean[t]),
+                          'power_sd_w':float(sd[t]),
+                          'power_q05_w':float(q05[t]),
+                          'power_q95_w':float(q95[t])})
             print(f'Completed MC historical day {day_ix+1}/{len(scenario_ids)}: {sid}',flush=True)
     finally:env.close()
-    return rows,time_output
-
+    return rows,clock_rows
 
 
 def plot_diagnostics(out, rows, clock_rows, paired):
@@ -259,43 +343,46 @@ def main(argv=None):
     if args.max_days is not None:days=days[:args.max_days]
     if not days:raise ValueError('Empty selected historical partition')
     agents={
-        'sac':load_policy(cfg,'sac',args.sac_checkpoint,args.device),
-        'mbpo':load_policy(cfg,'mbpo',args.mbpo_checkpoint,args.device),
+        'sac':load_policy(cfg,'sac',args.sac_checkpoint,args.device,
+                          expected_protocol_sha256=split['protocol_sha256']),
+        'mbpo':load_policy(cfg,'mbpo',args.mbpo_checkpoint,args.device,
+                           expected_protocol_sha256=split['protocol_sha256']),
     }
-    rows,times=evaluate_paths(cfg,agents,days,args.draws,days[0])
+    rows,clock_rows=evaluate_paths(cfg,agents,days,args.draws,days[0])
     out=Path(args.outdir);out.mkdir(parents=True,exist_ok=True)
     write_csv(out/'all_day_draw_method.csv',rows)
+    write_csv(out/'daily_power_mean_std_by_utc_step.csv',clock_rows)
+    write_csv(out/'first_day_power_mean_sd.csv',
+              [r for r in clock_rows if r['scenario_id']==days[0]])
     refs={(r['scenario_id'],r['draw'],r['method']):r['net_kwh'] for r in rows}
+    if len(refs)!=len(rows):
+        raise ValueError('Duplicate method evaluations for same historical day and draw')
     methods={name:nested_summary(rows,name) for name in METHODS}
     paired={}
     for a,b in PAIR_NAMES:
         paired[f'{a}_minus_{b}']=nested_summary(rows,refs,(a,b))
-    clock_rows=[]
-    for method in METHODS:
-        selected=sorted((r for r in times if r[0]==method),key=lambda v:v[1])
-        if len(selected)!=args.draws:raise RuntimeError('Incomplete selected-day power profiles')
-        grid=selected[0][2]
-        if any(r[2]!=grid for r in selected):raise ValueError('UTC grid changes across uncertainty realizations')
-        mat=np.stack([r[3] for r in selected],axis=0)
-        for t,utc in enumerate(grid):
-            clock_rows.append({'scenario_id':days[0],'method':method,'time_utc':utc,'step':t+1,
-                'power_mean_w':float(mat[:,t].mean()),
-                'power_sd_w':float(mat[:,t].std(ddof=1)),
-                'power_q05_w':float(np.quantile(mat[:,t],.05)),
-                'power_q95_w':float(np.quantile(mat[:,t],.95))})
-    write_csv(out/'first_day_power_mean_sd.csv',clock_rows)
+    first_day_clock_rows=[r for r in clock_rows if r['scenario_id']==days[0]]
+    weather_draws={(r['scenario_id'],r['draw']):r for r in rows if r['method']=='fixed_no_motion'}
+    total_projection_count=int(sum(r['uncertainty_clip_count'] for r in weather_draws.values()))
+    worst_closure=max(r['post_closure_max_wm2'] for r in weather_draws.values())
+    baseline_closure=max(r['baseline_closure_max_wm2'] for r in weather_draws.values())
     report={'uncertainty_spec':spec,'uncertainty_spec_sha256':spec_fingerprint(spec),
         'scenario_protocol_sha256':split['protocol_sha256'],
         'split_role':args.split_role,'n_selected_days':len(days),'n_available_days':population_size,
         'partial_partition_evaluation':len(days)!=population_size,
         'draws_per_day':args.draws,'methods':methods,'paired_net_energy_differences':paired,
+        'weather_quality':{'n_distinct_day_draw_profiles':len(weather_draws),
+            'n_irradiance_or_albedo_projections':total_projection_count,
+            'max_baseline_irradiance_closure_residual_wm2':baseline_closure,
+            'max_post_irradiance_closure_residual_wm2':worst_closure},
+        'power_output':'daily_power_mean_std_by_utc_step.csv (every selected historical day)',
         'note':'Descriptive uncertainty under assumed weather-error distribution; no field-data calibration claimed.',
         'evaluation_model':'Original pvlib Stage A physical environment; no MBPO fake rollouts',
         'common_random_numbers':'Same uncertainty realization_id and weather profile SHA across paired controllers',
     }
     (out/'mc_summary.json').write_text(json.dumps(report,indent=2,allow_nan=False),encoding='utf-8')
     if not args.skip_figures:
-        plot_diagnostics(out,rows,clock_rows,paired)
+        plot_diagnostics(out,rows,first_day_clock_rows,paired)
     print('Monte Carlo summary:',(out/'mc_summary.json').resolve())
 
 if __name__=='__main__':main()

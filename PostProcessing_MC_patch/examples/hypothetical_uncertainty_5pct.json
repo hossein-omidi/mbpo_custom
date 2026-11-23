@@ -1,0 +1,19 @@
+{
+  "schema": "correlated_weather_assumption_v1",
+  "enabled": true,
+  "seed": 2026,
+  "dni_cv": 0.05,
+  "dhi_cv": 0.05,
+  "temperature_sd_c": 1.0,
+  "wind_cv": 0.05,
+  "albedo_sd": 0.02,
+  "day_fraction": 0.5,
+  "ar1": 0.9,
+  "latent_correlation": [
+    [1.0, 0.2, 0.0, 0.0, 0.0],
+    [0.2, 1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 0.0, 1.0]
+  ]
+}

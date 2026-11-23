@@ -1,3 +1,4 @@
+# POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 """Validate the saved one-step MBPO ensemble on internal and external held-out days.
 
 The external checks use the original PV simulator. Counterfactual action checks
@@ -116,8 +117,8 @@ def _load_training_stats(path: Path) -> dict:
     return result
 
 
-def _run_policy_trajectory(env, agent, scenario_id):
-    obs = env.reset(scenario_id=scenario_id)
+def _run_policy_trajectory(env, agent, scenario_id, realization_id=0):
+    obs = env.reset(scenario_id=scenario_id, realization_id=realization_id)
     states, actions, next_states, rewards = [], [], [], []
     for _ in range(env.horizon):
         action = agent.act(obs, deterministic=True)
@@ -157,7 +158,13 @@ def run_validation(args):
         model_overrides["model_epochs"] = args.model_epochs
     if args.model_max_train_samples is not None:
         model_overrides["model_max_train_samples"] = args.model_max_train_samples
+    uncertainty_spec = None
+    if args.uncertainty_spec is not None:
+        from mbpo.env.trajectory_uncertainty import normalized_spec
+        uncertainty_spec = normalized_spec(json.loads(
+            Path(args.uncertainty_spec).read_text(encoding='utf-8')))
     cfg = load_config(
+        weather_uncertainty=uncertainty_spec,
         model_overrides=model_overrides,
         power_model=args.power_model,
         wind_reference_height_m=args.wind_reference_height_m,
@@ -231,7 +238,8 @@ def run_validation(args):
         external_meta = []
         counterfactual_rows = []
         for sid in scenario_ids:
-            states, actions, next_states, rewards = _run_policy_trajectory(env, agent, sid)
+            states, actions, next_states, rewards = _run_policy_trajectory(
+                env, agent, sid, realization_id=args.realization_id)
             pred_next, pred_rewards, _done, disagreement, _mask = fake_env.step(
                 states, actions, max_std=None, stochastic=False)
             mean_delta, _aleatoric, _epistemic, total_std, _score = ensemble.predict_distribution(
@@ -250,7 +258,8 @@ def run_validation(args):
                 0, env.horizon - 1, num=min(int(args.states_per_scenario), env.horizon), dtype=int))
             for t in selected_steps:
                 for action_name, candidate in _counterfactual_actions(actions[t]):
-                    replay_obs = env.reset(scenario_id=sid)
+                    replay_obs = env.reset(
+                        scenario_id=sid, realization_id=args.realization_id)
                     for prefix_action in actions[:int(t)]:
                         replay_obs, _r, _d, _i = env.step(prefix_action)
                     if not np.allclose(replay_obs, states[t], rtol=0, atol=1e-6):
@@ -334,6 +343,8 @@ def run_validation(args):
             "seed": seed,
             "scenario_protocol_sha256": split["protocol_sha256"],
             "validation_scenario_ids": scenario_ids,
+            "validation_realization_id": int(args.realization_id),
+            "weather_uncertainty": uncertainty_spec,
             "model_architecture": {
                 "num_models": m.num_models, "num_elites": m.num_elites,
                 "hidden_dim": m.hidden_dim, "rollout_length": m.rollout_length,
@@ -345,7 +356,7 @@ def run_validation(args):
             "interpretation": [
                 "Internal holdout metrics use whole NSRDB days reserved by ScenarioReplayBuffer and never used for ensemble fitting.",
                 "External on-policy metrics use the separate policy-validation scenario partition.",
-                "Counterfactual tests replay the same policy prefix to reconstruct an observed state, then execute alternative actions in the real simulator.",
+                "Counterfactual tests replay the same policy prefix under an identical fixed weather realization, then execute alternative actions in the real simulator.",
                 "The model predicts normalized DNI, DHI, and PV-power deltas; orientation and remaining horizon are reconstructed by the structured fake environment.",
                 "Predictive interval coverage uses the ensemble Gaussian-mixture moment-matched standard deviation; it is a diagnostic, not a guarantee of calibrated uncertainty.",
                 "This validates one-step prediction and action-conditioned reward reconstruction, not long-horizon free-running model accuracy.",
@@ -400,6 +411,10 @@ def main():
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--states-per-scenario", type=int, default=6)
+    parser.add_argument("--uncertainty-spec", default=None,
+                        help="Use the same uncertainty assumptions as MC-trained MBPO")
+    parser.add_argument("--realization-id", type=int, default=0,
+                        help="Frozen weather realization for exact counterfactual replay")
     parser.add_argument("--model-epochs", type=int, default=None)
     parser.add_argument("--model-max-train-samples", type=int, default=None)
     parser.add_argument("--power-model", choices=("legacy", "pvwatts_sapm"), default="pvwatts_sapm")
@@ -408,6 +423,8 @@ def main():
     parser.add_argument("--sapm-mount", default="open_rack_glass_polymer")
     parser.add_argument("--wind-powerlaw-exponent", type=float, default=0.14)
     args = parser.parse_args()
+    if args.realization_id < 0:
+        parser.error("realization-id must be nonnegative")
     if args.states_per_scenario < 1:
         parser.error("--states-per-scenario must be positive")
     run_dir = Path(args.run_dir)
