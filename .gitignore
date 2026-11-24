@@ -46,6 +46,7 @@ ENV/
 *.swp
 .idea
 *.mp4
+*.png
 
 data/*
 !data/pv_weather/
@@ -71,6 +72,7 @@ mbpo_runs/
 smoke_runs/
 .ray_tmp/
 sequential_stage_artifacts/
+outputs/
 
 evaluation/
 training_plots/
@@ -110,3 +112,4 @@ verification/
 .env.*
 !.env.example
 .ruff_cache/
+

@@ -24,7 +24,73 @@ def validate_mc_source(cfg,stage,seed,root=PROJECT_ROOT):
         raise ValueError(f'Seed {seed}: full {stage} Monte Carlo evaluation required')
     if data.get('n_selected_days')!=data.get('n_available_days'):
         raise ValueError(f'Seed {seed}: incomplete held-out daily coverage')
+    # Verify the actual Monte Carlo input grid before using summary numbers.
+    # This catches accidental cross-seed weather mismatches, missing
+    # trajectories and misleading cached summary files.
+    split=read_json(run_path(cfg,'sac',seed,root)/'scenario_split.json')
+    if data.get('scenario_protocol_sha256')!=split.get('protocol_sha256'):
+        raise ValueError(f'Seed {seed}: MC summary does not belong to frozen scenario split')
+    expected_days=set(split[f'{stage}_ids'])
+    if len(expected_days)!=data.get('n_selected_days'):
+        raise ValueError(f'Seed {seed}: MC scenario counts differ from frozen partition')
+    hashes,baseline_returns=_validate_raw_mc_file(
+        directory/'all_day_draw_method.csv',data,expected_days)
+    data['_validated_weather_hashes']=hashes
+    data['_validated_baselines']=baseline_returns
     return directory,data
+
+
+
+def _validate_raw_mc_file(path:Path,summary:dict,days:set[str]):
+    """Verify every historical-day x draw x controller record and net-energy means.
+
+    No interpolation, no averaging by episode number, and no unpaired
+    Monte Carlo records are accepted.
+    """
+    methods=('sac','mbpo','fixed_no_motion','sun_slew_limited')
+    draws=int(summary['draws_per_day'])
+    if draws<2:raise ValueError('Monte Carlo summary has fewer than two draws')
+    expected={(day,rid) for day in days for rid in range(draws)}
+    by_key={};weather_hash={};baselines={}
+    with path.open(newline='',encoding='utf-8') as stream:
+        reader=csv.DictReader(stream)
+        necessary={'scenario_id','draw','method','net_kwh','profile_sha256'}
+        if not necessary.issubset(reader.fieldnames or []):
+            raise ValueError(f'{path}: missing Monte Carlo pairing columns {necessary-set(reader.fieldnames or [])}')
+        for row in reader:
+            sid=str(row['scenario_id']);rid=int(row['draw']);method=row['method']
+            key=(sid,rid,method)
+            if (sid,rid) not in expected or method not in methods or key in by_key:
+                raise ValueError(f'{path}: unexpected/duplicate Monte Carlo evaluation {key}')
+            net=float(row['net_kwh'])
+            if not math.isfinite(net):raise ValueError(f'{path}: nonfinite net energy {key}')
+            weather=str(row['profile_sha256'])
+            if not weather:raise ValueError(f'{path}: empty weather fingerprint {key}')
+            old=weather_hash.setdefault((sid,rid),weather)
+            if old!=weather:
+                raise ValueError(f'{path}: SAC/MBPO/baseline weather realization mismatch {key}')
+            by_key[key]=net
+            if method in ('fixed_no_motion','sun_slew_limited'):
+                baselines[key]=net
+    if len(by_key)!=len(expected)*len(methods):
+        raise ValueError(f'{path}: missing Monte Carlo day/draw/controller combinations')
+    if len(weather_hash)!=len(expected):
+        raise ValueError(f'{path}: incomplete historical-day/draw weather grid')
+    for method in methods:
+        mean=statistics.fmean(by_key[(sid,rid,method)] for sid,rid in sorted(expected))
+        reported=float(summary['methods'][method]['mean_net_kwh'])
+        if not math.isclose(mean,reported,rel_tol=1e-8,abs_tol=1e-8):
+            raise ValueError(f'{path}: {method} MC summary mean disagrees with raw transitions')
+    for label in ('mbpo_minus_sac','mbpo_minus_fixed_no_motion',
+                  'sac_minus_fixed_no_motion','mbpo_minus_sun_slew_limited',
+                  'sac_minus_sun_slew_limited'):
+        left,right=label.split('_minus_')
+        mean=statistics.fmean(by_key[(sid,rid,left)]-by_key[(sid,rid,right)]
+                              for sid,rid in sorted(expected))
+        reported=float(summary['paired_net_energy_differences'][label]['mean_net_kwh'])
+        if not math.isclose(mean,reported,rel_tol=1e-8,abs_tol=1e-8):
+            raise ValueError(f'{path}: paired {label} MC summary disagrees with raw data')
+    return weather_hash,baselines
 
 
 def file_sha256(path:Path):
@@ -69,10 +135,17 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
     for seed in seeds:verify_pair(cfg,seed,root)
     inputs=[(seed,*validate_mc_source(cfg,stage,seed,root)) for seed in seeds]
     comparable=('scenario_protocol_sha256','uncertainty_spec_sha256','n_selected_days','draws_per_day')
+    first=inputs[0][2]
     for seed,_,data in inputs[1:]:
         for field in comparable:
-            if data.get(field)!=inputs[0][2].get(field):
+            if data.get(field)!=first.get(field):
                 raise ValueError(f'Cross-seed MC evaluation differs in {field}: seed {seed}')
+        if data['_validated_weather_hashes']!=first['_validated_weather_hashes']:
+            raise ValueError(f'Seed {seed}: common random numbers differ across training seeds')
+        for key,base in first['_validated_baselines'].items():
+            if not math.isclose(data['_validated_baselines'][key],base,
+                                rel_tol=1e-8,abs_tol=1e-8):
+                raise ValueError(f'Seed {seed}: deterministic baseline energy differs for {key}')
     inputs_hashes=frozen_mc_input_hashes(inputs)
     out=experiment_dir(cfg,root)/'reports'/f'monte_carlo_{stage}'
     if out.exists() and any(out.iterdir()) and not dry_run:

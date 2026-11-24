@@ -154,7 +154,7 @@ def test_validation_evaluation_command_paths(tmp_path,monkeypatch):
         evaluate.run(evaluate_args(mode='test'),root)
     with pytest.raises(ValueError,match='mode smoke'):
         evaluate.run(evaluate_args(mode='test',confirm_test=True),root)
-    evaluate.run(evaluate_args(mode='model',realization_id=3),root)
+    evaluate.run(evaluate_args(mode='model',realization_id=3,dry_run=True),root)
     assert 'realization3' in got[0][1][got[0][1].index('--outdir')+1]
 
 
@@ -282,33 +282,47 @@ def test_full_guarded_installer_plan_and_apply_on_exact_mock_source(tmp_path,mon
     assert not list(root.rglob('*.bak'))
 
 
+
 def test_across_seed_mc_report_mean_sd_and_no_unintended_overwrite(tmp_path):
     pytest.importorskip('matplotlib')
+    import csv
     root=make_mock_repo(tmp_path)
     cfg=core.initialize_experiment('mc_test',seeds=[0,1],epochs=3,root=root)
     make_completed_runs(root,cfg)
+    methods=('sac','mbpo','fixed_no_motion','sun_slew_limited')
+    days=('2018-01-03',)
     for seed in (0,1):
         directory=evaluate.evaluation_output(cfg,'test',seed,root)
         directory.mkdir(parents=True)
-        methods={name:{'mean_net_kwh':10.+seed+(name=='mbpo')} for name in
-                 ('sac','mbpo','fixed_no_motion','sun_slew_limited')}
-        differences={key:{'mean_net_kwh':1.+seed} for key in
-           ('mbpo_minus_sac','mbpo_minus_fixed_no_motion','sac_minus_fixed_no_motion',
-            'mbpo_minus_sun_slew_limited','sac_minus_sun_slew_limited')}
+        returns={'sac':10.+seed,'mbpo':11.+seed,
+                 'fixed_no_motion':8.,'sun_slew_limited':9.}
+        summaries={name:{'mean_net_kwh':value} for name,value in returns.items()}
+        pairs={name:{'mean_net_kwh':returns[name.split('_minus_')[0]]-
+                     returns[name.split('_minus_')[1]]} for name in
+               ('mbpo_minus_sac','mbpo_minus_fixed_no_motion','sac_minus_fixed_no_motion',
+                'mbpo_minus_sun_slew_limited','sac_minus_sun_slew_limited')}
         core.atomic_json(directory/'mc_summary.json',{
           'scenario_protocol_sha256':'split-sha','uncertainty_spec_sha256':'uncertain',
-          'n_selected_days':2,'n_available_days':2,'draws_per_day':100,
+          'n_selected_days':1,'n_available_days':1,'draws_per_day':100,
           'split_role':'test','partial_partition_evaluation':False,
-          'methods':methods,'paired_net_energy_differences':differences})
-        (directory/'all_day_draw_method.csv').write_text('scenario_id,draw,method,net_kwh\n')
+          'methods':summaries,'paired_net_energy_differences':pairs})
+        with (directory/'all_day_draw_method.csv').open('w',newline='') as f:
+            w=csv.DictWriter(f,fieldnames=['scenario_id','draw','method','net_kwh','profile_sha256'])
+            w.writeheader()
+            for sid in days:
+                for draw in range(100):
+                    for method in methods:
+                        w.writerow({'scenario_id':sid,'draw':draw,'method':method,
+                            'net_kwh':returns[method],
+                            'profile_sha256':f'same-weather-{sid}-{draw}'})
         with (directory/'mc_pooled_power_mean_sd_by_utc_step.csv').open('w') as f:
             f.write('method,step,mean_power_w,sd_total_descriptive_w\n')
             for name in methods:
-                for t in range(1,196):f.write(f'{name},{t},{100.+seed+0.1*t},3.0\n')
+                for t in range(1,196):
+                    f.write(f'{name},{t},{100.+seed+0.1*t},3.0\n')
     report.report_mc(cfg,[0,1],'test',root)
     out=core.experiment_dir(cfg,root)/'reports/monte_carlo_test'
     with (out/'net_energy_across_seeds.csv').open() as f:
-        import csv
         rows=list(csv.DictReader(f))
     sac=next(r for r in rows if r['method']=='sac')
     assert float(sac['mean_over_training_seed_means_net_kwh'])==pytest.approx(10.5)
