@@ -78,6 +78,12 @@ evaluation/
 training_plots/
 verification/
 
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+
 # Legacy artifact paths
 !evaluation/.gitkeep
 
