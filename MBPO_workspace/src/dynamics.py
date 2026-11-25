@@ -1,16 +1,10 @@
 # PVWATT_DEV_REPAIR_V3
-"""One-step model-based transitions for the existing six-feature PV task.
-
-Separate probabilistic ensembles predict (1) exogenous DNI/DHI changes from
-[DNI, DHI, remaining time] and (2) power change conditional on the compact
-state, incremental action, and the *next* weather. Panel kinematics, remaining
-horizon and movement-energy reward are reconstructed exactly. Neither the SAC
-observation nor action space is altered.
-
-The observation remains partially observable; model predictions are assessed
-with independent held-out weather days and counterfactual simulator tests.
-"""
+"""Geometry10 one-step MBPO: learned DNI/DHI/power deltas, exact pose,
+clock, solar ephemeris and actuator-energy calculation. The exogenous model
+uses current solar geometry and tau, never actions or future weather."""
 from __future__ import annotations
+from mbpo.geometry10 import (STATE_DIM, WEATHER_DIM, POWER_DIM, TAU, PANEL_AZ, SOLAR,
+    weather_features, check_batch, pose_transition, SolarContext)
 
 import copy
 import math
@@ -19,7 +13,7 @@ import torch
 from torch import nn
 from SAC_workspace.src.agents.sac_agent import mlp
 
-DYNAMICS_SCHEMA = 3
+DYNAMICS_SCHEMA = 4
 
 
 class GaussianDeltaNet(nn.Module):
@@ -52,20 +46,20 @@ class DynamicsEnsemble:
         self.num_elites = int(num_elites)
         self.hidden_dim = int(hidden_dim)
         self.lr = float(lr)
-        self.weather_nets = [GaussianDeltaNet(hidden_dim, 3, 2).to(self.device)
+        self.weather_nets = [GaussianDeltaNet(hidden_dim, WEATHER_DIM, 2).to(self.device)
                              for _ in range(self.num_models)]
-        self.power_nets = [GaussianDeltaNet(hidden_dim, 10, 1).to(self.device)
+        self.power_nets = [GaussianDeltaNet(hidden_dim, POWER_DIM, 1).to(self.device)
                            for _ in range(self.num_models)]
         self.weather_optimizers = [torch.optim.Adam(m.parameters(), lr=lr)
                                    for m in self.weather_nets]
         self.power_optimizers = [torch.optim.Adam(m.parameters(), lr=lr)
                                  for m in self.power_nets]
-        self.weather_xmean = np.zeros(3, np.float32)
-        self.weather_xstd = np.ones(3, np.float32)
+        self.weather_xmean = np.zeros(WEATHER_DIM, np.float32)
+        self.weather_xstd = np.ones(WEATHER_DIM, np.float32)
         self.weather_ymean = np.zeros(2, np.float32)
         self.weather_ystd = np.ones(2, np.float32)
-        self.power_xmean = np.zeros(10, np.float32)
-        self.power_xstd = np.ones(10, np.float32)
+        self.power_xmean = np.zeros(POWER_DIM, np.float32)
+        self.power_xstd = np.ones(POWER_DIM, np.float32)
         self.power_ymean = np.zeros(1, np.float32)
         self.power_ystd = np.ones(1, np.float32)
         self.weather_elites = list(range(self.num_elites))
@@ -81,13 +75,16 @@ class DynamicsEnsemble:
         states = np.asarray(replay.states[indices], np.float32)
         actions = np.asarray(replay.actions[indices], np.float32)
         nxt = np.asarray(replay.next_states[indices], np.float32)
-        if (states.ndim != 2 or states.shape[1] != 6
+        if (states.ndim != 2 or states.shape[1] != STATE_DIM
                 or actions.shape != (len(states), 2) or nxt.shape != states.shape):
-            raise ValueError('Expected 6D observation and 2D action transitions')
-        if np.any(states[:, 5] <= 0) or not all(
+            raise ValueError('Expected geometry10 observation and 2D action transitions')
+        if np.any(states[:, TAU] <= 0) or not all(
                 np.isfinite(arr).all() for arr in (states, actions, nxt)):
             raise ValueError('Non-finite or terminal-start training data')
-        xw = np.column_stack((states[:, 0], states[:, 1], states[:, 5])).astype(np.float32)
+        xw = weather_features(states)
+        check_batch(states); check_batch(nxt)
+        if np.any(np.abs(actions)>1.00001):
+            raise ValueError('Invalid model-fit actions')
         yw = (nxt[:, :2] - states[:, :2]).astype(np.float32)
         # Teacher-forced next weather is used only to fit the conditional power model.
         xp = np.concatenate((states, actions, nxt[:, :2]), axis=1).astype(np.float32)
@@ -155,10 +152,13 @@ class DynamicsEnsemble:
             m, log_s = nets[k](tx)
             mus.append(m.cpu().numpy() * ystd + ymean)
             sigmas.append(np.exp(log_s.cpu().numpy()) * ystd)
-        return np.stack(mus).astype(np.float32), np.stack(sigmas).astype(np.float32)
+        mus, sigmas = np.stack(mus).astype(np.float32), np.stack(sigmas).astype(np.float32)
+        if not np.isfinite(mus).all() or not np.isfinite(sigmas).all() or np.any(sigmas < 0):
+            raise FloatingPointError('Invalid ensemble distribution parameters')
+        return mus, sigmas
 
     def _weather_features(self, states):
-        return np.column_stack((states[:, 0], states[:, 1], states[:, 5])).astype(np.float32)
+        return weather_features(states)
 
     def _power_features(self, states, actions, next_weather):
         return np.concatenate((states, actions, next_weather), axis=1).astype(np.float32)
@@ -167,10 +167,10 @@ class DynamicsEnsemble:
     def _check(states, actions):
         states = np.asarray(states, dtype=np.float32)
         actions = np.asarray(actions, dtype=np.float32)
-        if (states.ndim != 2 or states.shape[1] != 6 or actions.shape != (len(states), 2)
+        if (states.ndim != 2 or states.shape[1] != STATE_DIM or actions.shape != (len(states), 2)
                 or not np.isfinite(states).all() or not np.isfinite(actions).all()
                 or np.any(np.abs(actions) > 1.00001)):
-            raise ValueError('Dynamics expects finite (N,6) states and bounded (N,2) actions')
+            raise ValueError('Dynamics expects finite geometry10 states and bounded (N,2) actions')
         return states, actions
 
     def fit(self, replay, *, holdout_fraction=0.2, max_samples=6000,
@@ -310,7 +310,7 @@ class DynamicsEnsemble:
 
     def state_dict(self):
         return {
-            'schema': DYNAMICS_SCHEMA, 'num_models': self.num_models,
+            'schema': DYNAMICS_SCHEMA, 'state_dim': STATE_DIM, 'num_models': self.num_models,
             'num_elites': self.num_elites, 'hidden_dim': self.hidden_dim, 'lr': self.lr,
             'weather_nets': [m.state_dict() for m in self.weather_nets],
             'power_nets': [m.state_dict() for m in self.power_nets],
@@ -326,7 +326,7 @@ class DynamicsEnsemble:
         }
 
     def load_state_dict(self, data):
-        if data.get('schema') != DYNAMICS_SCHEMA:
+        if data.get('schema') != DYNAMICS_SCHEMA or data.get('state_dim') != STATE_DIM:
             raise ValueError('Dynamics architecture changed: old MBPO model checkpoints cannot be resumed')
         if (data['num_models'],data['num_elites'],data['hidden_dim'],data['lr']) != (
                 self.num_models,self.num_elites,self.hidden_dim,self.lr):
@@ -343,7 +343,10 @@ class DynamicsEnsemble:
                 opt.load_state_dict(saved)
         for field in ('weather_xmean','weather_xstd','weather_ymean','weather_ystd',
                       'power_xmean','power_xstd','power_ymean','power_ystd'):
-            setattr(self, field, np.asarray(data[field],dtype=np.float32))
+            saved = np.asarray(data[field],dtype=np.float32)
+            if saved.shape != getattr(self,field).shape or not np.isfinite(saved).all() or (field.endswith('std') and np.any(saved <= 0)):
+                raise ValueError(f'Invalid saved dynamics scaler: {field}')
+            setattr(self, field, saved)
         self.weather_elites = list(map(int,data['weather_elites']))
         self.power_elites = list(map(int,data['power_elites']))
         if (not self.weather_elites or not self.power_elites
@@ -359,6 +362,7 @@ class StructuredFakeEnv:
     """Reconstruct exact finite-horizon pose transitions and net-energy reward."""
     def __init__(self, ensemble, reference_env):
         self.ensemble = ensemble
+        self.solar_context = SolarContext(reference_env)
         e = reference_env.unwrapped
         self.max_delta_tilt = float(e.max_delta_tilt)
         self.max_delta_azimuth = float(e.max_delta_azimuth)
@@ -379,34 +383,33 @@ class StructuredFakeEnv:
                 or not math.isfinite(self.interval_hours) or self.interval_hours <= 0):
             raise ValueError('Invalid fake environment parameters')
 
-    def step(self, states, actions, max_std=None, stochastic=True):
+    def step(self, states, actions, max_std=None, stochastic=True, *, scenario_ids=None):
         from mbpo.env.pvlib_physics import actuator_movement_cost_kwh
         states = np.asarray(states,dtype=np.float32)
         actions = np.asarray(actions,dtype=np.float32)
-        if (states.ndim!=2 or states.shape[1]!=6 or actions.shape!=(len(states),2)
-                or not np.isfinite(states).all() or not np.isfinite(actions).all()
-                or np.any(np.abs(actions)>1.00001)):
-            raise ValueError('Invalid fake environment state/action batch')
-        tol=1e-5
-        if (np.any(states[:,:4]<-tol) or np.any(states[:,:4]>1.+tol)
-                or np.any(states[:,4]<-1.-tol) or np.any(states[:,4]>1.+tol)
-                or np.any(states[:,5]<=0.) or np.any(states[:,5]>1.+tol)):
-            raise ValueError('State is outside compact bounds or is terminal')
+        states = check_batch(states)
+        if states.ndim != 2 or not len(states):
+            raise ValueError('Expected nonempty geometry10 rollout batch')
+        if actions.shape != (len(states),2) or not np.isfinite(actions).all() or np.any(np.abs(actions)>1.00001):
+            raise ValueError('Invalid synthetic action batch')
+        actions = np.clip(actions, -1., 1.)
+        # Exact ephemeris from scenario + remaining time; no weather leakage.
+        next_solar = self.solar_context.next(states, scenario_ids)
+        new_tilt, new_az, tau, executed_tilt, executed_az, done = pose_transition(
+            states, actions, self.max_delta_tilt, self.max_delta_azimuth, self.horizon)
         delta,uncertainty = self.ensemble.predict_delta(states,actions,stochastic=stochastic)
+        delta = np.asarray(delta,dtype=np.float32)
+        uncertainty = np.asarray(uncertainty,dtype=np.float32)
+        if delta.shape != (len(states),3) or uncertainty.shape != (len(states),):
+            raise ValueError('Invalid ensemble prediction dimensions')
+        # Reject raw NaN/Inf before clipping can hide them.
+        finite_prediction = np.isfinite(delta).all(axis=1) & np.isfinite(uncertainty) & (uncertainty >= 0)
         nxt=np.empty_like(states)
         nxt[:,:3] = np.clip(states[:,:3]+delta,0.,1.)
-        old_tilt = states[:,3]*90.
-        req_tilt = actions[:,0]*self.max_delta_tilt
-        new_tilt = np.clip(old_tilt+req_tilt,0.,90.)
-        executed_tilt = new_tilt-old_tilt
-        old_az = (states[:,4]+1.)*180.
-        req_az = actions[:,1]*self.max_delta_azimuth
-        new_az = np.mod(old_az+req_az,360.)
-        executed_az = (new_az-old_az+180.)%360.-180.
-        nxt[:,3] = new_tilt/90.
-        nxt[:,4] = new_az/180.-1.
-        nxt[:,5] = np.maximum(states[:,5]-1./self.horizon,0.)
-        done=nxt[:,5]<=1e-7
+        nxt[:,3] = new_tilt
+        nxt[:,PANEL_AZ] = new_az
+        nxt[:,SOLAR] = next_solar
+        nxt[:,TAU] = tau
         gross = nxt[:,2]*self.power_norm*self.interval_hours/1000.
         if self.movement_penalty<=0:
             movement=np.zeros(len(states),dtype=np.float32)
@@ -422,7 +425,8 @@ class StructuredFakeEnv:
             movement=self.movement_penalty*(np.abs(executed_tilt)/self.max_delta_tilt
                          +np.abs(executed_az)/self.max_delta_azimuth)
         reward=(gross-movement).astype(np.float32)
-        mask=np.isfinite(nxt).all(axis=1)&np.isfinite(reward)&np.isfinite(uncertainty)
+        mask=finite_prediction & np.isfinite(nxt).all(axis=1)&np.isfinite(reward)
+        if np.any(mask): check_batch(nxt[mask])
         if max_std is not None:
             if not math.isfinite(float(max_std)) or float(max_std)<=0:
                 raise ValueError('Invalid epistemic cutoff')

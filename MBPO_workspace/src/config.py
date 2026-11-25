@@ -1,12 +1,12 @@
 # POSTPROCESSING_TRAJECTORY_UNCERTAINTY_V1
 # PVWATT_DEV_REPAIR_V3
-"""Ray-free MBPO configuration; shared SAC MDP and optimizer from conf_compact."""
+"""Ray-free MBPO configuration; shared SAC MDP and optimizer from conf_geometry10."""
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 import json
 import math
 from SAC_workspace.src.config.config import (
-    load_config as load_sac_config, _SKELETON, _BASE, _COMPACT,
+    load_config as load_sac_config, _SKELETON, _BASE, _REFERENCE,
     _literal_mapping_fields, _updated_dict, _call_kwargs,
 )
 
@@ -67,7 +67,7 @@ class MBPOConfig:
 
     def to_dict(self):
         return {'sac':self.sac.to_dict(),'model':asdict(self.model),
-                'schema':'mbpo-torch-separated-exogenous-v3'}
+                'schema':'mbpo-torch-separated-exogenous-geometry10-v4'}
 
 
 def load_config(require_data=True,model_overrides=None,*,power_model='pvwatts_sapm',
@@ -82,7 +82,7 @@ def load_config(require_data=True,model_overrides=None,*,power_model='pvwatts_sa
           'max_model_rollout_length','model_train_freq','rollout_batch_size','model_retain_epochs'}
     orig=_literal_mapping_fields(_SKELETON,'params',keys)
     orig.update({k:v for k,v in _updated_dict(_BASE,'default_nsrdb_algo_kwargs').items() if k in keys})
-    orig.update({k:v for k,v in _call_kwargs(_COMPACT,'build_nsrdb_params','algo_kwargs').items() if k in keys})
+    orig.update({k:v for k,v in _call_kwargs(_REFERENCE,'build_nsrdb_params','algo_kwargs').items() if k in keys})
     mandatory={'real_ratio','num_networks','num_elites','hidden_dim',
                'max_model_rollout_length','model_train_freq','rollout_batch_size','model_retain_epochs'}
     missing=mandatory-set(orig)

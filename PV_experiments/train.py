@@ -4,6 +4,7 @@ Example: python -m PV_experiments.train --name mc_5pct --seeds 0:4 --epochs 2000
 Subsequently: python -m PV_experiments.train --name mc_5pct
 """
 from __future__ import annotations
+from mbpo.geometry10 import MODE, STATE_DIM
 import argparse,sys
 from pathlib import Path
 from .core import (PROJECT_ROOT,base_path,initialize_experiment,load_experiment,
@@ -33,7 +34,7 @@ def run(args,root=PROJECT_ROOT):
         if audit.exists():
             try:
                 data=read_json(audit)
-                verified=data.get('status')=='passed' and data.get('fixed_draw_replay') is True
+                verified=(data.get('status')=='passed' and data.get('fixed_draw_replay') is True and data.get('observation_mode')==MODE and data.get('state_dim')==STATE_DIM)
             except (ValueError,TypeError):verified=False
         if args.skip_verification and not verified:
             raise RuntimeError('--skip-verification requires a successful verification file generated for this exact managed experiment')

@@ -47,7 +47,7 @@ from .nsrdb_weather import (
 logger = logging.getLogger(__name__)
 
 # Observation layouts (must stay in sync with mbpo/static/pv_tracking.py).
-OBSERVATION_MODES = ('legacy', 'physical', 'compact')
+OBSERVATION_MODES = ('legacy', 'physical', 'compact', 'geometry10')
 WEATHER_SOURCES = ('clearsky', 'historical', 'nsrdb_multiyear')
 WEATHER_SCENARIO_MODES = ('pvgis_tmy', 'nsrdb_multiyear', 'clearsky')
 
@@ -275,6 +275,11 @@ class PVTrackingEnv(gym.Env):
                   if observation_mode == 'physical'
                   else LEGACY_OBS_LABELS)
         )
+        if observation_mode == 'geometry10':
+            from mbpo.geometry10 import FEATURE_NAMES
+            if self.observation_noise_std != 0.0:
+                raise ValueError('Geometry10 requires unperturbed orientation and solar geometry; use weather uncertainty instead')
+            self.obs_feature_names = FEATURE_NAMES
         self.fixed_eval_dates = None
         self.excluded_dates = None
         self._fixed_eval_date_index = 0
@@ -593,6 +598,9 @@ class PVTrackingEnv(gym.Env):
 
     def _observation_bounds(self):
         """Return observation bounds based on observation_mode."""
+        if self.observation_mode == 'geometry10':
+            from mbpo.geometry10 import LOW, HIGH
+            return LOW.copy(), HIGH.copy()
         if self.observation_mode == 'compact':
             # Compact 6-component observation bounds
             # [DNI_norm, DHI_norm, power_norm, panel_tilt_norm, panel_azimuth_norm, tau]
@@ -745,15 +753,19 @@ class PVTrackingEnv(gym.Env):
         Compact state space (6 components):
         1. DNI_norm: direct normal irradiance normalized to [0,1] (DNI/2000)
         2. DHI_norm: diffuse horizontal irradiance normalized to [0,1] (DHI/2000)
-        3. power_norm: current PV power normalized [0,1] (P/(2000*A*eta))
+        3. power_norm: current PV power normalized [0,1] (P/2000)
         4. panel_tilt_norm: panel tilt normalized to [0,1] (beta/90)
         5. panel_azimuth_norm: panel azimuth normalized to [-1,1] ((gamma%360)/180 - 1)
         6. tau: remaining time fraction [0,1] ((H-t)/H)
         
-        This 6D state captures all information needed for optimal tracking
-        without explicit solar position - the agent learns from irradiance
-        and power feedback directly.
+        The compact state omits explicit solar geometry and is partially observable.
+        Geometry10 retains measured power and adds known solar geometry.
         """
+        if self.observation_mode == 'geometry10':
+            from mbpo.geometry10 import build
+            tau = (self.num_action_steps-self.step_index)/float(self.num_action_steps)
+            return build(weather['dni'], weather['dhi'], power, self.tilt, self.azimuth,
+                         solar_zenith, solar_azimuth, tau)
         if self.observation_mode == 'compact':
             return self._build_compact_observation(solar_zenith, solar_azimuth, weather, power)
         elif self.observation_mode == 'physical':
@@ -774,7 +786,7 @@ class PVTrackingEnv(gym.Env):
         obs = np.array([
             dni_norm,      # 0. DNI/2000
             dhi_norm,      # 1. DHI/2000
-            power_norm,    # 2. P/(2000*A*eta)
+            power_norm,    # 2. P/2000
             tilt_norm,     # 3. beta/90
             azimuth_norm,  # 4. (gamma%360)/180 - 1
             tau,           # 5. (H-t)/H

@@ -5,6 +5,7 @@ Normalized actions stay [-1,1]^2. Degrees and rewards are computed by the
 original environment, not approximated or transformed inside this adapter.
 """
 from __future__ import annotations
+from mbpo.geometry10 import MODE, STATE_DIM, TAU, FEATURE_NAMES, LOW, HIGH, POWER_NORM
 import numpy as np
 import pandas as pd
 from importlib import metadata
@@ -14,8 +15,8 @@ from SAC_workspace.src.representation.representation import encode
 class SACEnvironment:
     def __init__(self, env_kwargs: dict):
         from mbpo.env.stage_a_pv_tracking import StageAPVTrackingEnv
-        if env_kwargs.get('observation_mode') != 'compact':
-            raise ValueError('Must use compact mode for reference parity')
+        if env_kwargs.get('observation_mode') != MODE:
+            raise ValueError('Must use geometry10 mode in this workspace')
         self.env = StageAPVTrackingEnv(**dict(env_kwargs))
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
@@ -47,10 +48,14 @@ class SACEnvironment:
                 '{} timestamps, {} transitions.'.format(
                     expected_periods, expected_horizon, expected_start,
                     expected_freq, actual_periods, timestamp_count, self.horizon))
-        if self.observation_space.shape != (6,):
+        if self.observation_space.shape != (STATE_DIM,):
             raise ValueError(
-                'Resolved MDP must use the six-feature compact representation; '
+                'Resolved MDP must use the geometry10 representation; '
                 'got observation shape {}'.format(self.observation_space.shape))
+        if (tuple(self.env.obs_feature_names) != FEATURE_NAMES or
+                not np.array_equal(self.observation_space.low, LOW) or
+                not np.array_equal(self.observation_space.high, HIGH)):
+            raise ValueError('Geometry10 feature order or observation bounds mismatch')
         if self.action_space.shape != (2,):
             raise ValueError(
                 'Resolved MDP must use the two-dimensional action space; '
@@ -90,6 +95,8 @@ class SACEnvironment:
             'slew_rate_tilt_deg_s': value('slew_rate_tilt_deg_s'),
             'slew_rate_azimuth_deg_s': value('slew_rate_azimuth_deg_s'),
             'observation_mode': value('observation_mode'),
+            'observation_features': list(FEATURE_NAMES),
+            'observation_contract_sha256': __import__('hashlib').sha256(__import__('pathlib').Path(__import__('mbpo.geometry10',fromlist=['build']).__file__).read_bytes()).hexdigest(),
             'horizon': self.horizon,
         }
         if source.weather_source == 'nsrdb_multiyear':
@@ -130,7 +137,7 @@ class SACEnvironment:
         self.steps = 0
         self.env.set_weather_realization(realization_id)
         observation = encode(self.env.reset(scenario_id=scenario_id))
-        if not np.isclose(observation[5], 1., atol=1e-6):
+        if not np.isclose(observation[TAU], 1., atol=1e-6):
             raise RuntimeError('Finite-horizon observation must begin with tau=1')
         if str(self.env.location.tz).upper() != 'UTC':
             raise RuntimeError('Reference pvlib/NSRDB experiment must use UTC')
@@ -148,8 +155,8 @@ class SACEnvironment:
             raise RuntimeError('Episode horizon or terminal signal disagrees with reference')
         observation = encode(obs)
         tau_expected = (self.horizon - self.steps) / self.horizon
-        if not np.isclose(observation[5], tau_expected, atol=1e-6):
-            raise RuntimeError('PVTrackingEnv compact tau feature does not match step count')
+        if not np.isclose(observation[TAU], tau_expected, atol=1e-6):
+            raise RuntimeError('PVTrackingEnv geometry10 tau feature does not match step count')
         if not np.isclose(reward, float(info['energy_kwh']) - float(info['movement_cost']), atol=1e-9):
             raise RuntimeError('Step reward differs from the reference net-energy definition')
         if getattr(self.env, 'power_model', 'legacy') == 'pvwatts_sapm':
@@ -163,7 +170,7 @@ class SACEnvironment:
             if info.get('cell_temperature_c') is None or info.get('wind_speed_10m_ms') is None:
                 raise RuntimeError('Missing PVWatts cell temperature or wind metadata')
             # Normalized power is the *same* third feature in both physics modes.
-            if not np.isclose(observation[2], np.clip(float(info['power_dc_w']) / 2000., 0, 1), atol=1e-6):
+            if not np.isclose(observation[2], float(info['power_dc_w']) / POWER_NORM, atol=1e-6):
                 raise RuntimeError('PVWatts power observation is inconsistent')
         expected_time = self.env.times[self.steps]
         actual_time = pd.Timestamp(info['timestamp_utc_iso'])

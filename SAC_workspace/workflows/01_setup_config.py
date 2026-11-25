@@ -21,7 +21,7 @@ def main():
     c = load_config(require_data=True, **kwargs)
     dest = ROOT / 'SAC_workspace' / 'runs' / 'reference_config.json'
     write_snapshot(c, dest)
-    print(f'VALIDATED: compact 6D, NSRDB manifest and reference files. Snapshot: {dest}')
+    print(f'VALIDATED: geometry10, NSRDB manifest and reference files. Snapshot: {dest}')
     horizon = int(c.train_env['periods']) - 1
     print(f'{horizon} transitions | eval every {c.protocol["evaluation_interval_episodes"]} episodes | gamma={c.algo["gamma"]} | reward_scale={c.algo["reward_scale"]}')
     protocol = build_scenario_protocol(c.manifest, c.protocol)

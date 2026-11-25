@@ -19,8 +19,7 @@ from typing import Any
 import numpy as np
 
 PROTOCOL_VERSION = "pv_nsrdb_month_stratified_v1"
-STATE_DIM = 6
-ACTION_DIM = 2
+from mbpo.geometry10 import MODE, STATE_DIM, ACTION_DIM
 
 
 def canonical_json_sha256(value: Any) -> str:
@@ -250,6 +249,7 @@ def prepare_run_metadata(
         "scenario_protocol_sha256": protocol["protocol_sha256"],
         "scenario_split_file": "scenario_split.json",
         "state_dim": STATE_DIM,
+        "observation_mode": MODE,
         "action_dim": ACTION_DIM,
         "horizon": int(horizon),
         "power_model": resolved_mdp.get("power_model", "legacy"),
@@ -331,7 +331,7 @@ class PeriodicEvaluator:
         self.resolved_mdp_sha256 = canonical_json_sha256(resolved_mdp)
         self.validation_ids = list(protocol["validation_ids"])
         if tuple(getattr(self.env.observation_space, "shape", ())) != (STATE_DIM,):
-            raise ValueError(f"Periodic evaluator requires {STATE_DIM} compact observation features")
+            raise ValueError(f"Periodic evaluator requires {STATE_DIM} geometry-aware observation features")
         if tuple(getattr(self.env.action_space, "shape", ())) != (ACTION_DIM,):
             raise ValueError(f"Periodic evaluator requires {ACTION_DIM} continuous actions")
         if bool(getattr(self.env.unwrapped, "randomize_initial_orientation", False)):
@@ -502,7 +502,7 @@ class PeriodicEvaluator:
             "config_sha256": self.config_sha256,
             "scenario_protocol_sha256": self.protocol["protocol_sha256"],
             "resolved_mdp_sha256": self.resolved_mdp_sha256,
-            "state_dim": STATE_DIM, "action_dim": ACTION_DIM,
+            "state_dim": STATE_DIM, "action_dim": ACTION_DIM, "observation_mode": MODE,
             "policy_action": "tanh(actor_mean); deterministic evaluation",
         }
         state = {k: v.detach().cpu().clone() for k, v in policy.actor.state_dict().items()}

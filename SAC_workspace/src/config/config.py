@@ -14,7 +14,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[3]
 _BASE = ROOT / 'examples/config/pv_tracking/_nsrdb_base.py'
-_COMPACT = ROOT / 'examples/config/pv_tracking/conf_compact.py'
+_REFERENCE = ROOT / 'examples/config/pv_tracking/conf_geometry10.py'
+_COMPACT = ROOT / 'examples/config/pv_tracking/conf_compact.py'  # legacy import compatibility
 _SKELETON = ROOT / 'examples/config/pv_tracking/0.py'
 
 
@@ -162,15 +163,15 @@ def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
                 wind_reference_height_m=2.0, gamma_pdc=-0.004,
                 sapm_mount='open_rack_glass_polymer',
                 wind_powerlaw_exponent=0.14, weather_uncertainty=None) -> SACConfig:
-    """Materialize the effective *compact MBPO task* for an independent SAC run.
+    """Materialize the effective *geometry-aware MBPO task* for an independent SAC run.
 
     Only optimizer and replay implementation are SAC-specific; environmental
     and finite-horizon task settings are inherited from the reference sources.
     """
     nsrdb = _named_function_dict(_BASE, 'nsrdb_environment_kwargs', 'kw')
-    nsrdb.update(_call_kwargs(_COMPACT, 'build_nsrdb_params', 'train_env_kwargs'))
+    nsrdb.update(_call_kwargs(_REFERENCE, 'build_nsrdb_params', 'train_env_kwargs'))
     eval_env = _reference_eval_defaults(_BASE)
-    eval_env.update(_call_kwargs(_COMPACT, 'build_nsrdb_params', 'eval_env_kwargs'))
+    eval_env.update(_call_kwargs(_REFERENCE, 'build_nsrdb_params', 'eval_env_kwargs'))
     if power_model not in ('legacy', 'pvwatts_sapm'):
         raise ValueError(f'Unknown power_model {power_model!r}')
     if power_model == 'pvwatts_sapm':
@@ -199,16 +200,16 @@ def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
         eval_env['weather_uncertainty'] = dict(spec)
     skeleton = _literal_mapping_fields(_SKELETON, 'params', {'discount', 'tau', 'reward_scale', 'n_train_repeat', 'n_epochs', 'n_initial_exploration_steps', 'min_alpha'})
     base_algo = _updated_dict(_BASE, 'default_nsrdb_algo_kwargs', 'kw')
-    # The default NSRDB algorithm block is a literal dict, and conf_compact overrides it.
+    # The default NSRDB algorithm block is a literal dict, and conf_geometry10 overrides it.
     skeleton.update({k: v for k, v in base_algo.items() if k in {'discount', 'tau', 'reward_scale', 'n_train_repeat', 'n_epochs', 'n_initial_exploration_steps', 'min_alpha'}})
-    skeleton.update(_call_kwargs(_COMPACT, 'build_nsrdb_params', 'algo_kwargs'))
-    policy = _call_kwargs(_COMPACT, 'build_nsrdb_params', 'policy_params_kwargs')
-    critic = _call_kwargs(_COMPACT, 'build_nsrdb_params', 'q_params_kwargs')
-    replay = _call_kwargs(_COMPACT, 'build_nsrdb_params', 'replay_pool_params_kwargs')
+    skeleton.update(_call_kwargs(_REFERENCE, 'build_nsrdb_params', 'algo_kwargs'))
+    policy = _call_kwargs(_REFERENCE, 'build_nsrdb_params', 'policy_params_kwargs')
+    critic = _call_kwargs(_REFERENCE, 'build_nsrdb_params', 'q_params_kwargs')
+    replay = _call_kwargs(_REFERENCE, 'build_nsrdb_params', 'replay_pool_params_kwargs')
     if tuple(policy.get('hidden_layer_sizes', ())) != tuple(critic.get('hidden_layer_sizes', ())) or not policy:
         raise ValueError('Reference actor/critic hidden layer dimensions missing or inconsistent')
-    if nsrdb.get('observation_mode') != 'compact' or eval_env.get('observation_mode') != 'compact':
-        raise ValueError('SAC requires the same compact observation mode as MBPO reference')
+    if nsrdb.get('observation_mode') != 'geometry10' or eval_env.get('observation_mode') != 'geometry10':
+        raise ValueError('SAC and MBPO must use the same geometry10 reference')
     # Shared physical actuator objective in both training and evaluation.
     for name, env in (('training',nsrdb),('evaluation',eval_env)):
         if (not np_isclose(env.get('movement_penalty'),1.0)
@@ -274,7 +275,7 @@ def load_config(require_data: bool = True, *, power_model='pvwatts_sapm',
             path = Path(row['_year_path'])
             if not path.is_file():
                 raise FileNotFoundError(f'NSRDB year data missing: {path}')
-    return SACConfig(nsrdb, eval_env, algo, manifest, (_BASE, _COMPACT, _SKELETON), protocol)
+    return SACConfig(nsrdb, eval_env, algo, manifest, (_BASE, _REFERENCE, _SKELETON), protocol)
 
 
 def np_isclose(actual, expected) -> bool:

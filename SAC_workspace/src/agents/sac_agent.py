@@ -6,6 +6,7 @@ Reference task: gamma=1, finite horizon validated from the shared environment co
 No BNN, model pool, fake environment, or imaginary rollouts.
 """
 from __future__ import annotations
+from mbpo.geometry10 import STATE_DIM, ACTION_DIM, check_batch
 import copy
 import math
 from typing import Sequence
@@ -27,7 +28,7 @@ def mlp(in_dim: int, out_dim: int, sizes: Sequence[int]) -> nn.Sequential:
 
 
 class SquashedGaussianActor(nn.Module):
-    def __init__(self, state_dim=6, action_dim=2, hidden_sizes=(64, 64)):
+    def __init__(self, state_dim=STATE_DIM, action_dim=ACTION_DIM, hidden_sizes=(64, 64)):
         super().__init__()
         self.net = mlp(state_dim, 2 * action_dim, hidden_sizes)
         self.action_dim = action_dim
@@ -46,7 +47,7 @@ class SquashedGaussianActor(nn.Module):
 
 
 class TwinCritic(nn.Module):
-    def __init__(self, state_dim=6, action_dim=2, hidden_sizes=(64, 64)):
+    def __init__(self, state_dim=STATE_DIM, action_dim=ACTION_DIM, hidden_sizes=(64, 64)):
         super().__init__()
         self.q1 = mlp(state_dim + action_dim, 1, hidden_sizes)
         self.q2 = mlp(state_dim + action_dim, 1, hidden_sizes)
@@ -57,13 +58,14 @@ class TwinCritic(nn.Module):
 
 
 class SACAgent:
-    def __init__(self, state_dim=6, action_dim=2, hidden_sizes=(64,64),
+    def __init__(self, state_dim=STATE_DIM, action_dim=ACTION_DIM, hidden_sizes=(64,64),
                  lr=3e-4, gamma=1., tau=.005, reward_scale=100.,
                  alpha_init=1., target_entropy=-2., min_alpha=0.001, device='cpu'):
-        if (state_dim, action_dim) != (6, 2):
-            raise ValueError('Reference contract expects state_dim=6, action_dim=2')
+        if (state_dim, action_dim) != (STATE_DIM, ACTION_DIM):
+            raise ValueError('Reference contract expects geometry10 state and 2 actions')
         if not 0. < tau <= 1. or not 0. <= gamma <= 1. or reward_scale <= 0. or alpha_init <= 0. or min_alpha <= 0.:
             raise ValueError('Invalid SAC hyperparameters')
+        self.state_dim = int(state_dim)
         self.device = torch.device(device)
         self.gamma, self.tau, self.reward_scale = float(gamma), float(tau), float(reward_scale)
         self.target_entropy = float(target_entropy)
@@ -104,7 +106,10 @@ class SACAgent:
 
     @torch.no_grad()
     def act(self, state, deterministic=False):
-        s = torch.as_tensor(np.asarray(state, dtype=np.float32), device=self.device).reshape(1,6)
+        state = check_batch(state)
+        if state.shape != (self.state_dim,):
+            raise ValueError('Expected a single geometry10 observation')
+        s = torch.as_tensor(state, device=self.device).reshape(1,self.state_dim)
         a, _ = self.actor(s, deterministic=deterministic, with_logprob=False)
         return np.clip(a.squeeze(0).cpu().numpy(), -1., 1.).astype(np.float32)
 
@@ -118,6 +123,11 @@ class SACAgent:
     def update(self, batch: dict) -> dict:
         batch = {k: torch.as_tensor(v, dtype=torch.float32, device=self.device) for k, v in batch.items()}
         s, a = batch['states'], batch['actions']
+        n = len(s)
+        if (s.shape != (n,self.state_dim) or batch['next_states'].shape != s.shape
+                or a.shape != (n,ACTION_DIM) or batch['rewards'].shape != (n,1)
+                or batch['dones'].shape != (n,1) or n == 0):
+            raise ValueError('Incompatible SAC batch dimensions')
         target = self.compute_target(batch)
         q1, q2 = self.critic(s, a)
         critic_loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
@@ -155,7 +165,7 @@ class SACAgent:
         return metrics
 
     def state_dict(self):
-        return {'actor': self.actor.state_dict(), 'critic': self.critic.state_dict(),
+        return {'state_dim': self.state_dim, 'actor': self.actor.state_dict(), 'critic': self.critic.state_dict(),
                 'critic_target': self.critic_target.state_dict(),
                 'actor_opt': self.actor_opt.state_dict(), 'critic_opt': self.critic_opt.state_dict(),
                 'alpha_opt': self.alpha_opt.state_dict(), 'log_alpha': self.log_alpha.detach().clone(),
@@ -164,6 +174,8 @@ class SACAgent:
                 'min_alpha': self.min_alpha}
 
     def load_state_dict(self, state):
+        if state.get('state_dim') != self.state_dim:
+            raise ValueError('Incompatible observation dimension in checkpoint')
         for k in ('gamma', 'tau', 'reward_scale', 'target_entropy', 'min_alpha'):
             if abs(float(state[k]) - getattr(self, k)) > 1e-10:
                 raise ValueError(f'Checkpoint {k} differs from current SAC configuration')

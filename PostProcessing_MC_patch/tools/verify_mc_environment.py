@@ -12,6 +12,7 @@ Requires the local 2018–2024 NSRDB files, pvlib, Gym, PyTorch dependencies
 and existing valid Stage-A environment. Never downloads or modifies sources.
 """
 from __future__ import annotations
+from mbpo.geometry10 import MODE, STATE_DIM
 import argparse,hashlib,json
 from pathlib import Path
 from datetime import timedelta
@@ -23,7 +24,8 @@ def one_episode(env,sid,rid):
     env.seed(819)
     obs=env.reset(scenario_id=sid,realization_id=rid)
     u=env.unwrapped
-    if env.horizon!=195 or obs.shape!=(6,) or env.action_space.shape!=(2,):
+    from mbpo.geometry10 import STATE_DIM, check_batch, SOLAR, solar_features
+    if env.horizon!=195 or obs.shape!=(STATE_DIM,) or env.action_space.shape!=(2,):
         raise AssertionError('Wrong observation/action dimensions or 195-step horizon')
     signature=str(u._weather_profile_sha256)
     if not signature or signature=='None':raise AssertionError('Missing weather fingerprint')
@@ -53,7 +55,9 @@ def one_episode(env,sid,rid):
             raise AssertionError('Albedo out of physical bounds')
         if any(float(info[x])<0 for x in ('dni_wm2','dhi_wm2','ghi_wm2','wind_speed_m_s')):
             raise AssertionError('Negative irradiance or wind after perturbation')
-        if not np.isfinite(obs).all():raise AssertionError('Nonfinite state')
+        check_batch(obs)
+        if not np.allclose(obs[SOLAR],solar_features(info['solar_zenith_deg'],info['solar_azimuth_deg']),atol=1e-6,rtol=0):
+            raise AssertionError('Observed solar geometry disagrees with physical timestamp')
         power.append(P);gross.append(E);cost.append(C);clock.append(actual);albedo.append(info['surface_albedo'])
     if len(clock)!=195 or str(clock[-1].date())==str(clock[0].date()):
         raise AssertionError('195-step midnight rollover was not observed')
@@ -138,7 +142,7 @@ def main(argv=None):
                           'nominal_input_count':len(raw),
                           'nominal_input_columns':list(raw.columns)}
     finally:baseline.close()
-    report={'status':'passed','source':'real historical TRAIN day plus hypothetical uncertainty realizations',
+    report={'status':'passed','observation_mode':MODE,'state_dim':STATE_DIM,'source':'real historical TRAIN day plus hypothetical uncertainty realizations',
         'unperturbed_baseline':baseline_profile,
         'scenario_id':sid,'fixed_draw_replay':True,'distinct_uncertainty_draws':True,
         'draw_zero':first,'draw_one':other,

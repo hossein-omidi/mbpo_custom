@@ -1,0 +1,63 @@
+"""Installer mechanics tests on disposable Git fixtures, not the PV checkout."""
+import importlib.util
+from pathlib import Path
+import subprocess
+import pytest
+
+spec=importlib.util.spec_from_file_location('geo_installer',Path(__file__).resolve().parents[1]/'install.py')
+installer=importlib.util.module_from_spec(spec);spec.loader.exec_module(installer)
+
+
+def git(repo,*args):
+    return subprocess.check_output(['git','-C',str(repo),*args]).decode()
+
+
+def fixture(tmp_path):
+    repo=tmp_path/'repo';repo.mkdir()
+    git(repo,'init','-q');git(repo,'config','user.name','fixture');git(repo,'config','user.email','fixture@example.invalid')
+    (repo/'a.py').write_bytes(b'x=1\nlast=2') # no final newline
+    (repo/'b.py').write_bytes(b'y=1\n')
+    git(repo,'add','a.py','b.py');git(repo,'commit','-qm','base')
+    return repo
+
+
+def test_dry_run_and_inplace_patch(tmp_path):
+    root=fixture(tmp_path)
+    plan={'a.py':b'x=2\nlast=2\n','b.py':b'y=5\n','nested/new.py':b'z=3\n'}
+    patch=installer.patch_bytes(root,plan)
+    installer.apply_patch(root,patch,dry_run=True)
+    assert (root/'a.py').read_bytes()==b'x=1\nlast=2'
+    assert not (root/'nested').exists()
+    installer.apply_patch(root,patch,dry_run=False)
+    assert all((root/k).read_bytes()==v for k,v in plan.items())
+    status=git(root,'status','--short','--untracked-files=all')
+    assert ' M a.py' in status and ' M b.py' in status and '?? nested/new.py' in status
+    assert not (tmp_path/'repo_geometry10').exists()
+    assert git(root,'log','-1','--format=%s').strip()=='base'
+
+
+def test_conflicting_hunk_refuses_all_writes(tmp_path):
+    root=fixture(tmp_path)
+    patch=installer.patch_bytes(root,{'a.py':b'x=2\nlast=2\n','b.py':b'y=5\n','new.py':b'z=3\n'})
+    (root/'b.py').write_bytes(b'y=99\n')
+    with pytest.raises(subprocess.CalledProcessError):installer.apply_patch(root,patch,dry_run=False)
+    assert (root/'a.py').read_bytes()==b'x=1\nlast=2'
+    assert (root/'b.py').read_bytes()==b'y=99\n'
+    assert not (root/'new.py').exists()
+
+
+def test_plan_rejects_dirty_tracked_files(tmp_path,monkeypatch):
+    root=fixture(tmp_path)
+    monkeypatch.setattr(installer,'BASE',git(root,'rev-parse','HEAD').strip())
+    monkeypatch.setattr(installer,'PINS',{'a.py':installer.blob_sha((root/'a.py').read_bytes())})
+    (root/'a.py').write_bytes(b'changed=1\n')
+    with pytest.raises(ValueError,match='Tracked local edits'):installer.make_plan(root)
+
+
+def test_plan_rejects_ignored_new_source(tmp_path,monkeypatch):
+    root=fixture(tmp_path)
+    (root/'.gitignore').write_text('mbpo/\n');git(root,'add','.gitignore');git(root,'commit','-qm','ignore')
+    monkeypatch.setattr(installer,'BASE',git(root,'rev-parse','HEAD').strip())
+    monkeypatch.setattr(installer,'PINS',{'a.py':installer.blob_sha((root/'a.py').read_bytes())})
+    monkeypatch.setattr(installer,'transform',lambda path,s:s+'\n')
+    with pytest.raises(ValueError,match='ignored'):installer.make_plan(root)

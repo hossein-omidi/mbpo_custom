@@ -5,6 +5,7 @@ performed exclusively through the existing project workflows. No backups,
 network access, Git commands, or implicit replacement of existing artifacts.
 """
 from __future__ import annotations
+from mbpo.geometry10 import MODE, STATE_DIM
 
 import hashlib
 import json
@@ -94,7 +95,7 @@ def load_experiment(name:str,root:Path=PROJECT_ROOT):
     path=config_path(name,root)
     if not path.is_file():raise FileNotFoundError(f'Experiment not initialized: {path}. Run PV_experiments.train first.')
     cfg=read_json(path)
-    if cfg.get('schema')!=SCHEMA or cfg.get('name')!=name:
+    if cfg.get('schema')!=SCHEMA or cfg.get('name')!=name or cfg.get('observation_mode')!=MODE or cfg.get('state_dim')!=STATE_DIM:
         raise ValueError('Invalid experiment configuration schema or name')
     if sorted(cfg.get('seeds',[]))!=cfg.get('seeds') or not cfg['seeds']:
         raise ValueError('Invalid experiment seed plan')
@@ -141,6 +142,7 @@ def initialize_experiment(name:str, *, seeds:list[int] | None=None, epochs:int |
     # schema check. Freeze the exact JSON data, never silently copy a newer file.
     data={
         'schema':SCHEMA,'name':name,'created_utc':utcnow(),
+        'observation_mode':MODE,'state_dim':STATE_DIM,
         'seeds':seeds,'epochs':epochs,'device':device or 'cpu',
         'model_epochs':model_epochs,'model_max_train_samples':model_max_train_samples,
         'uncertainty_sha256':sha256(canonical(spec)),
@@ -187,6 +189,8 @@ def inspect_training_run(cfg,algorithm,seed,root=PROJECT_ROOT):
     meta=read_json(p)
     if meta.get('seed')!=seed or meta.get('algorithm')!=algorithm or meta.get('run_schema')!=2:
         raise ValueError(f'Run metadata identity mismatch: {p}')
+    if meta.get('observation_mode')!=MODE or meta.get('state_dim')!=STATE_DIM:
+        raise ValueError(f'Run uses an incompatible observation contract: {d}. Use a fresh experiment name.')
     if meta.get('training_status')=='completed':
         if meta.get('final_epoch')!=cfg['epochs']:
             raise ValueError(f'Completed run has unexpected training budget: {d}')
@@ -202,12 +206,12 @@ def verify_pair(cfg,seed,root=PROJECT_ROOT):
     if sac_status!='completed' or mbpo_status!='completed':
         raise ValueError(f'Seed {seed}: complete SAC and MBPO runs required (SAC={sac_status}; MBPO={mbpo_status})')
     shared=('scenario_protocol_sha256','resolved_mdp_sha256','shared_sac_config_sha256',
-            'validation_scenario_ids','test_scenario_ids','horizon','state_dim','action_dim',
+            'validation_scenario_ids','test_scenario_ids','horizon','state_dim','action_dim','observation_mode',
             'power_model','movement_penalty','movement_cost_mode','energy_objective')
     for k in shared:
         if sac.get(k)!=mbpo.get(k):raise ValueError(f'Seed {seed}: SAC and MBPO differ in {k}')
-    if sac.get('horizon')!=195 or sac.get('state_dim')!=6 or sac.get('action_dim')!=2:
-        raise ValueError('Training metadata incompatible with inspected 195-step, 6-state, 2-action simulator')
+    if sac.get('horizon')!=195 or sac.get('state_dim')!=STATE_DIM or sac.get('observation_mode')!=MODE or sac.get('action_dim')!=2:
+        raise ValueError('Training metadata incompatible with inspected 195-step geometry10, 2-action simulator')
     sp=read_json(run_path(cfg,'sac',seed,root)/'scenario_split.json')
     mp=read_json(run_path(cfg,'mbpo',seed,root)/'scenario_split.json')
     if sp!=mp or sp.get('protocol_sha256')!=sac.get('scenario_protocol_sha256'):

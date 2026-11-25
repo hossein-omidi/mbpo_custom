@@ -46,16 +46,20 @@ def observation_mode_from_obs(obs):
         return 'legacy'
     if dim == PHYSICAL_OBS_DIM:
         return 'physical'
+    if dim == 10:
+        return 'geometry10'
     if dim == COMPACT_OBS_DIM:
         return 'compact'
     raise ValueError(
-        'Unsupported PV observation dimension {} (expected {} legacy, {} physical, or {} compact).'.format(
+        'Unsupported PV observation dimension {} (expected {} legacy, {} physical, or {} compact, or 10 geometry10).'.format(
             dim, LEGACY_OBS_DIM, PHYSICAL_OBS_DIM, COMPACT_OBS_DIM))
 
 def cyclic_slices_for_obs(obs):
     mode = observation_mode_from_obs(obs)
     if mode == 'physical':
         return PHYSICAL_CYCLIC_SLICES
+    if mode == 'geometry10':
+        return ((4,6),(7,9))
     if mode == 'compact':
         return COMPACT_CYCLIC_SLICES
     return LEGACY_CYCLIC_SLICES
@@ -100,12 +104,8 @@ class StaticFns:
             return np.arctan2(obs[:, 11], obs[:, 12])
         if mode == 'physical':
             raise ValueError("Physical observation mode has no time angle")
-        if mode == 'compact':
-            # Compact 6D: tau at index 5 (0-indexed), compute unwrapped time.
-            if obs.ndim == 1:
-                tau = obs[5]
-            else:
-                tau = obs[:, 5]
+        if mode in ('compact','geometry10'):
+            tau = obs[..., 9 if mode == 'geometry10' else 5]
             H = DEFAULT_EPISODE_STEPS
             current_step = H * (1.0 - tau)
             time_of_day = DEFAULT_START_HOUR + current_step * DEFAULT_STEP_HOURS
@@ -138,6 +138,8 @@ class StaticFns:
         if single:
             obs = obs.reshape(1, -1)
 
+        if observation_mode_from_obs(obs) == 'geometry10':
+            return StaticFns.time_of_day_from_obs(obs)[0] if single else StaticFns.time_of_day_from_obs(obs)
         zenith = obs[:, 0] * 180.0
         azimuth = np.rad2deg(np.arctan2(obs[:, 1], obs[:, 2])) % 360.0
 

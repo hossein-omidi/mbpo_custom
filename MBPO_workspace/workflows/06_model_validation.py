@@ -6,6 +6,7 @@ replay the same policy prefix to reconstruct each observed state, then compare
 several alternative actions against the real next transition.
 """
 from __future__ import annotations
+from mbpo.geometry10 import TAU, PANEL_AZ, SOLAR, angular_rmse_deg
 
 import argparse
 import csv
@@ -241,7 +242,11 @@ def run_validation(args):
             states, actions, next_states, rewards = _run_policy_trajectory(
                 env, agent, sid, realization_id=args.realization_id)
             pred_next, pred_rewards, _done, disagreement, _mask = fake_env.step(
-                states, actions, max_std=None, stochastic=False)
+                states, actions, max_std=None, stochastic=False, scenario_ids=[sid]*len(states))
+            if not np.all(_mask):
+                raise FloatingPointError('Rejected synthetic prediction in on-policy validation')
+            if not np.array_equal(_done, next_states[:, TAU] <= 1e-7):
+                raise RuntimeError('Synthetic and physical terminal signals differ')
             mean_delta, _aleatoric, _epistemic, total_std, _score = ensemble.predict_distribution(
                 states, actions)
             actual_delta = next_states[:, :3] - states[:, :3]
@@ -268,7 +273,9 @@ def run_validation(args):
                             "counterfactual state reconstruction is not exact")
                     actual_nxt, actual_reward, actual_done, _info = env.step(candidate)
                     pred_nxt, pred_reward, pred_done, unc, accepted = fake_env.step(
-                        replay_obs[None, :], candidate[None, :], max_std=None, stochastic=False)
+                        replay_obs[None, :], candidate[None, :], max_std=None, stochastic=False, scenario_ids=[sid])
+                    if not bool(accepted[0]) or bool(pred_done[0]) != bool(actual_done):
+                        raise RuntimeError('Invalid synthetic counterfactual or terminal mismatch')
                     pnext = pred_nxt[0]
                     counterfactual_rows.append({
                         "scenario_id": sid, "step": int(t), "action_type": action_name,
@@ -308,8 +315,10 @@ def run_validation(args):
         }
         external_metrics["known_kinematics"] = {
             "tilt_rmse_norm": _rmse(pred_next[:, 3] - next_states[:, 3]),
-            "azimuth_rmse_norm": _rmse(pred_next[:, 4] - next_states[:, 4]),
-            "tau_rmse": _rmse(pred_next[:, 5] - next_states[:, 5]),
+            "azimuth_rmse_norm": angular_rmse_deg(pred_next[:,PANEL_AZ], next_states[:,PANEL_AZ])/180.,
+            "azimuth_rmse_deg": angular_rmse_deg(pred_next[:,PANEL_AZ], next_states[:,PANEL_AZ]),
+            "solar_geometry_rmse": _rmse(pred_next[:,SOLAR]-next_states[:,SOLAR]),
+            "tau_rmse": _rmse(pred_next[:, TAU] - next_states[:, TAU]),
         }
         external_metrics["ensemble_disagreement"] = {
             "mean_normalized_epistemic_std": float(np.mean(disagreement)),
@@ -357,7 +366,7 @@ def run_validation(args):
                 "Internal holdout metrics use whole NSRDB days reserved by ScenarioReplayBuffer and never used for ensemble fitting.",
                 "External on-policy metrics use the separate policy-validation scenario partition.",
                 "Counterfactual tests replay the same policy prefix under an identical fixed weather realization, then execute alternative actions in the real simulator.",
-                "The model predicts normalized DNI, DHI, and PV-power deltas; orientation and remaining horizon are reconstructed by the structured fake environment.",
+                "The model predicts normalized DNI, DHI, and PV-power deltas; orientation, solar ephemeris and remaining horizon are reconstructed by the structured fake environment.",
                 "Predictive interval coverage uses the ensemble Gaussian-mixture moment-matched standard deviation; it is a diagnostic, not a guarantee of calibrated uncertainty.",
                 "This validates one-step prediction and action-conditioned reward reconstruction, not long-horizon free-running model accuracy.",
             ],

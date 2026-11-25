@@ -7,6 +7,7 @@ upon first encounter and saved in the replay checkpoint. This is an INTERNAL
 model-validation split, not the independent final policy test set.
 """
 from __future__ import annotations
+from mbpo.geometry10 import STATE_DIM, TAU
 
 import hashlib
 import numpy as np
@@ -88,17 +89,22 @@ class ScenarioReplayBuffer(ReplayBuffer):
             raise RuntimeError('Model validation leakage: same scenario in train/holdout')
         return train,holdout
 
-    def rollout_states(self,n,seed=None):
+    def rollout_states(self,n,seed=None,*,with_scenarios=False):
         # No holdout-day state is ever used to generate synthetic policy training.
-        valid=np.flatnonzero((self.states[:self.count,5]>1e-7)
+        valid=np.flatnonzero((self.states[:self.count,TAU]>1e-7)
                                  &(self.dones[:self.count,0]<.5))
         valid=valid[np.asarray([
             self._validation_roles[self.scenario_names[int(self.scenario_ids[i])]] == 'train'
             for i in valid],dtype=bool)]
-        if not len(valid):return np.empty((0,6),dtype=np.float32)
+        if not len(valid):
+            empty=np.empty((0,STATE_DIM),dtype=np.float32)
+            return (empty, []) if with_scenarios else empty
         rng=self.rng if seed is None else np.random.default_rng(seed)
         indices=rng.choice(valid,size=int(n),replace=len(valid)<int(n))
-        return self.states[indices].copy()
+        states=self.states[indices].copy()
+        if with_scenarios:
+            return states, [self.scenario_names[int(self.scenario_ids[i])] for i in indices]
+        return states
 
     def state_dict(self):
         state=super().state_dict()

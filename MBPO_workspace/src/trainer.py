@@ -5,6 +5,7 @@ Real interactions are chronological; model samples are generated separately and
 never inserted in the real replay or used as ground truth for ensemble fitting.
 """
 from __future__ import annotations
+from mbpo.geometry10 import TAU
 import csv
 import json
 import os
@@ -186,7 +187,7 @@ class MBPOTrainer:
             self.last_model_step = self.env_steps
             return 0, 0, float('nan')
 
-        states = self.real_pool.rollout_states(m.rollout_batch_size)
+        states, scenario_ids = self.real_pool.rollout_states(m.rollout_batch_size, with_scenarios=True)
         if not len(states):
             self.latest_model_metrics.update({
                 'model_skipped': 'No nonterminal real states available for rollout',
@@ -200,7 +201,7 @@ class MBPOTrainer:
             actions, _ = self.agent.actor(inputs, with_logprob=False)
             actions = actions.cpu().numpy().astype(np.float32)
         ns, rew, dones, uncertainty, mask = self.fake_env.step(
-            states, actions, max_std=m.uncertainty_max_std, stochastic=True)
+            states, actions, max_std=m.uncertainty_max_std, stochastic=True, scenario_ids=scenario_ids)
         accepted = 0
         for j in np.flatnonzero(mask):
             self.model_pool.add(states[j], actions[j], float(rew[j]), ns[j], bool(dones[j]))
@@ -225,7 +226,7 @@ class MBPOTrainer:
         scenario_index = int(self.scenario_rng.choice(len(ids), p=probabilities))
         scenario_id = ids[scenario_index]
         state = self.env.reset(scenario_id=scenario_id)
-        if not np.isclose(state[5], 1., atol=1e-6):
+        if not np.isclose(state[TAU], 1., atol=1e-6):
             raise RuntimeError('Bad initial tau')
         episode_rewards, gross, cost, updates, nr, nm = [], [], [], [], [], []
         attempted = accepted = rejected = 0
