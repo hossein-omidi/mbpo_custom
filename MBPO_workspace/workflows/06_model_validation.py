@@ -58,7 +58,8 @@ def _channel_metrics(actual, predicted, total_std=None, quantiles=None):
             "mae": float(np.mean(np.abs(err))),
             "bias": float(np.mean(err)),
             "persistence_rmse": persistence_rmse,
-            "skill_vs_persistence": float(1.0 - rmse / max(persistence_rmse, 1e-12)),
+            # Same sign-preserving regularized RMSE improvement as the training gate.
+            "skill_vs_persistence": float((persistence_rmse - rmse) / max(persistence_rmse, 1e-8)),
         }
         if total_std is not None:
             sd = np.asarray(total_std, dtype=float)[:, j]

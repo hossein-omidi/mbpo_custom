@@ -37,11 +37,14 @@ class SquashedGaussianActor(nn.Module):
         mean, raw_log_std = self.net(s).chunk(2, dim=-1)
         log_std = torch.clamp(raw_log_std, -20., 2.)
         std = torch.exp(log_std)
-        z = mean if deterministic else mean + std * torch.randn_like(mean)
+        # Retain the sampled standard-normal residual: recovering it from
+        # z - mean loses precision when std is small in float32.
+        noise = torch.zeros_like(mean) if deterministic else torch.randn_like(mean)
+        z = mean if deterministic else mean + std * noise
         action = torch.tanh(z)
         if not with_logprob:
             return action, None
-        normal_lp = (-0.5 * ((z - mean) / std).square() - log_std - 0.5 * math.log(2. * math.pi)).sum(-1, keepdim=True)
+        normal_lp = (-0.5 * noise.square() - log_std - 0.5 * math.log(2. * math.pi)).sum(-1, keepdim=True)
         log_det = (2. * (LOG_2 - z - F.softplus(-2. * z))).sum(-1, keepdim=True)
         return action, normal_lp - log_det
 

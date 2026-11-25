@@ -186,8 +186,8 @@ def validate_model_tables(directory,summary,days):
             m=metric[ch]
             calc=[np.sqrt(np.mean(e**2)),np.sqrt(np.mean(y**2)),np.mean(e),np.mean(np.abs(e)),np.mean(sd),np.mean((y>=q[:,1])&(y<=q[:,2])),np.mean((y>=q[:,0])&(y<=q[:,3]))]
             same(calc,[m[k] for k in ('rmse','persistence_rmse','bias','mae','mean_predictive_sd','coverage_90','coverage_95')],f'Model metrics {scope} {ch}')
-            # Reproduce the pinned diagnostic convention, including its epsilon floor.
-            same([1-calc[0]/max(calc[1],1e-12),calc[0]/max(calc[4],1e-12)],
+            # Reproduce the sign-preserving skill convention and SD-ratio floor.
+            same([(calc[1]-calc[0])/max(calc[1],1e-8),calc[0]/max(calc[4],1e-12)],
                  [m['skill_vs_persistence'],m['rmse_to_mean_predictive_sd']],f'Model skill/SD ratio {scope} {ch}')
     err=f.predicted_reward_kwh-f.actual_reward_kwh
     same([np.sqrt(np.mean(err**2)),np.mean(np.abs(err)),np.mean(err)],[metrics['reward'][k] for k in ('rmse_kwh','mae_kwh','bias_kwh')],'On-policy reward metrics')

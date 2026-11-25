@@ -1,0 +1,14 @@
+Pinned GitHub commit: 3bd5873f01eefe0a7652c6e4444ca296994c75de
+Full source transformations verified against retrieved GitHub blob contents:
+SAC_workspace/src/agents/sac_agent.py ddd43819722e0bae473c3ebcc3e153b54fb08471 -> 77eee8ee022ed81c9524d3e1c0a2402be76d97c6
+MBPO_workspace/src/dynamics.py 9ab1fed6fbb45b455e5cdf44fc8a2eed69dadf25 -> 63d717f15c1caf086bbda9df67b74c7e44ac4a83
+MBPO_workspace/workflows/06_model_validation.py 863a093c3055cf3d763f2f01d540f9548805da9f -> f506f02525feb37fe72e1365a73fdeed87c08899
+PV_experiments/scientific_checks.py c546b70915eaa719b03e60e7e1dcc0905dc29cbc -> 4671277679331aea3c71af6b937b401f89f05949
+
+Local isolated source tests: 19 passed, 1 skipped (Gym missing).
+  8 cases: exact hash-matched geometry, actor and configuration modules (actor after patch), including 40,000 pose transitions, actor log density, gradient finiteness, deterministic RNG, terminal targets, one SAC update and configuration budget.
+  11 cases: isolated retrieved dynamics fit and external diagnostic excerpts, using mocked ensemble predictions; NOT a full ensemble training integration test.
+Additional 3 existing diagnostic regression cases passed against hash-matched patched scientific_checks and audit helpers in isolated environment.
+Installer fixture: 1 passed (dry-run, mismatch refusal before writes, application, idempotence).
+Total across separate test invocations: 23 passed, 1 skipped.
+Full repository checkout unavailable in this environment (GitHub clone DNS failure). Local NSRDB data and Gym/PVLib runtime unavailable. Real simulator test and full repository integration remain required.

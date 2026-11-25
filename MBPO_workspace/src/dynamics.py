@@ -219,8 +219,12 @@ class DynamicsEnsemble:
         persist = states[:, :3]
         rmse = np.sqrt(np.mean(np.square(predicted-truth), axis=0))
         persist_rmse = np.sqrt(np.mean(np.square(persist-truth), axis=0))
-        skill_power = 1.0-rmse[2]/max(float(persist_rmse[2]),1e-8)
-        skill_all = 1.0-np.linalg.norm(rmse)/max(float(np.linalg.norm(persist_rmse)),1e-8)
+        # Floor only the denominator, not the persistence error in the
+        # numerator. A strictly positive score must mean strictly lower RMSE.
+        p_power, e_power = float(persist_rmse[2]), float(rmse[2])
+        p_all, e_all = float(np.linalg.norm(persist_rmse)), float(np.linalg.norm(rmse))
+        skill_power = (p_power-e_power)/max(p_power,1e-8)
+        skill_all = (p_all-e_all)/max(p_all,1e-8)
         self.last_metrics = {
             'model_val_nll': float((np.mean([ws[i] for i in we]) / 2.0
                                     + np.mean([ps[i] for i in pe])) / 2.0),
