@@ -177,13 +177,14 @@ def write_csv(path,rows):
         writer.writeheader();writer.writerows(rows)
 
 
-def load_policy(cfg,which,checkpoint,device,expected_protocol_sha256=None):
+def load_policy(cfg,which,checkpoint,device,expected_protocol_sha256=None, *, expected_seed=None, expected_epoch=None, expected_sha=None):
     import torch
     from SAC_workspace.src.agents.sac_agent import SACAgent
     from SAC_workspace.src.training.trainer import config_hash
     from MBPO_workspace.src.config import config_digest
     from SAC_workspace.src.environment.environment import SACEnvironment
-    data=torch.load(checkpoint,map_location='cpu',weights_only=False)
+    from mbpo.audit_release import load_verified_checkpoint
+    data, loaded_sha=load_verified_checkpoint(checkpoint,which,expected_seed=expected_seed,expected_epoch=expected_epoch,expected_sha=expected_sha)
     if data.get('schema')!=2:
         raise ValueError('Unrecognized checkpoint schema; train new policies with updated code')
     if (expected_protocol_sha256 is not None and
@@ -204,6 +205,8 @@ def load_policy(cfg,which,checkpoint,device,expected_protocol_sha256=None):
           tau=a['tau'],reward_scale=a['reward_scale'],alpha_init=a['alpha_init'],
           target_entropy=a['target_entropy'],min_alpha=a['min_alpha'],device=device)
     agent.load_state_dict(data['agent']);agent.actor.eval()
+    agent.loaded_checkpoint_sha256=loaded_sha
+    agent.loaded_checkpoint_seed=int(data['seed']); agent.loaded_checkpoint_epoch=int(data['epoch'])
     return agent
 
 
@@ -313,6 +316,10 @@ def plot_diagnostics(out, rows, clock_rows, paired):
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--sac-checkpoint',required=True)
+    p.add_argument('--expected-seed',type=int)
+    p.add_argument('--expected-epoch',type=int)
+    p.add_argument('--expected-sac-sha')
+    p.add_argument('--expected-mbpo-sha')
     p.add_argument('--mbpo-checkpoint',required=True)
     p.add_argument('--scenario-split-json',required=True)
     p.add_argument('--split-role',choices=('test','validation'),default='test')
@@ -345,10 +352,12 @@ def main(argv=None):
     if not days:raise ValueError('Empty selected historical partition')
     agents={
         'sac':load_policy(cfg,'sac',args.sac_checkpoint,args.device,
-                          expected_protocol_sha256=split['protocol_sha256']),
+                          expected_protocol_sha256=split['protocol_sha256'], expected_seed=args.expected_seed, expected_epoch=args.expected_epoch, expected_sha=args.expected_sac_sha),
         'mbpo':load_policy(cfg,'mbpo',args.mbpo_checkpoint,args.device,
-                           expected_protocol_sha256=split['protocol_sha256']),
+                           expected_protocol_sha256=split['protocol_sha256'], expected_seed=args.expected_seed, expected_epoch=args.expected_epoch, expected_sha=args.expected_mbpo_sha),
     }
+    if len({(a.loaded_checkpoint_seed,a.loaded_checkpoint_epoch) for a in agents.values()})!=1:
+        raise ValueError('SAC and MBPO checkpoint seed/epoch differ')
     rows,clock_rows=evaluate_paths(cfg,agents,days,args.draws,days[0])
     out=Path(args.outdir);out.mkdir(parents=True,exist_ok=True)
     write_csv(out/'all_day_draw_method.csv',rows)
@@ -373,7 +382,7 @@ def main(argv=None):
     total_projection_count=int(sum(r['uncertainty_clip_count'] for r in weather_draws.values()))
     worst_closure=max(r['post_closure_max_wm2'] for r in weather_draws.values())
     baseline_closure=max(r['baseline_closure_max_wm2'] for r in weather_draws.values())
-    report={'uncertainty_spec':spec,'uncertainty_spec_sha256':spec_fingerprint(spec),
+    report={'loaded_policies':{k:{'sha256':a.loaded_checkpoint_sha256,'seed':a.loaded_checkpoint_seed,'epoch':a.loaded_checkpoint_epoch} for k,a in agents.items()},'uncertainty_spec':spec,'uncertainty_spec_sha256':spec_fingerprint(spec),
         'scenario_protocol_sha256':split['protocol_sha256'],
         'split_role':args.split_role,'n_selected_days':len(days),'n_available_days':population_size,
         'partial_partition_evaluation':len(days)!=population_size,

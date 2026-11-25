@@ -7,6 +7,7 @@ Examples:
  python -m PV_experiments.evaluate --name mc_5pct --mode test --confirm-test
 """
 from __future__ import annotations
+from mbpo.audit_support import runtime_identity, dataset_identity
 import argparse,sys,hashlib
 from pathlib import Path
 from .core import (PROJECT_ROOT,load_experiment,selected_seeds,parse_seeds,verify_pair,
@@ -28,8 +29,16 @@ def _provenance(cfg,mode,seed,root,*,draws=None,realization_id=None):
     sac=run_path(cfg,'sac',seed,root)
     mbpo=run_path(cfg,'mbpo',seed,root)
     split=read_json(sac/'scenario_split.json')
+    dataset=dataset_identity(root)
+    if cfg.get('dataset_identity') is not None and dataset!=cfg['dataset_identity']:
+        raise ValueError('Current dataset differs from frozen experiment')
+    for folder in (sac,mbpo):
+        resolved=read_json(folder/'resolved_mdp.json')
+        if any(resolved.get(k)!=v for k,v in dataset.items()):
+            raise ValueError('Current dataset differs from checkpoint physical identity')
     result={
-      'schema':1,'experiment':cfg['name'],'seed':int(seed),'mode':mode,
+      'schema':2,'experiment':cfg['name'],'seed':int(seed),'mode':mode,
+      'runtime':runtime_identity(root,'model' if mode=='model' else 'evaluation'), 'dataset':dataset, 'final_epoch':int(cfg['epochs']),
       'scenario_protocol_sha256':split['protocol_sha256'],
       'uncertainty_spec_file_sha256':_hash_file(uncertainty_path(cfg,root)),
       'mbpo_checkpoint_sha256':_hash_file(mbpo/'latest.pt'),
@@ -48,18 +57,14 @@ def _provenance(cfg,mode,seed,root,*,draws=None,realization_id=None):
 
 
 def _require_matching_provenance(out,expected):
-    path=out/'manager_provenance.json'
-    if not path.is_file():
-        raise ValueError(f'{out}: result has no checkpoint-provenance manifest. '
-                         'Cannot safely reuse it; do not overwrite an unknown evaluation.')
-    if read_json(path)!=expected:
-        raise ValueError(f'{out}: evaluation inputs/checkpoint hashes differ from recorded provenance. '
-                         'Use a new experiment name rather than reusing stale results.')
+    from mbpo.audit_release import require_evaluation_seal
+    require_evaluation_seal(out,expected)
 
 
 def _verify_model_validation_summary(path,cfg,seed,realization_id,protocol_sha,root):
     d=read_json(path)
     checkpoint=str(run_path(cfg,'mbpo',seed,root)/'latest.pt')
+    if d.get('validation_schema')!=2: raise ValueError('Model diagnostic schema differs')
     if (d.get('seed')!=seed or d.get('validation_realization_id')!=int(realization_id)
         or d.get('scenario_protocol_sha256')!=protocol_sha
         or Path(d.get('checkpoint','')).resolve()!=Path(checkpoint).resolve()):
@@ -120,13 +125,18 @@ def evaluate_one(cfg,mode,seed,draws,root=PROJECT_ROOT,dry_run=False):
          '--split-role','validation' if mode!='test' else 'test',
          '--draws',str(draws),'--uncertainty-spec',str(uncertainty_path(cfg,root)),
          '--outdir',str(out),'--device',cfg['device']]
+    if not dry_run:
+        cmd+=['--expected-seed',str(seed),'--expected-epoch',str(cfg['epochs']),'--expected-sac-sha',identity['sac_checkpoint_sha256'],'--expected-mbpo-sha',identity['mbpo_checkpoint_sha256']]
     if mode=='smoke':cmd+=['--max-days','2']
     cmd+=command_override(cfg)
     execute(cfg,f'evaluate_{mode}',cmd,root=root,seed=seed,dry_run=dry_run)
     if not dry_run:
         if not existing_report_is_valid(cfg,mode,seed,draws,out,root):
             raise RuntimeError(f'No complete evaluation report generated: {out}')
-        atomic_json(out/'manager_provenance.json',identity)
+        from mbpo.audit_release import seal_evaluation, verify_loaded_policies
+        verify_loaded_policies(read_json(out/'mc_summary.json'),identity)
+        if _provenance(cfg,mode,seed,root,draws=draws)!=identity: raise ValueError('Evaluation inputs changed during execution')
+        seal_evaluation(out,identity)
 
 
 def run(args,root=PROJECT_ROOT):
@@ -161,13 +171,17 @@ def run(args,root=PROJECT_ROOT):
                  '--uncertainty-spec',str(uncertainty_path(cfg,root)),
                  '--realization-id',str(args.realization_id),'--outdir',str(out),
                  '--device',cfg['device']]
+            if not args.dry_run: cmd+=['--expected-seed',str(seed),'--expected-epoch',str(cfg['epochs']),'--expected-sha',identity['mbpo_checkpoint_sha256']]
             cmd+=command_override(cfg)
             execute(cfg,'model_validation',cmd,root=root,seed=seed,dry_run=args.dry_run)
             if not args.dry_run:
                 _verify_model_validation_summary(
                     out/'model_validation_summary.json',cfg,seed,args.realization_id,
                     identity['scenario_protocol_sha256'],root)
-                atomic_json(out/'manager_provenance.json',identity)
+                from mbpo.audit_release import seal_evaluation, verify_loaded_policies
+                verify_loaded_policies(read_json(out/'model_validation_summary.json'),identity)
+                if _provenance(cfg,mode,seed,root,realization_id=args.realization_id)!=identity: raise ValueError('Model evaluation inputs changed during execution')
+                seal_evaluation(out,identity)
         else:
             if mode=='test' and not args.dry_run:
                 # Require a completed physical smoke run before consuming test data.

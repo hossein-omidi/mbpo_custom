@@ -5,6 +5,8 @@ No model synthetic transition is used in evaluation. Both agents, fixed pose,
 and the unconstrained oracle see the identical timestep-specific measured
 albedo, irradiance and SAPM temperature/wind physics.
 """
+if __name__ == '__main__':
+    raise SystemExit('This legacy evaluation CLI is unsupported for Geometry10. Use python -m PV_experiments.evaluate --name EXPERIMENT --mode validation.')
 import argparse
 import json
 from collections import defaultdict

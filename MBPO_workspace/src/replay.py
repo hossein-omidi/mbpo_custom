@@ -91,8 +91,7 @@ class ScenarioReplayBuffer(ReplayBuffer):
 
     def rollout_states(self,n,seed=None,*,with_scenarios=False):
         # No holdout-day state is ever used to generate synthetic policy training.
-        valid=np.flatnonzero((self.states[:self.count,TAU]>1e-7)
-                                 &(self.dones[:self.count,0]<.5))
+        valid=np.flatnonzero(self.states[:self.count,TAU]>1e-7)
         valid=valid[np.asarray([
             self._validation_roles[self.scenario_names[int(self.scenario_ids[i])]] == 'train'
             for i in valid],dtype=bool)]

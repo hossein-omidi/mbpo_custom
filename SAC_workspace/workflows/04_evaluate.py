@@ -1,4 +1,6 @@
 """Paired photovoltaic evaluation vs dual-axis tracking on NSRDB days."""
+if __name__ == '__main__':
+    raise SystemExit('This legacy evaluation CLI is unsupported for Geometry10. Use python -m PV_experiments.evaluate --name EXPERIMENT --mode validation.')
 import argparse
 from pathlib import Path
 from SAC_workspace.src.config.config import load_config

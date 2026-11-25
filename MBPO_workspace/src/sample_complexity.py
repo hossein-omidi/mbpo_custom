@@ -5,6 +5,7 @@ The independent variable is REAL PV simulator transitions. Synthetic MBPO sample
 are reported separately and are never counted as physical environment samples.
 """
 from __future__ import annotations
+from mbpo.audit_support import target_event, expected_steps
 
 import csv
 import json
@@ -157,12 +158,8 @@ def _bootstrap_curves(matrix: np.ndarray, *, replicates: int, seed: int) -> tupl
 
 
 def _threshold_steps(curve: np.ndarray, steps: np.ndarray, target: float, sustain: int) -> float | None:
-    if sustain < 1:
-        raise ValueError("sustain_checkpoints must be >= 1")
-    for i in range(0, len(steps) - sustain + 1):
-        if np.all(curve[i:i + sustain] >= target):
-            return float(steps[i])
-    return None
+    _, confirmed=target_event(curve,steps,target,sustain)
+    return float(confirmed) if confirmed is not None else None
 
 
 def _auc(curve: np.ndarray, steps: np.ndarray) -> float:
@@ -246,12 +243,11 @@ def analyze_sample_complexity(
     if len(validation_ids) < 2:
         raise ValueError("Validation set is too small for uncertainty analysis")
 
-    # Use exact common real-interaction checkpoints. No episode-number alignment,
-    # extrapolation, or silent interpolation is performed.
-    common_steps = set(sac_runs[0]["aggregate"]) & set(mbpo_runs[0]["aggregate"])
-    for run in all_runs[1:]:
-        common_steps &= set(run["aggregate"])
-    steps = np.asarray(sorted(common_steps), dtype=int)
+    # Require all scheduled evaluations, not the intersection of incomplete runs.
+    steps=expected_steps(ref_meta)
+    for run in all_runs:
+        if set(run['aggregate'])!=set(steps) or set(run['daily'])!=set(steps):
+            raise ValueError(f"Missing or unexpected scheduled evaluations: {run['root']}")
     if len(steps) < 2:
         raise ValueError("Fewer than two common evaluation checkpoints across all runs")
     n_seed, n_day = len(sac_runs), len(validation_ids)
@@ -310,7 +306,7 @@ def analyze_sample_complexity(
     for algorithm, matrix in (("sac", sac_matrix), ("mbpo", mbpo_matrix)):
         for i, seed in enumerate(sac_seeds):
             curve = matrix[i].mean(axis=0)
-            reached = _threshold_steps(curve, steps, target, int(sustain_checkpoints))
+            onset, reached = target_event(curve, steps, target, int(sustain_checkpoints))
             auc_value = _auc(curve, steps)
             threshold_by_algorithm[algorithm][seed] = reached
             auc_by_algorithm[algorithm].append(auc_value)
@@ -318,6 +314,8 @@ def analyze_sample_complexity(
                 "algorithm": algorithm, "seed": seed,
                 "reached_target": reached is not None,
                 "real_env_steps_to_target": reached,
+                "onset_steps": onset, "confirmed_steps": reached,
+                "restricted_steps": reached if reached is not None else int(steps[-1]),
                 "last_evaluated_env_steps": int(steps[-1]),
                 "auc_mean_net_kwh_per_episode": auc_value,
                 "final_mean_net_energy_kwh": float(curve[-1]),
@@ -392,7 +390,11 @@ def analyze_sample_complexity(
             compute = _training_compute(run)
             compute_rows.append({"algorithm": algorithm, "seed": run["seed"], **compute})
 
+    restricted = {a: [r['restricted_steps'] for r in per_seed_rows if r['algorithm']==a] for a in ('sac','mbpo')}
     reduction_summary = {
+        "endpoint": "confirmed attainment; onset is retrospective",
+        "restricted_steps_saved_mean": float(np.mean(np.asarray(restricted['sac'])-np.asarray(restricted['mbpo']))),
+        "restricted_budget_relative_saving_percent": float(100*(1-np.mean(restricted['mbpo'])/np.mean(restricted['sac']))),
         "paired_seed_count_reaching_target": len(paired_reductions),
         "mean_paired_sample_reduction_percent": float(np.mean(paired_reductions)) if paired_reductions else None,
         "median_paired_sample_reduction_percent": float(np.median(paired_reductions)) if paired_reductions else None,
@@ -427,7 +429,7 @@ def analyze_sample_complexity(
         "movement_cost_mode": ref_meta.get("movement_cost_mode"),
         "movement_penalty": ref_meta.get("movement_penalty"),
         "power_model": ref_meta.get("power_model"),
-        "sample_complexity_definition": "first common real-transition checkpoint at which mean validation net energy reaches target for the required consecutive checkpoints",
+        "sample_complexity_definition": "confirmation at the final scheduled checkpoint of the first sustained sequence; retrospective onset reported separately",
         "target_definition": target_definition,
         "target_kwh_per_episode": float(target),
         "sustain_checkpoints": int(sustain_checkpoints),

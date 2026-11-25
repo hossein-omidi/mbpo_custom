@@ -3,6 +3,7 @@ Uses the audited estimator's run loader and common validation contract, not a
 replacement RL algorithm. All steps refer to external PV simulator transitions.
 """
 from __future__ import annotations
+from mbpo.audit_support import expected_steps, target_event as event
 import json, math
 from pathlib import Path
 import numpy as np
@@ -52,23 +53,6 @@ def save(fig,out,name):
 
 def summary(v):
     v=finite(v);return {'mean':float(v.mean()),'sd':float(v.std(ddof=1)) if len(v)>1 else None,'n':len(v)}
-
-
-def expected_steps(meta):
-    h=int(meta['horizon']);interval=int(meta['evaluation_interval_episodes']);epochs=int(meta['final_epoch'])
-    if min(h,interval,epochs)<1 or h*epochs!=int(meta['final_env_steps']):raise ValueError('Invalid evaluation schedule metadata')
-    return np.array(sorted(set(range(interval,epochs+1,interval))|{epochs}),dtype=np.int64)*h
-
-
-def event(curve,steps,target,sustain):
-    """Retrospective onset and online-observable confirmation; no interpolation."""
-    y=finite(curve);x=np.asarray(steps)
-    if y.ndim!=1 or x.shape!=y.shape or np.any(np.diff(x)<=0) or not np.isfinite(target) or sustain<1:raise ValueError('Invalid target event inputs')
-    streak=0
-    for j,value in enumerate(y):
-        streak=streak+1 if value>=target else 0
-        if streak>=sustain:return int(x[j-sustain+1]),int(x[j])
-    return None,None
 
 
 def load_learning(cfg,seeds,root):
@@ -174,6 +158,10 @@ def render_learning(d,out):
     if d.get('replay'):
         replay=pd.DataFrame(d['replay']);replay.to_csv(out/'mbpo_replay_accounting.csv',index=False,float_format='%.12g');final=replay[replay.env_steps==rep['common_budget_steps']]
         rep['mbpo_replay_at_final_budget']=final.astype(object).where(pd.notna(final),None).to_dict(orient='records')
+        from mbpo.audit_release import replay_at_confirmation
+        endpoint=replay_at_confirmation(d['replay'],r['rows'])
+        csv_out(out/'mbpo_replay_at_confirmation_or_budget.csv',endpoint)
+        rep['mbpo_replay_at_confirmation_or_budget']=endpoint
         rep['definitions']['replay']='Accepted synthetic transitions are generated records; samples used are minibatch draws with reuse. Neither is an external training transition.'
     write_json(out/'sample_efficiency_summary.json',rep)
     # Primary figure: separate performance and paired effect, exact sampled checkpoints.

@@ -20,6 +20,11 @@ def validate_mc_source(cfg,stage,seed,root=PROJECT_ROOT):
     summary=directory/'mc_summary.json'
     require_files([summary,directory/'mc_pooled_power_mean_sd_by_utc_step.csv',directory/'all_day_draw_method.csv'])
     data=read_json(summary)
+    from .evaluate import existing_report_is_valid,_provenance,_require_matching_provenance
+    draws=int(data['draws_per_day'])
+    if not existing_report_is_valid(cfg,stage,seed,draws,directory,root):
+        raise ValueError('Incomplete Monte Carlo source')
+    _require_matching_provenance(directory,_provenance(cfg,stage,seed,root,draws=draws))
     if data.get('split_role')!=stage or data.get('partial_partition_evaluation') is not False:
         raise ValueError(f'Seed {seed}: full {stage} Monte Carlo evaluation required')
     if data.get('n_selected_days')!=data.get('n_available_days'):
@@ -106,7 +111,7 @@ def frozen_learning_input_hashes(cfg,seeds,root=PROJECT_ROOT):
     for seed in seeds:
         for alg in ('sac','mbpo'):
             directory=run_path(cfg,alg,seed,root)
-            for rel in ('run_metadata.json','scenario_split.json',
+            for rel in ('run_metadata.json','scenario_split.json','episodes.csv',
                         'periodic_evaluation/evaluations.csv',
                         'periodic_evaluation/evaluation_days.csv',
                         'periodic_evaluation/evaluation_references.csv'):
@@ -119,7 +124,7 @@ def frozen_learning_input_hashes(cfg,seeds,root=PROJECT_ROOT):
 def frozen_mc_input_hashes(inputs):
     result={}
     for seed,directory,data in inputs:
-        for filename in ('mc_summary.json','all_day_draw_method.csv',
+        for filename in ('manager_provenance.json','mc_summary.json','all_day_draw_method.csv',
                          'mc_pooled_power_mean_sd_by_utc_step.csv'):
             result[f'seed{seed}/{filename}']=file_sha256(directory/filename)
     return result
@@ -243,7 +248,7 @@ def report_learning(cfg,seeds,root=PROJECT_ROOT,dry_run=False):
         if manifest.is_file() and (out/'report.json').is_file():
             m=read_json(manifest)
             if (m.get('seeds')==seeds and m.get('experiment')==cfg['name']
-                and m.get('source_file_sha256')==input_hashes):
+                and m.get('source_file_sha256')==input_hashes and m.get('estimator_semantics')=='confirmed_v2'):
                 print('SKIP existing sample-complexity report:',out)
                 return
             raise ValueError('An existing learning report uses a different seed set; do not overwrite it')
@@ -256,7 +261,7 @@ def report_learning(cfg,seeds,root=PROJECT_ROOT,dry_run=False):
         require_files([out/'report.json',out/'learning_curve_descriptive_sd.csv',
                        out/'learning_curve_mean_pm_seed_sd.png'])
         atomic_json(out/'report_manifest.json',{'schema':1,'experiment':cfg['name'],
-              'seeds':seeds,'source_file_sha256':input_hashes,
+              'seeds':seeds,'source_file_sha256':input_hashes,'estimator_semantics':'confirmed_v2',
               'protocol_sha256':verify_pair(cfg,seeds[0],root)['protocol_sha256'],
               'source':'MBPO_workspace.workflows.05_sample_complexity',
               'interpretation':'Bootstrap resampling bands and separate descriptive ±1 SD across independently trained seed means and historical day means'})

@@ -5,6 +5,7 @@ Real interactions are chronological; model samples are generated separately and
 never inserted in the real replay or used as ground truth for ensemble fitting.
 """
 from __future__ import annotations
+from mbpo.audit_support import bind_run, episode_commit, recover_history, envelope_counts, sha_file
 from mbpo.geometry10 import TAU
 import csv
 import json
@@ -124,6 +125,7 @@ class MBPOTrainer:
             self.env_steps = 0
             self.latest_model_metrics = {}
             self.last_model_step = 0
+            bind_run(self.outdir, resume is not None, self.env.resolved_mdp)
 
             if resume is None:
                 cfg_tmp = self.cfg_path.with_name(self.cfg_path.name + '.tmp')
@@ -137,6 +139,8 @@ class MBPOTrainer:
                         or json.loads(self.resolved_path.read_text(encoding='utf-8')) != self.env.resolved_mdp):
                     raise ValueError('The physical simulator differs from the checkpoint run')
                 self.load(resume)
+            if resume is None:
+                self.save()  # recoverable epoch-zero boundary
         except Exception:
             try:
                 self.env.close()
@@ -172,6 +176,7 @@ class MBPOTrainer:
             patience=m.model_patience, batch_size=m.model_batch_size)
         fit_seconds = time.perf_counter() - fit_started
         self.latest_model_metrics = {**stats, 'model_fit_seconds': fit_seconds,
+                                     'model_fit_completed': 1, 'model_skill_pass': 0,
                                      'model_holdout_scenarios': holdout_scenarios,
                                      'model_train_scenarios': train_scenarios}
         if m.require_model_skill and (
@@ -187,6 +192,7 @@ class MBPOTrainer:
             self.last_model_step = self.env_steps
             return 0, 0, float('nan')
 
+        self.latest_model_metrics['model_skill_pass'] = 1
         states, scenario_ids = self.real_pool.rollout_states(m.rollout_batch_size, with_scenarios=True)
         if not len(states):
             self.latest_model_metrics.update({
@@ -210,6 +216,7 @@ class MBPOTrainer:
             raise FloatingPointError('Nonfinite model ensemble uncertainty')
         rollout_seconds = time.perf_counter() - rollout_started
         self.latest_model_metrics.update({
+            **self.fake_env.last_feasibility,
             'model_attempted': int(len(states)), 'model_accepted': int(accepted),
             'model_rejected': int(len(states) - accepted),
             'model_rollout_seconds': float(rollout_seconds),
@@ -231,6 +238,8 @@ class MBPOTrainer:
         episode_rewards, gross, cost, updates, nr, nm = [], [], [], [], [], []
         attempted = accepted = rejected = 0
         fit_seconds = rollout_seconds = 0.0
+        diagnostic_counts = dict.fromkeys(('model_fit_attempted','model_fit_completed','model_skill_pass','envelope_checked','envelope_violations','envelope_irradiance_saturated','raw_weather_outside','raw_power_outside'), 0)
+        real_saturated = 0; real_envelope_states = []
         scenario = None
         for step in range(self.env.horizon):
             if self.env_steps < self.cfg.sac.algo['start_steps']:
@@ -248,6 +257,11 @@ class MBPOTrainer:
             elif sid != scenario:
                 raise RuntimeError('Weather scenario changed within an episode')
             self.real_pool.add(state, action, reward, nxt, done, sid)
+            # Actual irradiance saturation is checked before decoding.
+            if max(float(info['dni_wm2']), float(info['dhi_wm2'])) >= 2000.:
+                real_saturated += 1
+            else:
+                real_envelope_states.append(nxt.copy())
             self.env_steps += 1
             if (self.env_steps > self.cfg.sac.algo['start_steps']
                     and self.env_steps % self.cfg.model.model_train_freq == 0):
@@ -255,6 +269,9 @@ class MBPOTrainer:
                 accepted += accepted_now
                 rejected += rejected_now
                 attempted += int(self.latest_model_metrics.get('model_attempted', 0))
+                diagnostic_counts['model_fit_attempted'] += 1
+                for key in diagnostic_counts:
+                    diagnostic_counts[key] += int(self.latest_model_metrics.get(key, 0))
                 fit_seconds += float(self.latest_model_metrics.get('model_fit_seconds', 0.0))
                 rollout_seconds += float(self.latest_model_metrics.get('model_rollout_seconds', 0.0))
             if (self.env_steps > self.cfg.sac.algo['start_steps']
@@ -274,6 +291,8 @@ class MBPOTrainer:
                 break
         if len(episode_rewards) != self.env.horizon or not done:
             raise RuntimeError(f'Incomplete {self.env.horizon}-transition solar episode')
+        e = envelope_counts(np.asarray(real_envelope_states), self.env.unwrapped) if real_envelope_states else {'envelope_checked':0,'envelope_violations':0,'envelope_irradiance_saturated':0}
+        real_checked=e['envelope_checked']; real_violations=e['envelope_violations']; real_saturated+=e['envelope_irradiance_saturated']
         self.epoch += 1
         row = {
             'epoch': self.epoch, 'env_steps': self.env_steps, 'updates': self.agent.updates,
@@ -287,6 +306,8 @@ class MBPOTrainer:
             'synthetic_generated': int(accepted), 'synthetic_attempted': int(attempted),
             'synthetic_accepted': int(accepted), 'synthetic_rejected': int(rejected),
             'synthetic_samples_used': int(sum(nm)), 'real_samples_used': int(sum(nr)),
+            **diagnostic_counts, 'real_envelope_checked':real_checked,
+            'real_envelope_violations':real_violations, 'real_irradiance_saturated':real_saturated,
             'model_train_seconds': float(fit_seconds), 'model_fit_seconds': float(fit_seconds),
             'model_rollout_seconds': float(rollout_seconds),
             'model_total_seconds': float(fit_seconds + rollout_seconds),
@@ -314,6 +335,9 @@ class MBPOTrainer:
             'schema': 2, 'config': self.cfg.to_dict(), 'config_hash': config_digest(self.cfg),
             'resolved_mdp': self.env.resolved_mdp, 'seed': self.seed,
             'epoch': self.epoch, 'env_steps': self.env_steps,
+            'algorithm': 'mbpo',
+            'episode_commit': episode_commit(self.history_path, self.epoch, self.env_steps, self.env.horizon, updates=self.agent.updates),
+            'training_identity_sha256': sha_file(self.outdir / 'training_identity.json'),
             'scenario_protocol_sha256': self.scenario_protocol['protocol_sha256'],
             'scenario_rng': self.scenario_rng.bit_generator.state,
             'exploration_rng': self.exploration_rng.bit_generator.state,
@@ -328,8 +352,9 @@ class MBPOTrainer:
         }
         path = self.outdir / name
         tmp = path.with_suffix('.tmp')
-        torch.save(ck, tmp)
-        os.replace(tmp, path)
+        with tmp.open('wb') as f:
+            torch.save(ck,f); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp,path)
         return path
 
     def load(self, path):
@@ -341,6 +366,11 @@ class MBPOTrainer:
             raise ValueError('Physical simulator parameters changed since training')
         if ck.get('scenario_protocol_sha256') != self.scenario_protocol['protocol_sha256']:
             raise ValueError('Checkpoint scenario split differs from current protocol')
+        if ck.get('training_identity_sha256') != sha_file(self.outdir / 'training_identity.json'):
+            raise ValueError('Checkpoint training identity mismatch')
+        from mbpo.audit_release import checkpoint_identity
+        checkpoint_identity(ck,'mbpo',self.seed,ck['epoch'],ck['env_steps'])
+        if ck['env_steps']!=ck['epoch']*self.env.horizon: raise ValueError('Checkpoint episode/interaction mismatch')
         self.agent.load_state_dict(ck['agent'])
         self.dynamics.load_state_dict(ck['dynamics'])
         self.real_pool.load_state_dict(ck['real_pool'])
@@ -362,12 +392,9 @@ class MBPOTrainer:
             rg.set_state(ck['env_rng'])
         else:
             rg.bit_generator.state = ck['env_rng']
-        if not self.history_path.is_file():
-            raise FileNotFoundError('Cannot resume without episodes.csv')
-        with self.history_path.open(newline='', encoding='utf-8') as f:
-            rows = list(csv.DictReader(f))
-        if len(rows) != self.epoch or (rows and int(rows[-1]['env_steps']) != self.env_steps):
-            raise ValueError('Checkpoint does not match the episode log')
+        recover_history(self.history_path, ck.get('episode_commit'), self.epoch,
+                        self.env_steps, self.env.horizon, updates=self.agent.updates)
+        self.evaluator.reconcile(self.epoch, self.env.horizon)
 
     def train(self, epochs=None):
         target = self.cfg.sac.algo['epochs'] if epochs is None else int(epochs)
@@ -378,7 +405,7 @@ class MBPOTrainer:
         eval_interval = int(self.cfg.sac.protocol['evaluation_interval_episodes'])
         checkpoint_interval = int(self.cfg.sac.algo['checkpoint_interval'])
         try:
-            if (self.epoch > 0 and self.epoch % eval_interval == 0
+            if (self.epoch > 0 and (self.epoch % eval_interval == 0 or self.epoch == target)
                     and not self.evaluator.has_evaluation(epoch=self.epoch, env_steps=self.env_steps)):
                 self.evaluator.evaluate(self.agent, epoch=self.epoch,
                                         env_steps=self.env_steps, updates=self.agent.updates)

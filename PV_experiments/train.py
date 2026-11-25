@@ -4,6 +4,7 @@ Example: python -m PV_experiments.train --name mc_5pct --seeds 0:4 --epochs 2000
 Subsequently: python -m PV_experiments.train --name mc_5pct
 """
 from __future__ import annotations
+from mbpo.audit_support import runtime_identity, dataset_identity, exclusive_lock
 from mbpo.geometry10 import MODE, STATE_DIM
 import argparse,sys
 from pathlib import Path
@@ -24,6 +25,12 @@ def train_plan(args,root=PROJECT_ROOT,dry_run=False):
 
 
 def run(args,root=PROJECT_ROOT):
+    if args.dry_run: return _run_locked(args,root)
+    with exclusive_lock(base_path(args.name,root).parent/('.'+args.name+'.training.lock')):
+        return _run_locked(args,root)
+
+
+def _run_locked(args,root=PROJECT_ROOT):
     cfg,seeds=train_plan(args,root,dry_run=args.dry_run)
     print(f"Experiment: {cfg['name']} | seeds={seeds} | epochs={cfg['epochs']} | "
           f"uncertainty SHA256={cfg['uncertainty_sha256'][:16]}…",flush=True)
@@ -31,10 +38,11 @@ def run(args,root=PROJECT_ROOT):
     if not args.dry_run:
         audit=experiment_dir(cfg,root)/'preflight'/'environment_audit.json'
         verified=False
+        identity={'runtime':runtime_identity(root,'physical'),'dataset':dataset_identity(root),'uncertainty':cfg['uncertainty_sha256']}
         if audit.exists():
             try:
                 data=read_json(audit)
-                verified=(data.get('status')=='passed' and data.get('fixed_draw_replay') is True and data.get('observation_mode')==MODE and data.get('state_dim')==STATE_DIM)
+                verified=(data.get('status')=='passed' and data.get('fixed_draw_replay') is True and data.get('observation_mode')==MODE and data.get('state_dim')==STATE_DIM and data.get('audit_identity')==identity)
             except (ValueError,TypeError):verified=False
         if args.skip_verification and not verified:
             raise RuntimeError('--skip-verification requires a successful verification file generated for this exact managed experiment')
@@ -42,6 +50,9 @@ def run(args,root=PROJECT_ROOT):
             command=[sys.executable,'-m','PostProcessing_MC_patch.tools.verify_mc_environment',
                      '--uncertainty-spec',str(frozen),'--out',str(audit)]
             execute(cfg,'physical_preflight',command,root=root)
+            data=read_json(audit)
+            if data.get('status')!='passed': raise RuntimeError('Physical preflight did not pass')
+            if data.get('audit_identity')!=identity: raise RuntimeError('Preflight source/dataset identity changed')
         else:print('Preflight already passed; reusing verified environment audit.',flush=True)
     for seed in seeds:
         for algorithm in ('sac','mbpo'):

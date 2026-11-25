@@ -41,7 +41,7 @@ def _rmse(x):
     return float(np.sqrt(np.mean(np.square(np.asarray(x, dtype=float)))))
 
 
-def _channel_metrics(actual, predicted, total_std=None):
+def _channel_metrics(actual, predicted, total_std=None, quantiles=None):
     actual = np.asarray(actual, dtype=float)
     predicted = np.asarray(predicted, dtype=float)
     residual = predicted - actual
@@ -61,15 +61,19 @@ def _channel_metrics(actual, predicted, total_std=None):
             "skill_vs_persistence": float(1.0 - rmse / max(persistence_rmse, 1e-12)),
         }
         if total_std is not None:
-            sd = np.maximum(np.asarray(total_std, dtype=float)[:, j], 1e-8)
+            sd = np.asarray(total_std, dtype=float)[:, j]
+            if not np.isfinite(sd).all() or np.any(sd<0): raise ValueError('Invalid predictive standard deviation')
             out[name]["mean_predictive_sd"] = float(np.mean(sd))
             out[name]["rmse_to_mean_predictive_sd"] = float(rmse / max(float(np.mean(sd)), 1e-12))
-            out[name]["coverage_90"] = float(np.mean(np.abs(err) <= 1.6448536269514722 * sd))
-            out[name]["coverage_95"] = float(np.mean(np.abs(err) <= 1.959963984540054 * sd))
+            if quantiles is None: raise ValueError('Empirical intervals required with diagnostic SD')
+            q=np.asarray(quantiles)
+            if q.shape!=(4,len(actual),3) or not np.isfinite(q).all(): raise ValueError('Invalid predictive quantiles')
+            out[name]["coverage_90"] = float(np.mean((y>=q[1,:,j])&(y<=q[2,:,j])))
+            out[name]["coverage_95"] = float(np.mean((y>=q[0,:,j])&(y<=q[3,:,j])))
     return out
 
 
-def _prediction_rows(actual, predicted, uncertainty, metadata):
+def _prediction_rows(actual, predicted, uncertainty, metadata, quantiles=None):
     rows = []
     for i in range(len(actual)):
         row = dict(metadata[i])
@@ -78,6 +82,9 @@ def _prediction_rows(actual, predicted, uncertainty, metadata):
             row[f"actual_delta_{name}"] = float(actual[i, j])
             row[f"predicted_delta_{name}"] = float(predicted[i, j])
             row[f"error_delta_{name}"] = float(predicted[i, j] - actual[i, j])
+            if quantiles is not None:
+                for k,label in enumerate(('q025','q05','q95','q975')):
+                    row[f'{label}_delta_{name}']=float(quantiles[k,i,j])
         rows.append(row)
     return rows
 
@@ -90,7 +97,7 @@ def _load_training_stats(path: Path) -> dict:
     result = {"available": bool(rows), "episodes": len(rows)}
     for key in ("model_fit_seconds", "model_rollout_seconds", "synthetic_attempted",
                 "synthetic_accepted", "synthetic_rejected", "synthetic_samples_used",
-                "real_samples_used"):
+                "real_samples_used", "model_fit_attempted", "model_fit_completed", "model_skill_pass", "envelope_checked", "envelope_violations", "envelope_irradiance_saturated", "raw_weather_outside", "raw_power_outside", "real_envelope_checked", "real_envelope_violations", "real_irradiance_saturated"):
         vals = []
         for row in rows:
             try:
@@ -115,6 +122,10 @@ def _load_training_stats(path: Path) -> dict:
     accepted = result.get("synthetic_accepted")
     result["synthetic_acceptance_rate"] = (
         float(accepted / attempted) if attempted is not None and attempted > 0 and accepted is not None else None)
+    fit=result.get('model_fit_completed'); passed=result.get('model_skill_pass')
+    result['skill_gate_pass_fraction']=passed/fit if fit and passed is not None else None
+    real=result.get('real_samples_used'); synthetic=result.get('synthetic_samples_used')
+    result['actual_synthetic_minibatch_fraction']=synthetic/(real+synthetic) if real is not None and synthetic is not None and real+synthetic>0 else None
     return result
 
 
@@ -177,7 +188,8 @@ def run_validation(args):
     requested_cfg = json.loads(json.dumps(cfg.to_dict()))
     if saved_cfg != requested_cfg:
         raise ValueError("Current MBPO configuration differs from the selected run config.json")
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    from mbpo.audit_release import load_verified_checkpoint, equivalent_pose_metrics
+    ckpt,loaded_sha=load_verified_checkpoint(checkpoint_path,'mbpo',run_dir=run_dir,expected_seed=getattr(args,'expected_seed',None),expected_epoch=getattr(args,'expected_epoch',None),expected_sha=getattr(args,'expected_sha',None))
     if ckpt.get("schema") != 2 or ckpt.get("config_hash") != config_digest(cfg):
         raise ValueError("Checkpoint schema/configuration mismatch; use a checkpoint from the verified patch")
     seed = int(ckpt["seed"])
@@ -225,19 +237,22 @@ def run_validation(args):
         holdout_actions = real_pool.actions[holdout_idx]
         holdout_actual_delta = (real_pool.next_states[holdout_idx, :3]
                                 - holdout_states[:, :3])
-        holdout_mean, _holdout_aleatoric, _holdout_epistemic, holdout_total, holdout_score = (
-            ensemble.predict_distribution(holdout_states, holdout_actions))
-        internal_metrics = _channel_metrics(holdout_actual_delta, holdout_mean, holdout_total)
+        from mbpo.audit_support import hierarchical, diagnostic_seed, conditional_power_rmse, counterfactual_metrics as action_metrics, envelope_counts
+        _m, _a, _e, _t, holdout_score = ensemble.predict_distribution(holdout_states, holdout_actions)
+        holdout_mean,holdout_total,holdout_quantiles=hierarchical(ensemble,holdout_states,holdout_actions,seed=diagnostic_seed(seed,'internal'))
+        internal_metrics = _channel_metrics(holdout_actual_delta, holdout_mean, holdout_total, holdout_quantiles)
         internal_meta = [{"scenario_id": real_pool.scenario_names[int(real_pool.scenario_ids[i])],
                           "transition_index": int(i)} for i in holdout_idx]
         internal_rows = _prediction_rows(holdout_actual_delta, holdout_mean,
-                                         holdout_score, internal_meta)
+                                         holdout_score, internal_meta, holdout_quantiles)
 
         # External validation on held-out days not used by the policy or dynamics fit.
         external_states, external_actions, external_next, external_rewards = [], [], [], []
         external_pred_next, external_pred_rewards, external_total_std = [], [], []
         external_meta = []
         counterfactual_rows = []
+        external_means=[]; external_quantiles=[]; external_disagreement=[]
+        external_sample_envelope={}
         for sid in scenario_ids:
             states, actions, next_states, rewards = _run_policy_trajectory(
                 env, agent, sid, realization_id=args.realization_id)
@@ -247,8 +262,13 @@ def run_validation(args):
                 raise FloatingPointError('Rejected synthetic prediction in on-policy validation')
             if not np.array_equal(_done, next_states[:, TAU] <= 1e-7):
                 raise RuntimeError('Synthetic and physical terminal signals differ')
-            mean_delta, _aleatoric, _epistemic, total_std, _score = ensemble.predict_distribution(
-                states, actions)
+            mean_delta,total_std,quantiles=hierarchical(ensemble,states,actions,seed=diagnostic_seed(seed,sid,'external',args.realization_id),
+                envelope_template=pred_next,env=env.unwrapped,envelope_totals=external_sample_envelope)
+            # Exact reward is affine in clipped power, with fixed movement cost.
+            mean_next=states[:,:3]+mean_delta
+            pred_rewards=pred_rewards+(mean_next[:,2]-pred_next[:,2])*fake_env.power_norm*fake_env.interval_hours/1000.
+            pred_next[:,:3]=mean_next
+            external_means.append(mean_delta); external_quantiles.append(quantiles); external_disagreement.append(disagreement)
             actual_delta = next_states[:, :3] - states[:, :3]
             external_states.append(states)
             external_actions.append(actions)
@@ -276,6 +296,12 @@ def run_validation(args):
                         replay_obs[None, :], candidate[None, :], max_std=None, stochastic=False, scenario_ids=[sid])
                     if not bool(accepted[0]) or bool(pred_done[0]) != bool(actual_done):
                         raise RuntimeError('Invalid synthetic counterfactual or terminal mismatch')
+                    # Same diagnostic seed and identical shape for each action at this state.
+                    cf_mean,_,_=hierarchical(ensemble,replay_obs[None,:],candidate[None,:],
+                        seed=diagnostic_seed(seed,sid,int(t),args.realization_id,'counterfactual'))
+                    mean_next=replay_obs[:3]+cf_mean[0]
+                    pred_reward=pred_reward+(mean_next[2]-pred_nxt[0,2])*fake_env.power_norm*fake_env.interval_hours/1000.
+                    pred_nxt[0,:3]=mean_next
                     pnext = pred_nxt[0]
                     counterfactual_rows.append({
                         "scenario_id": sid, "step": int(t), "action_type": action_name,
@@ -286,6 +312,9 @@ def run_validation(args):
                         "actual_done": bool(actual_done), "predicted_done": bool(pred_done[0]),
                         "accepted_by_finite_mask": bool(accepted[0]),
                         "normalized_epistemic_disagreement": float(unc[0]),
+                        "next_tilt_norm":float(actual_nxt[3]),
+                        "next_azimuth_sin":float(actual_nxt[4]),
+                        "next_azimuth_cos":float(actual_nxt[5]),
                         "actual_next_power_norm": float(actual_nxt[2]),
                         "predicted_next_power_norm": float(pnext[2]),
                         "power_error_norm": float(pnext[2] - actual_nxt[2]),
@@ -305,8 +334,16 @@ def run_validation(args):
         pred_rewards = np.concatenate(external_pred_rewards, axis=0)
         total_std = np.concatenate(external_total_std, axis=0)
         actual_delta = next_states[:, :3] - states[:, :3]
-        predicted_delta, _a, _e, _total, disagreement = ensemble.predict_distribution(states, actions)
-        external_metrics = _channel_metrics(actual_delta, predicted_delta, total_std)
+        predicted_delta=np.concatenate(external_means,axis=0)
+        quantiles=np.concatenate(external_quantiles,axis=1)
+        disagreement=np.concatenate(external_disagreement,axis=0)
+        external_metrics = _channel_metrics(actual_delta, predicted_delta, total_std, quantiles)
+        from mbpo.audit_release import stratified_coverage
+        external_metrics['coverage_by_day_and_irradiance']=stratified_coverage(actual_delta,quantiles,next_states,external_meta)
+        external_metrics['conditional_power_rmse_norm_actual_next_weather']=conditional_power_rmse(ensemble,states,actions,next_states)
+        external_metrics['real_operational_envelope']=envelope_counts(next_states,env.unwrapped)
+        external_metrics['predicted_mean_operational_envelope']=envelope_counts(pred_next,env.unwrapped)
+        external_metrics['hierarchical_sample_operational_envelope']=external_sample_envelope
         reward_error = pred_rewards - rewards
         external_metrics["reward"] = {
             "rmse_kwh": _rmse(reward_error),
@@ -337,6 +374,8 @@ def run_validation(args):
                 r["normalized_epistemic_disagreement"] for r in counterfactual_rows])),
         }
 
+        counterfactual_metrics.update(action_metrics(counterfactual_rows))
+        counterfactual_metrics.update(equivalent_pose_metrics(counterfactual_rows))
         training_generation = _load_training_stats(run_dir / "episodes.csv")
         outdir.mkdir(parents=True, exist_ok=True)
         _csv(outdir / "internal_holdout_predictions.csv", internal_rows)
@@ -344,11 +383,14 @@ def run_validation(args):
         external_rows = _prediction_rows(
             actual_delta, predicted_delta, disagreement,
             [{"scenario_id": m["scenario_id"], "step": m["step"]}
-             for m in external_meta])
+             for m in external_meta], quantiles)
         _csv(outdir / "external_on_policy_predictions.csv", external_rows)
         summary = {
-            "validation_schema": 1,
+            "validation_schema": 2,
+            "hierarchical_diagnostic_samples":128,
+            "feasibility_policy":"diagnostic only; cell_min=-60 C, GHI residual allowance=200 W/m2, rho_max=1; not guaranteed support bounds",
             "checkpoint": str(checkpoint_path),
+            "loaded_policies":{"mbpo":{"sha256":loaded_sha,"seed":seed,"epoch":int(ckpt["epoch"])}},
             "seed": seed,
             "scenario_protocol_sha256": split["protocol_sha256"],
             "validation_scenario_ids": scenario_ids,
@@ -367,7 +409,7 @@ def run_validation(args):
                 "External on-policy metrics use the separate policy-validation scenario partition.",
                 "Counterfactual tests replay the same policy prefix under an identical fixed weather realization, then execute alternative actions in the real simulator.",
                 "The model predicts normalized DNI, DHI, and PV-power deltas; orientation, solar ephemeris and remaining horizon are reconstructed by the structured fake environment.",
-                "Predictive interval coverage uses the ensemble Gaussian-mixture moment-matched standard deviation; it is a diagnostic, not a guarantee of calibrated uncertainty.",
+                "Predictive coverage uses empirical quantiles of hierarchical clipped weather and power samples; total SD is not epistemic uncertainty. Ensemble disagreement remains the deterministic plug-in diagnostic.",
                 "This validates one-step prediction and action-conditioned reward reconstruction, not long-horizon free-running model accuracy.",
             ],
         }
@@ -414,6 +456,9 @@ def _render_plots(outdir: Path, external_rows: list[dict], counterfactual_rows: 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", required=True)
+    parser.add_argument("--expected-seed", type=int)
+    parser.add_argument("--expected-epoch", type=int)
+    parser.add_argument("--expected-sha")
     parser.add_argument("--checkpoint", default=None,
                         help="Trusted checkpoint; defaults to RUN_DIR/latest.pt")
     parser.add_argument("--outdir", default=None)

@@ -295,6 +295,13 @@ def finish_run_metadata(run_dir: str | Path, *, final_epoch: int, env_steps: int
                  "final_env_steps": int(env_steps),
                  "training_loop_seconds": float(training_seconds),
                  "finished_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    if status == 'completed' and (Path(run_dir)/'training_identity.json').is_file():
+        from mbpo.audit_support import sha_file
+        from mbpo.audit_release import completed_training_files, check_final_checkpoint
+        check_final_checkpoint(run_dir,data)
+        data['training_output_sha256']=completed_training_files(run_dir,data)
+        data['final_checkpoint_sha256']=sha_file(Path(run_dir)/'latest.pt')
+        data['training_identity_sha256']=sha_file(Path(run_dir)/'training_identity.json')
     write_json_atomic(path, data)
 
 
@@ -440,15 +447,52 @@ class PeriodicEvaluator:
         fields = list(rows[0])
         _write_csv_replace(self.references_path, fields, rows)
 
+    def _evaluation_manifest(self, epoch, env_steps):
+        from mbpo.audit_support import digest, sha_file
+        def rows_at(name):
+            with (self.eval_dir/name).open(newline='', encoding='utf-8') as stream:
+                return [r for r in csv.DictReader(stream) if int(r['epoch']) == int(epoch)]
+        days=rows_at('evaluation_days.csv'); ag=rows_at('evaluations.csv')
+        if len(ag)!=1 or len(days)!=len(self.validation_ids) or {r['scenario_id'] for r in days}!=set(self.validation_ids):
+            raise ValueError('Incomplete periodic evaluation grid')
+        for row in days+ag:
+            if int(row['env_steps'])!=int(env_steps) or row['algorithm']!=self.algorithm or int(row['seed'])!=self.seed:
+                raise ValueError('Periodic evaluation identity mismatch')
+        values=np.asarray([float(r['net_energy_kwh']) for r in days])
+        if not np.isfinite(values).all() or not np.isclose(values.mean(),float(ag[0]['mean_net_energy_kwh']),rtol=1e-8,atol=1e-10):
+            raise ValueError('Periodic aggregate mismatch')
+        snapshot=self.snapshot_dir/f"{self.algorithm}_seed{self.seed}_epoch{int(epoch):05d}.pt"
+        return {'epoch':int(epoch),'env_steps':int(env_steps),'days':digest(days),'aggregate':digest(ag),'snapshot_sha256':sha_file(snapshot)}
+
     def has_evaluation(self, *, epoch: int, env_steps: int) -> bool:
-        path = self.eval_dir / "evaluations.csv"
-        if not path.is_file():
+        from mbpo.audit_support import read_json
+        path=self.eval_dir/f'complete_{int(epoch):05d}.json'
+        try:
+            return read_json(path)==self._evaluation_manifest(epoch,env_steps)
+        except (OSError, ValueError, KeyError, TypeError):
             return False
-        with path.open(newline="", encoding="utf-8") as stream:
-            for row in csv.DictReader(stream):
-                if int(row.get("epoch", -1)) == int(epoch) and int(row.get("env_steps", -1)) == int(env_steps):
-                    return True
-        return False
+
+    def reconcile(self, epoch, horizon):
+        """Discard only artifacts beyond the committed checkpoint; verify earlier evaluations."""
+        for name in ('evaluation_days.csv','evaluations.csv'):
+            path=self.eval_dir/name
+            if not path.is_file(): continue
+            with path.open(newline='',encoding='utf-8') as stream:
+                reader=csv.DictReader(stream); fields=reader.fieldnames; rows=list(reader)
+            keep=[r for r in rows if int(r['epoch'])<=epoch]
+            if len(keep)!=len(rows):
+                import io
+                from mbpo.audit_support import atomic_bytes
+                output=io.StringIO(newline=''); writer=csv.DictWriter(output,fieldnames=fields)
+                writer.writeheader(); writer.writerows(keep); atomic_bytes(path,output.getvalue().encode())
+        for path in self.eval_dir.glob('complete_*.json'):
+            if int(path.stem.split('_')[-1])>epoch: path.unlink()
+        for path in self.snapshot_dir.glob(f'{self.algorithm}_seed{self.seed}_epoch*.pt'):
+            if int(path.stem.rsplit('epoch',1)[1])>epoch: path.unlink()
+        interval=int(self.protocol['evaluation_interval_episodes'])
+        for earlier in range(interval,epoch,interval):
+            if not self.has_evaluation(epoch=earlier,env_steps=earlier*horizon):
+                raise ValueError(f'Committed historical evaluation {earlier} is missing or corrupt; cannot reconstruct from latest policy')
 
     def evaluate(self, policy, *, epoch: int, env_steps: int, updates: int) -> dict:
         started = time.perf_counter()
@@ -457,14 +501,16 @@ class PeriodicEvaluator:
         if actor is not None:
             actor.eval()
         try:
+            from mbpo.audit_support import preserve_global_rng
             day_rows = []
-            for sid in self.validation_ids:
-                result = self._run_episode(sid, policy=policy, controller="policy")
-                day_rows.append({
-                    "algorithm": self.algorithm, "seed": self.seed,
-                    "epoch": int(epoch), "env_steps": int(env_steps),
-                    "scenario_id": sid, **result,
-                })
+            with preserve_global_rng():
+                for sid in self.validation_ids:
+                    result = self._run_episode(sid, policy=policy, controller="policy")
+                    day_rows.append({
+                        "algorithm": self.algorithm, "seed": self.seed,
+                        "epoch": int(epoch), "env_steps": int(env_steps),
+                        "scenario_id": sid, **result,
+                    })
         finally:
             if actor is not None and was_training:
                 actor.train()
@@ -491,6 +537,10 @@ class PeriodicEvaluator:
         _write_csv_replace(eval_dir / "evaluations.csv", aggregate_fields, [aggregate],
                            replace_key="epoch", replace_value=epoch)
         self._save_policy_snapshot(policy, epoch=epoch, env_steps=env_steps, updates=updates)
+        from mbpo.audit_support import atomic_json
+        from mbpo.audit_release import check_snapshot
+        check_snapshot(self.snapshot_dir/f"{self.algorithm}_seed{self.seed}_epoch{int(epoch):05d}.pt",self.algorithm,self.seed,epoch,env_steps,updates,self.config_sha256,self.protocol['protocol_sha256'],self.resolved_mdp_sha256)
+        atomic_json(self.eval_dir/f'complete_{int(epoch):05d}.json', self._evaluation_manifest(epoch,env_steps))
         return aggregate
 
     def _save_policy_snapshot(self, policy, *, epoch: int, env_steps: int, updates: int) -> Path:

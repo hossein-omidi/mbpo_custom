@@ -57,7 +57,7 @@ def render_learning(cfg,seeds,root,out):
     df=pd.read_csv(out/'sample_complexity_by_seed.csv');fig,ax=plt.subplots(figsize=(8,4.5))
     for alg,marker,offset in [('sac','o',-.08),('mbpo','s',.08)]:
         g=df[df.algorithm==alg];hit=g.reached_target.astype(str).str.lower()=='true';ax.scatter(g.loc[hit,'seed']+offset,g.loc[hit,'real_env_steps_to_target'],marker=marker,label=alg.upper()+' reached');ax.scatter(g.loc[~hit,'seed']+offset,g.loc[~hit,'last_evaluated_env_steps'],marker='^',facecolors='none',edgecolors='k',label=alg.upper()+' not reached (budget)')
-    ax.set(xlabel='Training seed',ylabel='Real transitions',xticks=seeds);ax.legend(fontsize=8);style(ax);figs.save(fig,'L02_target_with_censoring','How many real simulator steps are required, including runs that never reach target?','First sustained evaluated checkpoint; open triangles mark last evaluated budget, not reaching time.','sample_complexity_by_seed.csv')
+    ax.set(xlabel='Training seed',ylabel='Real transitions',xticks=seeds);ax.legend(fontsize=8);style(ax);figs.save(fig,'L02_target_with_censoring','How many real simulator steps are required, including runs that never reach target?','Confirmed attainment (end of sustained sequence); open triangles mark last evaluated budget, not reaching time.','sample_complexity_by_seed.csv')
     fig,axes=plt.subplots(1,2,figsize=(10,4.4)); compute=pd.read_csv(out/'computational_cost_by_seed.csv')
     for ax,table,field,label in [(axes[0],df,'auc_mean_net_kwh_per_episode','Mean learning-curve AUC (kWh/day)'),(axes[1],compute,'measured_training_plus_evaluation_seconds','Logged training + evaluation time (s)')]:
         q=table.pivot(index='seed',columns='algorithm',values=field).loc[seeds,['sac','mbpo']];finite(q.to_numpy())
@@ -78,10 +78,11 @@ def render_learning(cfg,seeds,root,out):
 def render_model(cfg,seeds,root,out,realization=0):
     from PV_experiments.evaluate import evaluation_output,_provenance,_require_matching_provenance,_verify_model_validation_summary
     from PV_experiments.core import run_path
-    figs=Figures(out); rows=[];cf=[];sources={}
+    figs=Figures(out); rows=[];cf=[];sources={}; control_rows=[]
     for seed in seeds:
         path=evaluation_output(cfg,'model',seed,root)/f'realization{realization}';identity=_provenance(cfg,'model',seed,root,realization_id=realization);_require_matching_provenance(path,identity);_verify_model_validation_summary(path/'model_validation_summary.json',cfg,seed,realization,identity['scenario_protocol_sha256'],root)
         d=read_json(path/'model_validation_summary.json'); p=path/'external_on_policy_predictions.csv';f=pd.read_csv(p)
+        control_rows.append(dict(seed=seed,**d['counterfactual_action_test'],**{'train_'+k:v for k,v in d['training_synthetic_data_accounting'].items() if isinstance(v,(int,float)) or v is None}))
         if set(d['validation_scenario_ids'])!=set(read_json(run_path(cfg,'mbpo',seed,root)/'scenario_split.json')['validation_ids']):raise ValueError('Model diagnostics do not cover the frozen validation partition')
         if set(f.scenario_id.astype(str))!=set(d['validation_scenario_ids']) or f.duplicated(['scenario_id','step']).any() or not (f.groupby('scenario_id').step.apply(lambda x:set(x)==set(range(195)))).all():raise ValueError('Incomplete model validation trajectories')
         for ch in ('dni_norm','dhi_norm','power_norm'):
@@ -92,6 +93,7 @@ def render_model(cfg,seeds,root,out,realization=0):
         err=finite(ff.reward_error_kwh);check_close([np.sqrt(np.mean(err**2))],[d['counterfactual_action_test']['reward_rmse_kwh']],'Counterfactual reward RMSE');ff['seed']=seed;cf.append(ff)
         for fn in ('model_validation_summary.json','external_on_policy_predictions.csv','counterfactual_predictions.csv','manager_provenance.json'):sources[f'seed{seed}/{fn}']=sha(path/fn)
     table=pd.DataFrame(rows);save_csv(out,'model_quality_by_seed.csv',table);cf=pd.concat(cf);save_csv(out,'counterfactual_results.csv',cf)
+    save_csv(out,'model_control_diagnostics_by_seed.csv',control_rows)
     fig,axes=plt.subplots(1,2,figsize=(10,4.5)); channels=['dni_norm','dhi_norm','power_norm'];x=np.arange(3)
     for field,off,label in [('rmse',-.15,'Ensemble'),('persistence_rmse',.15,'Persistence')]:
         t=table.groupby('channel')[field].agg(['mean','std']).loc[channels];axes[0].bar(x+off,t['mean'],.28,label=label); 

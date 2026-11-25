@@ -2,6 +2,7 @@
 # PVWATT_DEV_REPAIR_V3
 """Standalone finite-horizon SAC trainer; never calls a learned dynamics model."""
 from __future__ import annotations
+from mbpo.audit_support import bind_run, episode_commit, recover_history, envelope_counts, sha_file
 import csv
 import hashlib
 import json
@@ -92,8 +93,11 @@ class SACTrainer:
                 resolved_mdp=self.env.resolved_mdp, protocol=self.scenario_protocol,
                 horizon=self.env.horizon, resume=resume is not None)
             self.epoch, self.env_steps = 0, 0
+            bind_run(self.outdir, resume is not None, self.env.resolved_mdp)
             if resume is not None:
                 self.load(resume)
+            if resume is None:
+                self.save()  # recoverable epoch-zero boundary
         except Exception:
             self.env.close()
             if self.eval_env is not None:
@@ -158,6 +162,9 @@ class SACTrainer:
         data = {
             'schema': 2, 'hash': config_hash(self.cfg), 'seed': self.seed,
             'epoch': self.epoch, 'env_steps': self.env_steps,
+            'algorithm': 'sac',
+            'episode_commit': episode_commit(self._episode_path, self.epoch, self.env_steps, self.env.horizon, updates=self.agent.updates),
+            'training_identity_sha256': sha_file(self.outdir / 'training_identity.json'),
             'scenario_protocol_sha256': self.scenario_protocol['protocol_sha256'],
             'scenario_rng': self.scenario_rng.bit_generator.state,
             'exploration_rng': self.exploration_rng.bit_generator.state,
@@ -172,8 +179,9 @@ class SACTrainer:
         }
         dest = self.outdir / name
         tmp = dest.with_suffix('.tmp')
-        torch.save(data, tmp)
-        os.replace(tmp, dest)
+        with tmp.open('wb') as f:
+            torch.save(data,f); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp,dest)
         return dest
 
     def load(self, path):
@@ -186,6 +194,11 @@ class SACTrainer:
             raise ValueError('Saved MDP simulator defaults differ from current environment')
         if ckpt.get('scenario_protocol_sha256') != self.scenario_protocol['protocol_sha256']:
             raise ValueError('Checkpoint scenario split differs from current protocol')
+        if ckpt.get('training_identity_sha256') != sha_file(self.outdir / 'training_identity.json'):
+            raise ValueError('Checkpoint training identity mismatch')
+        from mbpo.audit_release import checkpoint_identity
+        checkpoint_identity(ckpt,'sac',self.seed,ckpt['epoch'],ckpt['env_steps'])
+        if ckpt['env_steps']!=ckpt['epoch']*self.env.horizon: raise ValueError('Checkpoint episode/interaction mismatch')
         self.agent.load_state_dict(ckpt['agent'])
         self.buffer.load_state_dict(ckpt['replay'])
         self.epoch, self.env_steps = int(ckpt['epoch']), int(ckpt['env_steps'])
@@ -201,12 +214,9 @@ class SACTrainer:
             rng.set_state(ckpt['environment_rng'])
         else:
             rng.bit_generator.state = ckpt['environment_rng']
-        if not self._episode_path.exists():
-            raise FileNotFoundError('Cannot resume checkpoint without episode history CSV')
-        with self._episode_path.open(newline='', encoding='utf-8') as f:
-            rows = list(csv.DictReader(f))
-        if len(rows) != self.epoch or (rows and int(rows[-1]['env_steps']) != self.env_steps):
-            raise ValueError('Checkpoint epoch/env_steps do not match episode CSV')
+        recover_history(self._episode_path, ckpt.get('episode_commit'), self.epoch,
+                        self.env_steps, self.env.horizon, updates=self.agent.updates)
+        self.evaluator.reconcile(self.epoch, self.env.horizon)
 
     def train(self, epochs=None):
         until = self.cfg.algo['epochs'] if epochs is None else int(epochs)
@@ -217,7 +227,7 @@ class SACTrainer:
         eval_interval = int(self.cfg.protocol['evaluation_interval_episodes'])
         checkpoint_interval = int(self.cfg.algo['checkpoint_interval'])
         try:
-            if (self.epoch > 0 and self.epoch % eval_interval == 0
+            if (self.epoch > 0 and (self.epoch % eval_interval == 0 or self.epoch == until)
                     and not self.evaluator.has_evaluation(epoch=self.epoch, env_steps=self.env_steps)):
                 self.evaluator.evaluate(self.agent, epoch=self.epoch,
                                         env_steps=self.env_steps, updates=self.agent.updates)

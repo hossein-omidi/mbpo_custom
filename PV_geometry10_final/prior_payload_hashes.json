@@ -1,0 +1,6 @@
+{
+  "GEOMETRY10_AUDIT.md": "cc35e50f6c708054c21175bf96c3a8a557fb8eb4",
+  "geometry10_tests/test_audit_integration.py": "4e696f6d92c58e9e94d03fe1d09fd3052fc29787",
+  "geometry10_tests/test_audit_support.py": "b8ebff5fe9d46ddd2f5faa1ab69d81006807707a",
+  "mbpo/audit_support.py": "47745464b11925893d992b227f5da057f7237e25"
+}

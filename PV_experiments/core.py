@@ -5,6 +5,7 @@ performed exclusively through the existing project workflows. No backups,
 network access, Git commands, or implicit replacement of existing artifacts.
 """
 from __future__ import annotations
+from mbpo.audit_support import runtime_identity, dataset_identity, exclusive_lock, digest
 from mbpo.geometry10 import MODE, STATE_DIM
 
 import hashlib
@@ -102,6 +103,8 @@ def load_experiment(name:str,root:Path=PROJECT_ROOT):
     frozen=base_path(name,root)/'uncertainty_spec.json'
     if not frozen.is_file() or sha256(canonical(read_json(frozen)))!=cfg.get('uncertainty_sha256'):
         raise ValueError('Frozen uncertainty specification changed or was removed. Never silently mix experimental assumptions.')
+    if cfg.get('dataset_identity') is not None and cfg['dataset_identity']!=dataset_identity(root):
+        raise ValueError('Current data differ from frozen experiment')
     return cfg
 
 
@@ -113,6 +116,8 @@ def initialize_experiment(name:str, *, seeds:list[int] | None=None, epochs:int |
     requested=sorted(seeds) if seeds is not None else None
     if path.exists():
         cfg=load_experiment(name,root)
+        if not dry_run and (cfg.get('training_runtime')!=runtime_identity(root) or cfg.get('dataset_identity')!=dataset_identity(root)):
+            raise ValueError('Experiment source/dataset changed or predates audit patch; use a new experiment name')
         if device is not None and cfg['device']!=device:
             raise ValueError('Device differs from frozen experiment configuration; use a new experiment name')
         for field,value in [('epochs',epochs),('model_epochs',model_epochs),
@@ -154,6 +159,8 @@ def initialize_experiment(name:str, *, seeds:list[int] | None=None, epochs:int |
              'model_validation':'MBPO_workspace.workflows.06_model_validation'},
     }
     if not dry_run:
+        data['training_runtime']=runtime_identity(root)
+        data['dataset_identity']=dataset_identity(root)
         dest=base_path(name,root)
         dest.mkdir(parents=True,exist_ok=True)
         specpath=dest/'uncertainty_spec.json'
@@ -191,7 +198,21 @@ def inspect_training_run(cfg,algorithm,seed,root=PROJECT_ROOT):
         raise ValueError(f'Run metadata identity mismatch: {p}')
     if meta.get('observation_mode')!=MODE or meta.get('state_dim')!=STATE_DIM:
         raise ValueError(f'Run uses an incompatible observation contract: {d}. Use a fresh experiment name.')
+    identity_path=d/'training_identity.json'
+    if cfg.get('training_runtime') is not None:
+        identity=read_json(identity_path) if identity_path.is_file() else None
+        if identity is None or identity.get('runtime')!=cfg['training_runtime'] or any(identity.get('physics',{}).get(k)!=v for k,v in cfg['dataset_identity'].items()):
+            raise ValueError(f'Run source/dataset identity differs from frozen experiment: {d}')
     if meta.get('training_status')=='completed':
+        if cfg.get('training_runtime') is not None:
+            from mbpo.audit_support import sha_file
+            if meta.get('final_checkpoint_sha256')!=sha_file(d/'latest.pt') or meta.get('training_identity_sha256')!=sha_file(identity_path):
+                raise ValueError(f'Completed checkpoint or training identity changed: {d}')
+            from mbpo.audit_release import completed_training_files
+            if meta.get('training_output_sha256')!=completed_training_files(d,meta):
+                raise ValueError(f'Completed training artifacts changed: {d}')
+            if meta.get('final_env_steps')!=meta.get('horizon')*cfg['epochs']:
+                raise ValueError(f'Completed run interaction budget differs: {d}')
         if meta.get('final_epoch')!=cfg['epochs']:
             raise ValueError(f'Completed run has unexpected training budget: {d}')
         for file in ('latest.pt','scenario_split.json','episodes.csv','config.json'):
@@ -243,17 +264,25 @@ def execute(cfg,kind,command,*,root=PROJECT_ROOT,seed=None,dry_run=False):
     log.parent.mkdir(parents=True,exist_ok=True)
     key=log.stem
     job_path=directory/'jobs'/f'{key}.json'
-    if job_path.exists() and read_json(job_path).get('status')=='running':
-        raise RuntimeError(f'Existing job is marked running: {job_path}. Inspect it before starting a duplicate.')
+    with exclusive_lock(job_path.with_suffix('.lock')) as lock_fd:
+        return _execute_locked(cfg,kind,command,root,seed,directory,log,job_path,lock_fd)
+
+
+def _execute_locked(cfg,kind,command,root,seed,directory,log,job_path,lock_fd):
     status={'schema':SCHEMA,'kind':kind,'seed':seed,'experiment':cfg['name'],
             'command':command,'status':'running','started_utc':utcnow(),
             'log_relative_path':log.relative_to(directory).as_posix()}
     atomic_json(job_path,status)
     proc=None
     try:
-        with log.open('w',encoding='utf-8') as f:
+        with log.open('a',encoding='utf-8') as f:
+            f.write('\n--- managed invocation ---\n'); f.flush()
+            child_env=os.environ.copy()
+            if kind.startswith('train_') and cfg.get('training_runtime') is not None:
+                child_env['PV_AUDIT_EXPECTED_RUNTIME']=digest(cfg['training_runtime'])
+                child_env['PV_AUDIT_EXPECTED_DATASET']=canonical(cfg['dataset_identity'])
             proc=subprocess.Popen(command,cwd=root,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-                                  text=True,bufsize=1)
+                                  text=True,bufsize=1,pass_fds=(lock_fd,),env=child_env)
             assert proc.stdout is not None
             for line in proc.stdout:
                 print(line,end='',flush=True)

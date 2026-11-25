@@ -31,8 +31,20 @@ def one_episode(env,sid,rid):
     if not signature or signature=='None':raise AssertionError('Missing weather fingerprint')
     baseline=u.weather_profile.copy(deep=True)
     power=[];gross=[];cost=[];clock=[];albedo=[]
+    from mbpo.audit_support import envelope_counts
+    checked=violations=saturated=0
+    from mbpo.geometry10 import pose_transition
+    from mbpo.env.pvlib_physics import actuator_movement_cost_kwh
+    moving_steps=0
     for t in range(env.horizon):
-        obs,reward,done,info=env.step(np.zeros(2,dtype=np.float32))
+        action=np.array([.7,.8] if t%4==0 else [-.5,-.6] if t%4==1 else [0.,0.],dtype=np.float32)
+        tilt,az,tau,dt,da,terminal=pose_transition(obs[None,:],action[None,:],u.max_delta_tilt,u.max_delta_azimuth,env.horizon)
+        obs,reward,done,info=env.step(action)
+        if not np.allclose(obs[3:6],np.r_[tilt,az[0]],rtol=0,atol=4e-5) or not np.isclose(obs[-1],tau[0],atol=1e-7) or bool(done)!=bool(terminal[0]):
+            raise AssertionError('Scripted movement pose/horizon parity failed')
+        expected_cost=actuator_movement_cost_kwh(float(dt[0]),float(da[0]),actuator_power_w=u.actuator_power_w,slew_rate_tilt_deg_s=u.slew_rate_tilt_deg_s,slew_rate_azimuth_deg_s=u.slew_rate_azimuth_deg_s,scale=u.movement_penalty)
+        if not np.isclose(float(info['movement_cost']),expected_cost,rtol=0,atol=1e-8):raise AssertionError('Scripted executed-motion cost mismatch')
+        moving_steps+=int(abs(dt[0])+abs(da[0])>1e-6)
         expected=u.times[t+1]
         actual=pd.Timestamp(info['timestamp_utc_iso'])
         if expected!=actual or actual.utcoffset().total_seconds()!=0:
@@ -59,6 +71,10 @@ def one_episode(env,sid,rid):
         if not np.allclose(obs[SOLAR],solar_features(info['solar_zenith_deg'],info['solar_azimuth_deg']),atol=1e-6,rtol=0):
             raise AssertionError('Observed solar geometry disagrees with physical timestamp')
         power.append(P);gross.append(E);cost.append(C);clock.append(actual);albedo.append(info['surface_albedo'])
+        if max(float(info['dni_wm2']),float(info['dhi_wm2']))>=2000.: saturated+=1
+        else:
+            counts=envelope_counts(obs[None,:],u)
+            checked+=counts['envelope_checked']; violations+=counts['envelope_violations']
     if len(clock)!=195 or str(clock[-1].date())==str(clock[0].date()):
         raise AssertionError('195-step midnight rollover was not observed')
     if not baseline.equals(u.weather_profile):
@@ -73,7 +89,7 @@ def one_episode(env,sid,rid):
         'total_move_kwh':float(sum(cost)),
         'total_net_kwh':float(sum(gross)-sum(cost)),
         'power_sha256':hashlib.sha256(np.asarray(power,dtype='<f8').tobytes()).hexdigest(),
-        'sample_count':len(power),
+        'scripted_moving_steps':moving_steps,'sample_count':len(power),'real_envelope_checked':checked,'real_envelope_violations':violations,'real_irradiance_saturated':saturated,
         'max_closure_residual_wm2':float(u._weather_uncertainty_diagnostics.get('max_post_closure_residual_wm2',0)),
         'projection_count':int(u._weather_uncertainty_diagnostics.get('clip_count',0)),
     }
@@ -115,7 +131,8 @@ def main(argv=None):
         second=one_episode(env,sid,0)
         other=one_episode(env,sid,1)
     finally:env.close()
-    for field in ('weather_profile_sha256','power_sha256','total_gross_kwh','total_net_kwh'):
+    if first['scripted_moving_steps']<=0:raise AssertionError('No nonzero movement exercised')
+    for field in ('weather_profile_sha256','power_sha256','total_gross_kwh','total_net_kwh','scripted_moving_steps'):
         if first[field]!=second[field]:
             raise AssertionError('Fixed-day fixed-draw Monte Carlo replay is not deterministic: '+field)
     if first['weather_profile_sha256']==other['weather_profile_sha256']:
@@ -148,7 +165,10 @@ def main(argv=None):
         'draw_zero':first,'draw_one':other,
         'limitations':'This checks the physical simulator and observed trajectory wiring; not SAC/MBPO learning or field accuracy'}
     out=Path(args.out);out.parent.mkdir(parents=True,exist_ok=True)
-    out.write_text(json.dumps(report,indent=2,allow_nan=False),encoding='utf-8')
+    from mbpo.audit_support import runtime_identity,dataset_identity,atomic_json
+    from PV_experiments.core import canonical,sha256
+    report['audit_identity']={'runtime':runtime_identity(repo_root,'physical'),'dataset':dataset_identity(repo_root),'uncertainty':sha256(canonical(json.loads(Path(args.uncertainty_spec).read_text(encoding='utf-8'))))}
+    atomic_json(out,report)
     print('PASS: 195 post-action 5-minute UTC transitions; replay, physics and net reward validated')
     print('Audit:',out.resolve())
 

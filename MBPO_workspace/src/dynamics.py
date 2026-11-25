@@ -277,33 +277,42 @@ class DynamicsEnsemble:
                 total.astype(np.float32), score.astype(np.float32))
 
     @torch.no_grad()
-    def predict_delta(self, states, actions, stochastic=True):
+    def predict_delta(self, states, actions, stochastic=True, *, rng=None, record=True):
         """One-step weather first, then response; action never controls weather."""
         if not self.fitted:
             raise RuntimeError('Dynamics ensemble not fitted')
         states, actions = self._check(states, actions)
+        rng = self.rng if rng is None else rng
         wmu, wsd = self._members(self.weather_nets, self.weather_elites,
                                  self._weather_features(states),
                                  self.weather_xmean, self.weather_xstd,
                                  self.weather_ymean, self.weather_ystd)
         if stochastic:
-            ix = self.rng.integers(len(self.weather_elites), size=len(states))
+            ix = rng.integers(len(self.weather_elites), size=len(states))
             ii = np.arange(len(states))
-            dw = wmu[ix, ii] + wsd[ix, ii]*self.rng.normal(size=(len(states), 2))
+            dw = wmu[ix, ii] + wsd[ix, ii]*rng.normal(size=(len(states), 2))
         else:
             dw = wmu.mean(0)
-        next_weather = np.clip(states[:, :2]+dw, 0., 1.)
+        raw_weather = states[:, :2]+dw
+        if not np.isfinite(raw_weather).all(): raise FloatingPointError('Nonfinite raw weather sample')
+        next_weather = np.clip(raw_weather, 0., 1.)
         dw = next_weather - states[:, :2]
         pmu, psd = self._members(self.power_nets, self.power_elites,
                                  self._power_features(states, actions, next_weather),
                                  self.power_xmean, self.power_xstd,
                                  self.power_ymean, self.power_ystd)
         if stochastic:
-            ix = self.rng.integers(len(self.power_elites), size=len(states))
-            dp = pmu[ix, np.arange(len(states))] + psd[ix, np.arange(len(states))]*self.rng.normal(size=(len(states), 1))
+            ix = rng.integers(len(self.power_elites), size=len(states))
+            dp = pmu[ix, np.arange(len(states))] + psd[ix, np.arange(len(states))]*rng.normal(size=(len(states), 1))
         else:
             dp = pmu.mean(0)
-        dp = np.clip(states[:, 2:3]+dp, 0., 1.)-states[:, 2:3]
+        raw_power = states[:, 2:3]+dp
+        if not np.isfinite(raw_power).all(): raise FloatingPointError('Nonfinite raw power sample')
+        dp = np.clip(raw_power, 0., 1.)-states[:, 2:3]
+        if record:
+            self.last_sample_diagnostics = {
+                'raw_weather_outside':int(((raw_weather<0)|(raw_weather>1)).any(axis=1).sum()),
+                'raw_power_outside':int(((raw_power<0)|(raw_power>1)).any(axis=1).sum())}
         score = np.sqrt((2.0*np.mean((wmu.std(0)/self.weather_ystd[None, :])**2,axis=1)
                           + (pmu.std(0)[:,0]/self.power_ystd[0])**2)/3.0)
         return np.concatenate((dw, dp), axis=1).astype(np.float32), score.astype(np.float32)
@@ -363,6 +372,8 @@ class StructuredFakeEnv:
     def __init__(self, ensemble, reference_env):
         self.ensemble = ensemble
         self.solar_context = SolarContext(reference_env)
+        self.reference_physics = reference_env.unwrapped
+        self.last_feasibility = {}
         e = reference_env.unwrapped
         self.max_delta_tilt = float(e.max_delta_tilt)
         self.max_delta_azimuth = float(e.max_delta_azimuth)
@@ -427,6 +438,11 @@ class StructuredFakeEnv:
         reward=(gross-movement).astype(np.float32)
         mask=finite_prediction & np.isfinite(nxt).all(axis=1)&np.isfinite(reward)
         if np.any(mask): check_batch(nxt[mask])
+        from mbpo.audit_support import envelope_counts
+        e = self.reference_physics
+        self.last_feasibility = dict(getattr(self.ensemble,'last_sample_diagnostics',{}))
+        if all(hasattr(e,k) for k in ('area','efficiency','power_model')) and np.any(mask):
+            self.last_feasibility.update(envelope_counts(nxt[mask],e))
         if max_std is not None:
             if not math.isfinite(float(max_std)) or float(max_std)<=0:
                 raise ValueError('Invalid epistemic cutoff')

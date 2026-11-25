@@ -110,7 +110,7 @@ def collect(cfg,split,data,stage,scope,root,out):
         if set(files)!=expected or final.get('files')!={k:v['sha256'] for k,v in files.items()}:raise ValueError('Completed collection manifest mismatch')
         print('Verified completed trajectory collection; no replay needed.');return
     for si,seed in enumerate(data['seeds']):
-        agents={m:mc.load_policy(phys,m,run_path(cfg,m,seed,root)/'latest.pt',cfg['device'],expected_protocol_sha256=split['protocol_sha256']) for m in ('sac','mbpo')}
+        agents={m:mc.load_policy(phys,m,run_path(cfg,m,seed,root)/'latest.pt',cfg['device'],expected_protocol_sha256=split['protocol_sha256'],expected_seed=seed,expected_epoch=cfg['epochs']) for m in ('sac','mbpo')}
         env=SACEnvironment(phys.sac.eval_env)
         try:
             if env.horizon!=195 or env.unwrapped.randomize_initial_orientation:raise ValueError('Unexpected evaluation horizon or random initial pose')
