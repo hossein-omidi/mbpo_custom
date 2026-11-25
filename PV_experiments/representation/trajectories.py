@@ -4,7 +4,7 @@ import importlib,os,tempfile
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from .statistics import METHODS,ORACLE,LABELS,COLORS,clock_grid,check_close,finite,from_day_moments,circular_stats,season
+from .statistics import METHODS,ORACLE,LABELS,COLORS,clock_grid,check_close,finite,from_day_moments,circular_stats,season,trajectory_clock,cumulative_plot_series
 from .common import Figures,save_csv,write_json,atomic_json,read_json,sha,style,line,plt
 
 FIELDS=('power_w','gross_kwh','movement_kwh','net_kwh','tilt_deg','azimuth_deg','action_tilt','action_azimuth','delta_tilt_deg','delta_azimuth_deg','poa_wm2','cell_temp_c')
@@ -189,7 +189,7 @@ def render_rich(directory,data,stage,scope,out):
         gap_heat.append((raw[:,:,METHODS.index('mbpo'),:,0]-raw[:,:,METHODS.index('sac'),:,0]).mean(axis=(0,1)))
         # Actual path integrals calculated BEFORE moments, retaining temporal covariance.
         for mi,method in enumerate(METHODS):
-            p=raw[:,:,mi];vals={'power_w':p[:,:, :,0],'cumulative_gross_kwh':np.cumsum(p[:,:,:,1],axis=-1),'cumulative_net_kwh':np.cumsum(p[:,:,:,3],axis=-1),'cumulative_actuator_kwh':np.cumsum(p[:,:,:,2],axis=-1),'tilt_deg':p[:,:,:,4],'action_tilt':p[:,:,:,6],'action_azimuth':p[:,:,:,7]}
+            p=raw[:,:,mi];vals={'power_w':p[:,:, :,0],'cumulative_gross_kwh':np.cumsum(p[:,:,:,1],axis=-1),'cumulative_net_kwh':np.cumsum(p[:,:,:,3],axis=-1),'cumulative_actuator_kwh':np.cumsum(p[:,:,:,2],axis=-1),'tilt_deg':p[:,:,:,4],'action_tilt':p[:,:,:,6],'action_azimuth':p[:,:,:,7],'abs_action_tilt':np.abs(p[:,:,:,6]),'abs_action_azimuth':np.abs(p[:,:,:,7]),'abs_delta_tilt_deg':np.abs(p[:,:,:,8]),'abs_delta_azimuth_deg':np.abs(p[:,:,:,9])}
             for key,a in vals.items():moments.setdefault((method,key),[]).append((a.mean(axis=1),a.std(axis=1,ddof=1)))
             az,r=circular_stats(p[:,:,:,5],axis=(0,1));circ.extend(dict(scenario_id=sid,method=method,step=i+1,circular_mean_azimuth_deg=v,resultant_length=r[i]) for i,v in enumerate(az))
             hist,_,_=np.histogram2d(p[:,:,:,4].ravel(),p[:,:,:,5].ravel(),bins=(np.linspace(0,90,19),np.linspace(0,360,37)));occupancy[method]+=hist
@@ -214,25 +214,37 @@ def render_rich(directory,data,stage,scope,out):
             for mi,method in enumerate(METHODS):
                 p=raw[:,:,mi]
                 for ax,field in zip(axes,(6,7)):
-                    a=p[:,:,:,field].reshape(S*M,195);line(ax,clock,a.mean(axis=0),method,a.std(axis=0,ddof=0))
-            axes[0].set_ylabel('Normalized tilt command');axes[1].set(ylabel='Normalized azimuth command',xlabel='UTC hour (unwrapped)');axes[0].legend(ncol=2,fontsize=8)
+                    a=p[:,:,:,field].reshape(S*M,195);line(ax,trajectory_clock('action_tilt')[0],a.mean(axis=0),method,a.std(axis=0,ddof=0))
+            axes[0].set_ylabel('Normalized tilt command');axes[1].set(ylabel='Normalized azimuth command',xlabel='Decision UTC hour (unwrapped)');axes[0].legend(ncol=2,fontsize=8)
             for ax in axes:style(ax)
-            fig.suptitle(f'{sid} — signed commands, mean ± empirical seed/draw SD');figs.save(fig,f'R02_daily_actions_{sid}','What are the signed control commands during the day?','Same historical day; equal seed/draw empirical mean ± population SD. Commands are increments, not angles.',f'{sid}.npz')
+            fig.suptitle(f'{sid} — signed commands, mean ± empirical seed/draw SD');figs.save(fig,f'R02_daily_actions_{sid}','What are the signed control commands during the day?','Same historical day; equal seed/draw empirical mean ± population SD. Commands timestamped at decision time; normalized requested increments, not executed angles.',f'{sid}.npz')
     # Compact sufficient statistics over all collected historical days.
     summary={}; rows=[]
     for (method,key),pairs in moments.items():
-        mu=np.stack([p[0] for p in pairs],axis=1); sd=np.stack([p[1] for p in pairs],axis=1);s=from_day_moments(mu,sd,M);summary[(method,key)]=s;rows.extend(dict(method=method,quantity=key,step=i+1,utc_hour_unwrapped=clock[i],n_days=len(days),**{k:v[i] for k,v in s.items()}) for i in range(195))
+        mu=np.stack([p[0] for p in pairs],axis=1); sd=np.stack([p[1] for p in pairs],axis=1);s=from_day_moments(mu,sd,M);summary[(method,key)]=s; times,basis=trajectory_clock(key);rows.extend(dict(method=method,quantity=key,step=i+1,utc_hour_unwrapped=times[i],clock_basis=basis,n_days=len(days),**{k:v[i] for k,v in s.items()}) for i in range(195))
     save_csv(out,'rich_curve_statistics.csv',rows);save_csv(out,'circular_azimuth_statistics.csv',circ);eff=pd.DataFrame(effort);save_csv(out,'daily_effort_and_oracle.csv',eff)
     for names,keys,filename,question in [((METHODS+(ORACLE,)),('cumulative_gross_kwh','cumulative_net_kwh','cumulative_actuator_kwh'),'R03_cumulative_energy','Where during the day do gross gains and movement costs accumulate?'),(('mbpo_minus_sac','mbpo_minus_sun_slew_limited'),('power_difference_w','cumulative_net_difference_kwh'),'R04_paired_response','When does MBPO gain or lose relative to competing feasible controllers?'),(METHODS,('oracle_gross_power_gap_w',),'R05_oracle_gap','How far are feasible controllers from instantaneous gross generation capacity?')]:
         fig,axes=plt.subplots(len(keys),1,figsize=(9,3.3*len(keys)),sharex=True,squeeze=False)
         for ax,key in zip(axes[:,0],keys):
             for name in names:
                 if (name,key) not in summary:continue
-                z=summary[(name,key)];line(ax,clock,z['mean'],name,z['sd_total'])
+                z=summary[(name,key)]; tx,mu,sd=clock,z['mean'],z['sd_total']
+                if key.startswith('cumulative_'):tx,mu,sd=cumulative_plot_series(tx,mu,sd)
+                line(ax,tx,mu,name,sd)
             ax.set_ylabel(key.replace('_',' '));ax.legend(fontsize=8,ncol=2);style(ax)
             if 'difference' in key:ax.axhline(0,color='black',lw=.7)
         axes[-1,0].set_xlabel('UTC hour (unwrapped)');figset_title=f'{scope.capitalize()} scope: {len(days)} days — mean ± empirical mixture SD';fig.suptitle(figset_title)
-        figs.save(fig,filename,question,'Mean ± empirical mixture SD across seed/day/weather; pairing and path integration precede aggregation. No oracle net/cost.', 'rich_curve_statistics.csv')
+        figs.save(fig,filename,question,'Mean ± empirical mixture SD across seed/day/weather; pairing and path integration precede aggregation. Cumulative curves begin at deterministic zero (plot only). No oracle net/cost.', 'rich_curve_statistics.csv')
+    # Magnitudes expose cancellation in signed command averages. Executed motion
+    # is shown at the resulting response timestamp, not assumed equal to request.
+    fig,axes=plt.subplots(2,2,figsize=(10,7),sharex=False)
+    for ax,key,label in zip(axes.flat,('abs_action_tilt','abs_action_azimuth','abs_delta_tilt_deg','abs_delta_azimuth_deg'),('Absolute tilt command','Absolute azimuth command','Absolute executed tilt (deg)','Absolute executed azimuth (deg)')):
+        tx,basis=trajectory_clock(key)
+        for name in METHODS:
+            z=summary[(name,key)];line(ax,tx,z['mean'],name,z['sd_total'])
+        ax.set(ylabel=label,xlabel=f'{basis.capitalize()} UTC hour (unwrapped)');style(ax)
+    axes[0,0].legend(ncol=2,fontsize=7);fig.suptitle(f'{scope.capitalize()} scope: {len(days)} days — mean ± empirical mixture SD')
+    figs.save(fig,'R10_motion_magnitudes','How much motion is requested and actually executed at each step?','Absolute value before averaging; empirical mixture SD, not a CI. Commands at decision time, executed movements at response time.','rich_curve_statistics.csv')
     fig,axes=plt.subplots(2,2,figsize=(10,7),sharex=True,sharey=True)
     for ax,method in zip(axes.flat,METHODS):
         h=occupancy[method];h=h/h.sum();im=ax.imshow(h,origin='lower',aspect='auto',interpolation='nearest',extent=[0,360,0,90],vmin=0,vmax=max((a/a.sum()).max() for a in occupancy.values()),cmap='viridis');ax.set_title(LABELS[method]);ax.set(xlabel='Azimuth (deg)',ylabel='Tilt (deg)');save_csv(out,f'occupancy_{method}.csv',pd.DataFrame(h))

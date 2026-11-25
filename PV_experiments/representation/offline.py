@@ -2,7 +2,7 @@
 from __future__ import annotations
 import numpy as np
 import pandas as pd
-from .statistics import METHODS,PAIRS,LABELS,COLORS,equal_mixture,from_day_moments,clock_grid,check_close,season,finite
+from .statistics import METHODS,PAIRS,LABELS,COLORS,equal_mixture,from_day_moments,clock_grid,check_close,season,finite,daily_spread
 from .common import Figures,style,line,save_csv,sha,read_json,write_json,plt
 
 
@@ -75,9 +75,9 @@ def daily_statistics(data,group,indices):
     x=data['daily'][:,indices]; rows=[]
     for mi,m in enumerate(METHODS):
         for fi,field in enumerate(('gross_kwh','movement_kwh','net_kwh')):
-            z=equal_mixture(x[:,:,:,mi,fi]); rows.append(dict(group=group,method=m,quantity=field,n_days=len(indices),n_seeds=len(x),n_draws=x.shape[2],**{k:float(v) for k,v in z.items()}))
+            values=x[:,:,:,mi,fi]; z=equal_mixture(values); rows.append(dict(group=group,method=m,quantity=field,n_days=len(indices),n_seeds=len(x),n_draws=x.shape[2],**{k:float(v) for k,v in z.items()},**daily_spread(values)))
     for a,b in PAIRS:
-        z=equal_mixture(x[:,:,:,METHODS.index(a),2]-x[:,:,:,METHODS.index(b),2]);rows.append(dict(group=group,method=f'{a}_minus_{b}',quantity='paired_net_kwh',n_days=len(indices),n_seeds=len(x),n_draws=x.shape[2],**{k:float(v) for k,v in z.items()}))
+        values=x[:,:,:,METHODS.index(a),2]-x[:,:,:,METHODS.index(b),2]; z=equal_mixture(values);rows.append(dict(group=group,method=f'{a}_minus_{b}',quantity='paired_net_kwh',n_days=len(indices),n_seeds=len(x),n_draws=x.shape[2],**{k:float(v) for k,v in z.items()},**daily_spread(values)))
     return rows
 
 
@@ -105,7 +105,29 @@ def render_evaluation(data,out,stage):
                 a=t[(t.quantity==field)&(t.method==m)].set_index('group').loc[labels]
                 ax.errorbar(np.arange(len(labels))+(METHODS.index(m)-1.5)*.10,a['mean'].to_numpy(),yerr=a.sd_seed_means.to_numpy() if S>1 else None,fmt='o',capsize=2,color=COLORS[m],label=LABELS[m])
             ax.set_ylabel(field.replace('_kwh','').title()+' (kWh / day)');style(ax)
-        axes[0].legend(ncol=2,fontsize=8);axes[1].set_xticks(np.arange(len(labels)),labels);axes[1].set_xlabel({'month':'Calendar month','season':'Meteorological season','year':'Source year'}[kind]);fig.suptitle('Mean per evaluated day ± sample SD of seed means' if S>1 else 'Mean per evaluated day — one seed');figset.save(fig,f'E02_{kind}_net_and_effort','Does the controller advantage depend on calendar conditions?','Average energy per selected historical day; seed-mean SD; not annual totals or full-population estimates.',f'{kind}_energy_statistics.csv')
+        axes[0].legend(ncol=2,fontsize=8);axes[1].set_xticks(np.arange(len(labels)),[f'{k}\n(n={len(idx)})' for k,idx in groups[kind] if len(idx)]);axes[1].set_xlabel({'month':'Calendar month','season':'Meteorological season','year':'Source year'}[kind]);fig.suptitle('Mean per evaluated day ± sample SD of seed means' if S>1 else 'Mean per evaluated day — one seed');figset.save(fig,f'E02_{kind}_net_and_effort','Does the controller advantage depend on calendar conditions?','Average energy per selected historical day; seed-mean SD; not annual totals or full-population estimates.',f'{kind}_energy_statistics.csv')
+    # Separate empirical operating/policy mixture spread from sample seed SD.
+    fig,axes=plt.subplots(1,2,figsize=(11,4.5))
+    t=overall[overall.quantity=='net_kwh'].set_index('method').loc[list(METHODS)]
+    axes[0].errorbar(pos,t['mean'],yerr=t.sd_total,fmt='o',color='black',capsize=4)
+    axes[0].set(xticks=pos,xticklabels=['Fixed','Astronomical','SAC','MBPO'],ylabel='Net energy (kWh / evaluated day)',title='Mean ± empirical mixture SD')
+    pairs=[('mbpo','sac'),('mbpo','sun_slew_limited'),('mbpo','fixed_no_motion')]
+    for i,(a,b) in enumerate(pairs):
+        z=x[:,:,:,METHODS.index(a),2]-x[:,:,:,METHODS.index(b),2]
+        seed_values=z.mean(axis=(1,2)); sd=seed_values.std(ddof=1) if S>1 else None
+        axes[1].errorbar(i,seed_values.mean(),yerr=sd,fmt='o',color='black',capsize=4)
+        axes[1].scatter(np.full(S,i),seed_values,s=12,alpha=.45,color=COLORS['mbpo'])
+    axes[1].axhline(0,color='k',lw=.8);axes[1].set(xticks=range(3),xticklabels=['vs SAC','vs astronomical','vs fixed'],ylabel='MBPO − comparator (kWh / day)',title='Paired seed means' + (' ± sample SD' if S>1 else ' (one seed)'))
+    for ax in axes:style(ax)
+    figset.save(fig,'E06_energy_spread_and_paired_gain','What is the descriptive spread and paired net benefit?','Left: empirical population SD of the seed/day/weather mixture, not a CI. Right: paired seed means and sample seed SD (omitted for one seed). Baselines vary by day/weather, not training seed.','overall_energy_statistics.csv and relative_gain_by_seed.csv')
+    # Calendar months stay at their actual positions, including gaps.
+    fig,ax=plt.subplots(figsize=(9,4.5)); t=tables['month']; labels=[k for k,_ in groups['month']]; months=np.array([int(k) for k in labels])
+    for i,(a,b) in enumerate(pairs):
+        q=t[(t.quantity=='paired_net_kwh')&(t.method==f'{a}_minus_{b}')].set_index('group').loc[labels]
+        ax.errorbar(months+(i-1)*.14,q['mean'],yerr=q.sd_seed_means if S>1 else None,fmt='o',capsize=3,label=f'MBPO − {LABELS[b]}',color=COLORS[b])
+    counts={int(k):len(idx) for k,idx in groups['month']}
+    ax.axhline(0,color='k',lw=.8);ax.set(xticks=range(1,13),xticklabels=[f'{k}\n(n={counts[k]})' if k in counts else str(k) for k in range(1,13)],xlabel='Calendar month (n = evaluated historical days)',ylabel='Paired net difference (kWh / day)',title='Mean ± paired seed SD' if S>1 else 'Paired mean — one seed');ax.legend(fontsize=8);style(ax)
+    figset.save(fig,'E07_monthly_paired_gain','How does paired net benefit vary by calendar month?','Pair before averaging; equal selected days/draws; sample SD of paired seed means, not a CI. Unevaluated months have no points.','month_energy_statistics.csv')
     # Pair before averaging. Each point is a historical day, not M independent days.
     fig,axes=plt.subplots(1,2,figsize=(11,4.4)); paired=[]
     for a,b in PAIRS:

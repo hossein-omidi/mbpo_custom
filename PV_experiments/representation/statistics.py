@@ -53,6 +53,8 @@ def circular_stats(degrees,axis=0):
     """Circular mean in degrees and resultant length. No linear azimuth SD."""
     a=np.deg2rad(finite(degrees)); z=np.mean(np.exp(1j*a),axis=axis); r=np.abs(z)
     mean=np.where(r>1e-8,np.mod(np.rad2deg(np.angle(z)),360),np.nan)
+    # Floating-point modulo can round an infinitesimal negative angle to 360.
+    mean=np.where(mean==360.,0.,mean)
     return mean,r
 
 
@@ -65,8 +67,37 @@ def clock_grid(sid,start='08:45',horizon=195):
 
 
 def check_close(a,b,what,atol=1e-8,rtol=1e-8):
-    if not np.allclose(finite(a),finite(b),atol=atol,rtol=rtol):raise ValueError(f'{what}: numerical mismatch')
+    a,b=finite(a),finite(b)
+    if a.shape!=b.shape:raise ValueError(f'{what}: shape mismatch {a.shape} != {b.shape}')
+    if not np.allclose(a,b,atol=atol,rtol=rtol):raise ValueError(f'{what}: numerical mismatch')
 
 
 def seed_summary(values):
     a=finite(values);return float(a.mean()), float(a.std(ddof=1)) if a.size>1 else None
+
+
+def daily_spread(x):
+    """Scalar energy array [seed, day, draw]. Distinct descriptive estimands.
+
+    Historical-day sample SD uses marginal day means (averaged over seed/draw).
+    RMS weather SD uses conditional sample variances (within seed/day).
+    Neither is an independent random-effects estimate or a CI.
+    """
+    x=finite(x)
+    if x.ndim!=3 or x.shape[2]<2:raise ValueError('Expected seed/day/draw energy array with >=2 draws')
+    day=x.mean(axis=(0,2))
+    return dict(sd_day_means=float(day.std(ddof=1)) if len(day)>1 else np.nan,
+                rms_weather_draw_sd=float(np.sqrt(np.mean(x.var(axis=2,ddof=1)))))
+
+
+def trajectory_clock(quantity,horizon=195):
+    """Unwrapped UTC hours. Commands at decision time; resulting quantities at response time."""
+    decision=quantity in ('action_tilt','action_azimuth','abs_action_tilt','abs_action_azimuth')
+    return 8.75+(np.arange(horizon)+(0 if decision else 1))/12., ('decision' if decision else 'response')
+
+
+def cumulative_plot_series(clock,mean,sd):
+    """Prepend deterministic zero ONLY for rendering integrated quantities."""
+    clock,mean,sd=finite(clock),finite(mean),finite(sd)
+    if clock.ndim!=1 or clock.shape!=mean.shape or clock.shape!=sd.shape:raise ValueError('Cumulative plot shape mismatch')
+    return np.r_[clock[0]-1/12.,clock],np.r_[0.,mean],np.r_[0.,sd]

@@ -8,7 +8,7 @@ from .statistics import check_close,finite
 
 def render_training(cfg,seeds,root,out):
     from PV_experiments.core import run_path
-    figs=Figures(out); frames={}; sources={}
+    figs=Figures(out); frames={}; sources={}; warmups=set()
     for alg in ('sac','mbpo'):
         for seed in seeds:
             p=run_path(cfg,alg,seed,root)/'episodes.csv'; f=pd.read_csv(p); steps=finite(f.env_steps); meta=read_json(p.parent/'run_metadata.json')
@@ -18,15 +18,19 @@ def render_training(cfg,seeds,root,out):
             if np.any(np.diff(np.r_[0,u])<0):raise ValueError('Decreasing optimizer update counter')
             finite(f.alpha)
             if changed.any():finite(f.loc[changed,['critic_loss','actor_loss']])
-            frames[alg,seed]=f; sources[f'{alg}_seed{seed}/episodes.csv']=sha(p)
+            config_path=p.parent/'config.json'; saved=read_json(config_path); shared=saved if alg=='sac' else saved['sac']; warmups.add(int(shared['algo']['start_steps']))
+            frames[alg,seed]=f; sources[f'{alg}_seed{seed}/episodes.csv']=sha(p);sources[f'{alg}_seed{seed}/config.json']=sha(config_path)
+    if len(warmups)!=1 or min(warmups)<0:raise ValueError('Inconsistent warm-up configuration')
+    warmup=next(iter(warmups))
     # Training trajectories can use different days: diagnostic, never controlled performance curve.
     fig,axes=plt.subplots(2,2,figsize=(10,7),sharex=True); stats=[]
     for ax,field in zip(axes.flat,('return_kwh','critic_loss','actor_loss','alpha')):
         for alg in ('sac','mbpo'):
             a=np.stack([frames[alg,s][field].rolling(25,min_periods=1).mean().to_numpy() for s in seeds]); valid=np.isfinite(a).all(axis=0);steps=frames[alg,seeds[0]].env_steps.to_numpy(); mu=a[:,valid].mean(axis=0);sd=a[:,valid].std(axis=0,ddof=1) if len(seeds)>1 else None
             line(ax,steps[valid],mu,alg,sd); stats.extend(dict(algorithm=alg,field=field,env_steps=int(t),mean=v,sd_seed_means=(sd[i] if sd is not None else np.nan)) for i,(t,v) in enumerate(zip(steps[valid],mu)))
+        if 0<warmup<=steps[-1]:ax.axvline(warmup,color='k',ls=':',lw=.9,label=f'Warm-up end ({warmup:,})' if field=='return_kwh' else '_nolegend_')
         ax.set_ylabel(field.replace('_',' '));style(ax)
-    axes[0,0].legend();axes[-1,0].set_xlabel('Real simulator transitions');axes[-1,1].set_xlabel('Real simulator transitions');save_csv(out,'training_diagnostics.csv',stats);fig.suptitle('25-episode trailing means' + (' ± sample seed SD' if len(seeds)>1 else ' — one seed'));figs.save(fig,'T01_optimizer_diagnostics','Are optimization and exploratory returns behaving plausibly?','25-episode rolling means within seed, then sample SD across seed curves; only common finite points. Different sampled days; not policy evaluation.','episodes.csv')
+    axes[0,0].legend();axes[-1,0].set_xlabel('Real simulator transitions');axes[-1,1].set_xlabel('Real simulator transitions');save_csv(out,'training_diagnostics.csv',stats);fig.suptitle('25-episode trailing means' + (' ± sample seed SD' if len(seeds)>1 else ' — one seed'));figs.save(fig,'T01_optimizer_diagnostics','Are optimization and exploratory returns behaving plausibly?','25-episode rolling means within seed, then sample SD across seed curves; only common finite points. Warm-up boundary from saved configuration; loss smoothing is an episode-level average, not update-weighted. Different sampled days; not policy evaluation.','episodes.csv')
     fig,axes=plt.subplots(2,1,figsize=(9,7),sharex=True); rows=[]
     for seed in seeds:
         f=frames['mbpo',seed]; attempt=finite(f.synthetic_attempted);accepted=finite(f.synthetic_accepted);rejected=finite(f.synthetic_rejected);used=finite(f.synthetic_samples_used);real=finite(f.real_samples_used)
