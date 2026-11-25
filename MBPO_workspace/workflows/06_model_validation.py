@@ -319,12 +319,13 @@ def run_validation(args):
                     pred_reward=pred_reward+(mean_next[2]-pred_nxt[0,2])*fake_env.power_norm*fake_env.interval_hours/1000.
                     pred_nxt[0,:3]=mean_next
                     pnext = pred_nxt[0]
+                    # Compute residuals from the exact float64 operands exported to CSV.
                     counterfactual_rows.append({
                         "scenario_id": sid, "step": int(t), "action_type": action_name,
                         "action_tilt": float(candidate[0]), "action_azimuth": float(candidate[1]),
                         "actual_reward_kwh": float(actual_reward),
                         "predicted_reward_kwh": float(pred_reward[0]),
-                        "reward_error_kwh": float(pred_reward[0] - actual_reward),
+                        "reward_error_kwh": float(pred_reward[0]) - float(actual_reward),
                         "actual_done": bool(actual_done), "predicted_done": bool(pred_done[0]),
                         "accepted_by_finite_mask": bool(accepted[0]),
                         "normalized_epistemic_disagreement": float(unc[0]),
@@ -333,13 +334,13 @@ def run_validation(args):
                         "next_azimuth_cos":float(actual_nxt[5]),
                         "actual_next_power_norm": float(actual_nxt[2]),
                         "predicted_next_power_norm": float(pnext[2]),
-                        "power_error_norm": float(pnext[2] - actual_nxt[2]),
+                        "power_error_norm": float(pnext[2]) - float(actual_nxt[2]),
                         "actual_next_dni_norm": float(actual_nxt[0]),
                         "predicted_next_dni_norm": float(pnext[0]),
-                        "dni_error_norm": float(pnext[0] - actual_nxt[0]),
+                        "dni_error_norm": float(pnext[0]) - float(actual_nxt[0]),
                         "actual_next_dhi_norm": float(actual_nxt[1]),
                         "predicted_next_dhi_norm": float(pnext[1]),
-                        "dhi_error_norm": float(pnext[1] - actual_nxt[1]),
+                        "dhi_error_norm": float(pnext[1]) - float(actual_nxt[1]),
                     })
 
         states = np.concatenate(external_states, axis=0)
