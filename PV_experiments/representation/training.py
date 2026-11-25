@@ -14,6 +14,10 @@ def render_training(cfg,seeds,root,out):
             p=run_path(cfg,alg,seed,root)/'episodes.csv'; f=pd.read_csv(p); steps=finite(f.env_steps); meta=read_json(p.parent/'run_metadata.json')
             if len(f)!=cfg['epochs'] or not np.array_equal(steps,np.arange(1,len(f)+1)*meta['horizon']) or steps[-1]!=meta['final_env_steps']:raise ValueError(f'Incomplete training history: {p}')
             check_close(f.gross_energy_kwh-f.movement_cost_kwh,f.return_kwh,'Training episode energy accounting')
+            u=finite(f.updates); changed=np.diff(np.r_[0,u])>0
+            if np.any(np.diff(np.r_[0,u])<0):raise ValueError('Decreasing optimizer update counter')
+            finite(f.alpha)
+            if changed.any():finite(f.loc[changed,['critic_loss','actor_loss']])
             frames[alg,seed]=f; sources[f'{alg}_seed{seed}/episodes.csv']=sha(p)
     # Training trajectories can use different days: diagnostic, never controlled performance curve.
     fig,axes=plt.subplots(2,2,figsize=(10,7),sharex=True); stats=[]
@@ -22,7 +26,7 @@ def render_training(cfg,seeds,root,out):
             a=np.stack([frames[alg,s][field].rolling(25,min_periods=1).mean().to_numpy() for s in seeds]); valid=np.isfinite(a).all(axis=0);steps=frames[alg,seeds[0]].env_steps.to_numpy(); mu=a[:,valid].mean(axis=0);sd=a[:,valid].std(axis=0,ddof=1) if len(seeds)>1 else None
             line(ax,steps[valid],mu,alg,sd); stats.extend(dict(algorithm=alg,field=field,env_steps=int(t),mean=v,sd_seed_means=(sd[i] if sd is not None else np.nan)) for i,(t,v) in enumerate(zip(steps[valid],mu)))
         ax.set_ylabel(field.replace('_',' '));style(ax)
-    axes[0,0].legend();axes[-1,0].set_xlabel('Real simulator transitions');axes[-1,1].set_xlabel('Real simulator transitions');save_csv(out,'training_diagnostics.csv',stats);figs.save(fig,'T01_optimizer_diagnostics','Are optimization and exploratory returns behaving plausibly?','25-episode rolling means within seed, then sample SD across seed curves; only common finite points. Different sampled days; not policy evaluation.','episodes.csv')
+    axes[0,0].legend();axes[-1,0].set_xlabel('Real simulator transitions');axes[-1,1].set_xlabel('Real simulator transitions');save_csv(out,'training_diagnostics.csv',stats);fig.suptitle('25-episode trailing means' + (' ± sample seed SD' if len(seeds)>1 else ' — one seed'));figs.save(fig,'T01_optimizer_diagnostics','Are optimization and exploratory returns behaving plausibly?','25-episode rolling means within seed, then sample SD across seed curves; only common finite points. Different sampled days; not policy evaluation.','episodes.csv')
     fig,axes=plt.subplots(2,1,figsize=(9,7),sharex=True); rows=[]
     for seed in seeds:
         f=frames['mbpo',seed]; attempt=finite(f.synthetic_attempted);accepted=finite(f.synthetic_accepted);rejected=finite(f.synthetic_rejected);used=finite(f.synthetic_samples_used);real=finite(f.real_samples_used)
@@ -78,10 +82,15 @@ def render_learning(cfg,seeds,root,out):
 def render_model(cfg,seeds,root,out,realization=0):
     from PV_experiments.evaluate import evaluation_output,_provenance,_require_matching_provenance,_verify_model_validation_summary
     from PV_experiments.core import run_path
-    figs=Figures(out); rows=[];cf=[];sources={}; control_rows=[]
+    figs=Figures(out); rows=[];cf=[];sources={}; control_rows=[]; status=[]
     for seed in seeds:
         path=evaluation_output(cfg,'model',seed,root)/f'realization{realization}';identity=_provenance(cfg,'model',seed,root,realization_id=realization);_require_matching_provenance(path,identity);_verify_model_validation_summary(path/'model_validation_summary.json',cfg,seed,realization,identity['scenario_protocol_sha256'],root)
-        d=read_json(path/'model_validation_summary.json'); p=path/'external_on_policy_predictions.csv';f=pd.read_csv(p)
+        d=read_json(path/'model_validation_summary.json')
+        status.append(dict(seed=seed,model_status=d['model_status'],synthetic_samples_used=d['training_synthetic_data_accounting']['synthetic_samples_used']))
+        if d['model_status']=='unfitted':
+            for fn in ('model_validation_summary.json','manager_provenance.json'):sources[f'seed{seed}/{fn}']=sha(path/fn)
+            continue
+        p=path/'external_on_policy_predictions.csv';f=pd.read_csv(p,float_precision='round_trip')
         control_rows.append(dict(seed=seed,**d['counterfactual_action_test'],**{'train_'+k:v for k,v in d['training_synthetic_data_accounting'].items() if isinstance(v,(int,float)) or v is None}))
         if set(d['validation_scenario_ids'])!=set(read_json(run_path(cfg,'mbpo',seed,root)/'scenario_split.json')['validation_ids']):raise ValueError('Model diagnostics do not cover the frozen validation partition')
         if set(f.scenario_id.astype(str))!=set(d['validation_scenario_ids']) or f.duplicated(['scenario_id','step']).any() or not (f.groupby('scenario_id').step.apply(lambda x:set(x)==set(range(195)))).all():raise ValueError('Incomplete model validation trajectories')
@@ -92,12 +101,15 @@ def render_model(cfg,seeds,root,out,realization=0):
         if set(ff.scenario_id.astype(str))!=set(d['validation_scenario_ids']) or ff.duplicated(['scenario_id','step','action_type']).any() or len(ff)!=d['counterfactual_action_test']['n_counterfactual_transitions']:raise ValueError('Incomplete counterfactual validation grid')
         err=finite(ff.reward_error_kwh);check_close([np.sqrt(np.mean(err**2))],[d['counterfactual_action_test']['reward_rmse_kwh']],'Counterfactual reward RMSE');ff['seed']=seed;cf.append(ff)
         for fn in ('model_validation_summary.json','external_on_policy_predictions.csv','counterfactual_predictions.csv','manager_provenance.json'):sources[f'seed{seed}/{fn}']=sha(path/fn)
+    save_csv(out,'model_status_by_seed.csv',status)
+    if not rows:
+        figs.finish();return sources
     table=pd.DataFrame(rows);save_csv(out,'model_quality_by_seed.csv',table);cf=pd.concat(cf);save_csv(out,'counterfactual_results.csv',cf)
     save_csv(out,'model_control_diagnostics_by_seed.csv',control_rows)
     fig,axes=plt.subplots(1,2,figsize=(10,4.5)); channels=['dni_norm','dhi_norm','power_norm'];x=np.arange(3)
     for field,off,label in [('rmse',-.15,'Ensemble'),('persistence_rmse',.15,'Persistence')]:
         t=table.groupby('channel')[field].agg(['mean','std']).loc[channels];axes[0].bar(x+off,t['mean'],.28,label=label); 
-        if len(seeds)>1:axes[0].errorbar(x+off,t['mean'],yerr=t['std'],fmt='none',color='k',capsize=3)
-    axes[0].set(xticks=x,xticklabels=['DNI','DHI','Power'],ylabel='Normalized one-step delta RMSE');axes[0].legend();
+        if len(table.seed.unique())>1:axes[0].errorbar(x+off,t['mean'],yerr=t['std'],fmt='none',color='k',capsize=3)
+    axes[0].set(xticks=x,xticklabels=['DNI','DHI','Power'],ylabel='Mean per-fitted-seed delta RMSE (normalized)' );axes[0].legend();axes[0].set_title(f'Fitted models: {table.seed.nunique()}/{len(seeds)} selected seeds' + ('; ± seed SD' if table.seed.nunique()>1 else '; no seed SD'));
     for seed,g in cf.groupby('seed'):axes[1].scatter(g.normalized_epistemic_disagreement,np.abs(g.reward_error_kwh),s=5,alpha=.22,label=f'Seed {seed}')
     axes[1].set(xlabel='Normalized ensemble disagreement',ylabel='Absolute counterfactual reward error (kWh)');axes[1].legend(fontsize=7);style(axes[0]);style(axes[1]);figs.save(fig,'M01_model_skill_and_counterfactual_error','Does the learned model outperform persistence and predict alternative action effects?','One fixed validation weather realization per historical day; seed SD for RMSE, counterfactual scatter descriptive.','model validation CSVs and JSON');figs.finish();return sources

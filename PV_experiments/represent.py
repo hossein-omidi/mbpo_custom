@@ -82,8 +82,9 @@ def run(args,root=None):
                 render_rich(rich,data,args.stage,args.scope,d);sources['rich_manifest']=sha(rich/'trajectory_manifest.json')
             else:raise ValueError(kind)
         # Record all figure semantics (including existing learning figures via report.json)
-        modules=Path(__file__).parent/'representation';code={p.name:sha(p) for p in sorted(modules.glob('*.py'))};code['represent.py']=sha(Path(__file__))
-        write_json(out/'representation_manifest.json',dict(schema=1,experiment=cfg['name'],seeds=seeds,stage=args.stage,kinds=list(kinds),scope=args.scope if set(kinds)&{'collect','trajectories'} else None,scenario_protocol_sha256=split['protocol_sha256'],uncertainty_sha256=cfg['uncertainty_sha256'],sources=sources,representation_code_sha256=code,note='Read-only postprocessing. No annual extrapolation, no synthetic model rollouts in physical policy evaluation. Dataset and model-validation scopes are independently labeled.'))
+        modules=Path(__file__).parent/'representation';code={p.name:sha(p) for p in sorted(modules.glob('*.py'))};code['represent.py']=sha(Path(__file__));code['scientific_checks.py']=sha(Path(__file__).with_name('scientific_checks.py'));code['sample_complexity.py']=sha(root/'MBPO_workspace/src/sample_complexity.py');code['curve_statistics.py']=sha(root/'MBPO_workspace/src/curve_statistics.py')
+        from .scientific_checks import report_inventory
+        write_json(out/'representation_manifest.json',dict(schema=1,output_sha256=report_inventory(out),experiment=cfg['name'],seeds=seeds,stage=args.stage,kinds=list(kinds),scope=args.scope if set(kinds)&{'collect','trajectories'} else None,scenario_protocol_sha256=split['protocol_sha256'],uncertainty_sha256=cfg['uncertainty_sha256'],sources=sources,representation_code_sha256=code,note='Read-only postprocessing. No annual extrapolation, no synthetic model rollouts in physical policy evaluation. Dataset and model-validation scopes are independently labeled.'))
     print('Published:',target)
 
 

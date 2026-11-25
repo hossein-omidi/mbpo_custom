@@ -110,7 +110,7 @@ def collect(cfg,split,data,stage,scope,root,out):
         if set(files)!=expected or final.get('files')!={k:v['sha256'] for k,v in files.items()}:raise ValueError('Completed collection manifest mismatch')
         print('Verified completed trajectory collection; no replay needed.');return
     for si,seed in enumerate(data['seeds']):
-        agents={m:mc.load_policy(phys,m,run_path(cfg,m,seed,root)/'latest.pt',cfg['device'],expected_protocol_sha256=split['protocol_sha256'],expected_seed=seed,expected_epoch=cfg['epochs']) for m in ('sac','mbpo')}
+        agents={m:mc.load_policy(phys,m,run_path(cfg,m,seed,root)/'latest.pt',cfg['device'],expected_protocol_sha256=split['protocol_sha256'],expected_seed=seed,expected_epoch=cfg['epochs'],expected_sha=data['sources'][f'{m}_seed{seed}/latest.pt']) for m in ('sac','mbpo')}
         env=SACEnvironment(phys.sac.eval_env)
         try:
             if env.horizon!=195 or env.unwrapped.randomize_initial_orientation:raise ValueError('Unexpected evaluation horizon or random initial pose')
@@ -167,6 +167,9 @@ def load_rich_day(directory,manifest,data,sid):
         if ids!=[data['fingerprints'][(sid,r)] for r in range(M)] or time!=[t.isoformat() for t in clock_grid(sid)]:raise ValueError('Rich trajectory provenance mismatch')
         check_close(raw[:,:,:,1:4].sum(axis=2),data['daily'][si,di],'Stored rich replay energy totals');check_close(raw[:,:,:,1]-raw[:,:,:,2],raw[:,:,:,3],'Rich net accounting')
         check_close(raw[:,:,:,0].mean(axis=0),data['moments'][si,di,:,:,0],'Stored rich power mean',atol=1e-5)
+        check_close(raw[:,:,:,0].std(axis=0,ddof=1),data['moments'][si,di,:,:,1],'Stored rich power SD',atol=1e-5)
+        check_close(raw[:,:,:,0]/12000,raw[:,:,:,1],'Rich per-step power to gross energy')
+        check_close(o[:,:,0]/12000,o[:,:,1],'Oracle per-step power to gross energy')
         if (o[:,None,:,0]+np.maximum(1e-5,1e-7*np.abs(raw[:,:,:,0]))<raw[:,:,:,0]).any():raise ValueError('Oracle below feasible generation')
         if weather is None:weather=w;oracle=o
         else:
@@ -206,7 +209,7 @@ def render_rich(directory,data,stage,scope,out):
                 p=raw[0,0,mi];line(axes[0],clock,p[:,0],method);line(axes[1],clock,p[:,4],method);axes[2].scatter(clock,p[:,5],s=6,color=COLORS[method],label=LABELS[method])
             line(axes[0],clock,oracle[0,:,0],ORACLE);axes[1].plot(clock,w[0,:,6],color='k',ls=':',label='Solar zenith');axes[2].scatter(clock,w[0,:,7],s=5,color='black',label='Sun azimuth');axes[0].set_ylabel('DC power (W)');axes[1].set_ylabel('Tilt (deg)');axes[2].set(ylabel='Azimuth (deg)',xlabel='UTC hour (unwrapped)',ylim=(0,360));axes[0].legend(ncol=2,fontsize=7);axes[1].legend(fontsize=7);axes[2].legend(ncol=2,fontsize=7)
             for ax in axes:style(ax)
-            figs.save(fig,f'R01_daily_trajectory_{sid}','How does the policy move under the same realized weather?','Actual physical path, first selected training seed, draw 0; outcome-blind seasonal selection. Azimuth shown as points to avoid wrap artifacts.',f'{sid}.npz')
+            fig.suptitle(f'{sid} — seed {data["seeds"][0]}, draw 0 (actual trajectory)');figs.save(fig,f'R01_daily_trajectory_{sid}','How does the policy move under the same realized weather?','Actual physical path, first selected training seed, draw 0; outcome-blind seasonal selection. Azimuth shown as points to avoid wrap artifacts.',f'{sid}.npz')
             fig,axes=plt.subplots(2,1,figsize=(9,6),sharex=True)
             for mi,method in enumerate(METHODS):
                 p=raw[:,:,mi]
@@ -214,7 +217,7 @@ def render_rich(directory,data,stage,scope,out):
                     a=p[:,:,:,field].reshape(S*M,195);line(ax,clock,a.mean(axis=0),method,a.std(axis=0,ddof=0))
             axes[0].set_ylabel('Normalized tilt command');axes[1].set(ylabel='Normalized azimuth command',xlabel='UTC hour (unwrapped)');axes[0].legend(ncol=2,fontsize=8)
             for ax in axes:style(ax)
-            figs.save(fig,f'R02_daily_actions_{sid}','How much control effort is commanded during the day?','Same historical day; equal seed/draw empirical mean ± population SD. Commands are increments, not angles.',f'{sid}.npz')
+            fig.suptitle(f'{sid} — signed commands, mean ± empirical seed/draw SD');figs.save(fig,f'R02_daily_actions_{sid}','What are the signed control commands during the day?','Same historical day; equal seed/draw empirical mean ± population SD. Commands are increments, not angles.',f'{sid}.npz')
     # Compact sufficient statistics over all collected historical days.
     summary={}; rows=[]
     for (method,key),pairs in moments.items():
@@ -228,17 +231,18 @@ def render_rich(directory,data,stage,scope,out):
                 z=summary[(name,key)];line(ax,clock,z['mean'],name,z['sd_total'])
             ax.set_ylabel(key.replace('_',' '));ax.legend(fontsize=8,ncol=2);style(ax)
             if 'difference' in key:ax.axhline(0,color='black',lw=.7)
-        axes[-1,0].set_xlabel('UTC hour (unwrapped)');figset_title=f'{scope.capitalize()} scope: {len(days)} historical days';fig.suptitle(figset_title)
+        axes[-1,0].set_xlabel('UTC hour (unwrapped)');figset_title=f'{scope.capitalize()} scope: {len(days)} days — mean ± empirical mixture SD';fig.suptitle(figset_title)
         figs.save(fig,filename,question,'Mean ± empirical mixture SD across seed/day/weather; pairing and path integration precede aggregation. No oracle net/cost.', 'rich_curve_statistics.csv')
     fig,axes=plt.subplots(2,2,figsize=(10,7),sharex=True,sharey=True)
     for ax,method in zip(axes.flat,METHODS):
-        h=occupancy[method];h=h/h.sum();im=ax.imshow(h,origin='lower',aspect='auto',extent=[0,360,0,90],vmin=0,vmax=max((a/a.sum()).max() for a in occupancy.values()),cmap='viridis');ax.set_title(LABELS[method]);ax.set(xlabel='Azimuth (deg)',ylabel='Tilt (deg)');save_csv(out,f'occupancy_{method}.csv',pd.DataFrame(h))
+        h=occupancy[method];h=h/h.sum();im=ax.imshow(h,origin='lower',aspect='auto',interpolation='nearest',extent=[0,360,0,90],vmin=0,vmax=max((a/a.sum()).max() for a in occupancy.values()),cmap='viridis');ax.set_title(LABELS[method]);ax.set(xlabel='Azimuth (deg)',ylabel='Tilt (deg)');save_csv(out,f'occupancy_{method}.csv',pd.DataFrame(h))
     fig.subplots_adjust(right=.87,wspace=.25,hspace=.3);cax=fig.add_axes([.89,.17,.025,.66]);fig.colorbar(im,cax=cax,label='Fraction of recorded control intervals');fig._pv_layout_done=True;figs.save(fig,'R06_orientation_occupancy','Which physical orientations are used?','Equal 5-min interval occupancy across collected paired paths; includes dark intervals; azimuth is circular.', 'stored rich trajectories')
     # Paired gains by actual perturbed diffuse fraction, with each day/draw matched across methods.
     p=eff.pivot(index=['seed','scenario_id','draw','diffuse_fraction'],columns='method',values='net_kwh').reset_index();p['regime']=pd.cut(p.diffuse_fraction,[-np.inf,.35,.7,np.inf],labels=['<0.35','0.35–<0.70','≥0.70'],right=False);p['gain']=p.mbpo-p.sac
     reg=p.groupby(['seed','regime'],observed=True).gain.agg(['mean','count']).reset_index();save_csv(out,'diffuse_regime_paired_gain.csv',reg)
     fig,ax=plt.subplots(figsize=(7.5,4.4));
-    for seed,g in reg.groupby('seed'):ax.plot(g.regime.astype(str),g['mean'],marker='o',label=f'Seed {seed}')
+    for seed,g in reg.groupby('seed'):ax.scatter(g.regime.cat.codes,g['mean'],marker='o',label=f'Seed {seed}')
+    ax.set_xticks(range(3),['<0.35','0.35–<0.70','≥0.70'])
     ax.axhline(0,color='k',lw=.8);ax.set(xlabel='Integrated DHI / GHI regime (assumed weather draw)',ylabel='MBPO − SAC net energy (kWh/day)');ax.legend();style(ax);figs.save(fig,'R07_diffuse_regime_gain','Does paired benefit change with diffuse fraction?','Per-seed means of matched day/draw differences in predeclared diffuse-fraction bins; no inference over independent draws as historical days.','daily_effort_and_oracle.csv')
     # Daily integrated angular travel by calendar month (not cumulative orientation change).
     eff['month']=pd.to_datetime(eff.scenario_id).dt.month
@@ -246,9 +250,9 @@ def render_rich(directory,data,stage,scope,out):
     fig,axes=plt.subplots(2,1,figsize=(9,6),sharex=True)
     for ax,field in zip(axes,('tilt_travel_deg','azimuth_travel_deg')):
         for method,g in travel.groupby('method'):
-            t=g.groupby('month')[field].agg(['mean','std']);line(ax,t.index.to_numpy(),t['mean'].to_numpy(),method,t['std'].to_numpy() if S>1 else None)
+            t=g.groupby('month')[field].agg(['mean','std']);ax.errorbar(t.index.to_numpy()+(METHODS.index(method)-1.5)*.10,t['mean'].to_numpy(),yerr=t['std'].to_numpy() if S>1 else None,fmt='o',capsize=2,color=COLORS[method],label=LABELS[method])
         ax.set_ylabel(field.replace('_',' '));style(ax)
     axes[0].legend(ncol=2,fontsize=7);axes[1].set_xlabel('Calendar month (collected days only)');axes[1].set_xticks(sorted(travel.month.unique()));figs.save(fig,'R08_angular_travel','How much actual angular movement is used by each controller?','Mean total absolute applied angular increments per day; sample SD of seed means; azimuth uses shortest wrapped movement.','monthly_travel_by_seed.csv')
     matrix=np.asarray(gap_heat);order=np.argsort(days);matrix=matrix[order];ordered=[days[i] for i in order];bound=max(float(np.abs(matrix).max()),1e-10)
-    fig,ax=plt.subplots(figsize=(9,5));im=ax.imshow(matrix,aspect='auto',origin='lower',cmap='RdBu_r',vmin=-bound,vmax=bound,extent=[clock[0]-1/24,clock[-1]+1/24,-.5,len(days)-.5]);ticks=np.unique(np.linspace(0,len(days)-1,min(12,len(days)),dtype=int));ax.set(yticks=ticks,yticklabels=[ordered[i] for i in ticks],xlabel='UTC hour (unwrapped)',ylabel='Historical scenario');fig.colorbar(im,ax=ax,label='Paired MBPO − SAC power (W)');save_csv(out,'paired_power_day_time_heatmap.csv',pd.DataFrame(matrix,columns=[f'step_{i+1}' for i in range(195)]).assign(scenario_id=ordered));figs.save(fig,'R09_paired_power_heatmap','When and on which days does MBPO improve generation?','Mean of matched seed/draw power differences for each collected day and UTC interval. Symmetric color scale about zero.','paired_power_day_time_heatmap.csv')
+    fig,ax=plt.subplots(figsize=(9,5));im=ax.imshow(matrix,aspect='auto',origin='lower',interpolation='nearest',cmap='RdBu_r',vmin=-bound,vmax=bound,extent=[clock[0]-1/24,clock[-1]+1/24,-.5,len(days)-.5]);ticks=np.unique(np.linspace(0,len(days)-1,min(12,len(days)),dtype=int));ax.set(yticks=ticks,yticklabels=[ordered[i] for i in ticks],xlabel='UTC hour (unwrapped)',ylabel='Historical scenario');fig.colorbar(im,ax=ax,label='Paired MBPO − SAC power (W)');save_csv(out,'paired_power_day_time_heatmap.csv',pd.DataFrame(matrix,columns=[f'step_{i+1}' for i in range(195)]).assign(scenario_id=ordered));figs.save(fig,'R09_paired_power_heatmap','When and on which days does MBPO improve generation?','Mean of matched seed/draw power differences for each collected day and UTC interval. Symmetric color scale about zero.','paired_power_day_time_heatmap.csv')
     figs.finish();write_json(out/'rich_scope.json',dict(stage=stage,scope=scope,n_days=len(days),days=days,draws=M,seeds=data['seeds'],note='Representative scope is not full partition. Oracle is only instantaneous gross DC bound.'))

@@ -1,0 +1,6 @@
+Target GitHub branch: PostProcessing, e34371f7527eaf210186f20f2c917996a436cfd5 (head rechecked).
+Previous impossible-SD failure reproduced: mean 11 W, M=3, SD 10000 W, consistent derived tables accepted by v2.
+New call-site anchors verified uniquely against connector-returned committed files (sample_complexity, advanced_learning, direct MC).
+Local pytest: 30 passed in 4.21 s (25 numerical/provenance tests + 5 installer fixture tests).
+Tests use constructed data, previously transcribed inspected aggregation/statistics excerpts and prior audit helper/release payload. They do not establish real-repository transformation or real NSRDB execution.
+Full source checkout unavailable (GitHub DNS failure). Required local dry-run, compilation of actual transformed files, full geometry10_tests suite, and pilot documented in README.

@@ -40,6 +40,8 @@ def validate_mc_source(cfg,stage,seed,root=PROJECT_ROOT):
         raise ValueError(f'Seed {seed}: MC scenario counts differ from frozen partition')
     hashes,baseline_returns=_validate_raw_mc_file(
         directory/'all_day_draw_method.csv',data,expected_days)
+    from .scientific_checks import validate_mc_tables
+    validate_mc_tables(directory,sorted(expected_days),draws,run_dirs={a:run_path(cfg,a,seed,root) for a in ('sac','mbpo')} if stage=='validation' else None,epoch=cfg['epochs'])
     data['_validated_weather_hashes']=hashes
     data['_validated_baselines']=baseline_returns
     return directory,data
@@ -151,7 +153,9 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
             if not math.isclose(data['_validated_baselines'][key],base,
                                 rel_tol=1e-8,abs_tol=1e-8):
                 raise ValueError(f'Seed {seed}: deterministic baseline energy differs for {key}')
+    from .scientific_checks import source_hashes
     inputs_hashes=frozen_mc_input_hashes(inputs)
+    inputs_hashes.update(source_hashes(root,['PV_experiments/report.py','PV_experiments/scientific_checks.py','MBPO_workspace/src/curve_statistics.py']))
     out=experiment_dir(cfg,root)/'reports'/f'monte_carlo_{stage}'
     if out.exists() and any(out.iterdir()) and not dry_run:
         meta=out/'report_manifest.json'
@@ -160,6 +164,8 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
             if (old.get('seeds')==seeds and old.get('stage')==stage
                 and old.get('source_protocol_sha256')==inputs[0][2].get('scenario_protocol_sha256')
                 and old.get('source_file_sha256')==inputs_hashes):
+                from .scientific_checks import check_report_inventory
+                check_report_inventory(out,old)
                 print('SKIP existing across-seed Monte Carlo summary:',out)
                 return
         raise FileExistsError(f'Existing report directory: {out}. Do not overwrite published figures implicitly.')
@@ -234,6 +240,8 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
         'interpretation':'Mean and sample SD across independent training-seed means; each mean pools the same held-out historical days and paired Monte Carlo weather draws. Descriptive ±1 SD, not an inferential confidence interval.',
         'outputs':['net_energy_across_seeds.csv','paired_energy_differences_across_seeds.csv',
                    'pooled_power_mean_sd_across_seeds.csv','power_mean_pm_training_seed_sd.png']}
+    from .scientific_checks import report_inventory
+    manifest['output_sha256']=report_inventory(out)
     atomic_json(out/'report_manifest.json',manifest)
     print('Across-seed Monte Carlo report:',out)
 
@@ -241,7 +249,13 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
 def report_learning(cfg,seeds,root=PROJECT_ROOT,dry_run=False):
     if len(seeds)<2:raise ValueError('Multi-seed sample complexity needs at least 2 seeds')
     for seed in seeds:verify_pair(cfg,seed,root)
+    from .scientific_checks import source_hashes
     input_hashes=frozen_learning_input_hashes(cfg,seeds,root)
+    input_hashes.update(source_hashes(root,['MBPO_workspace/src/sample_complexity.py','MBPO_workspace/src/curve_statistics.py','MBPO_workspace/workflows/05_sample_complexity.py','PV_experiments/scientific_checks.py','PV_experiments/report.py']))
+    for seed in seeds:
+        for alg in ('sac','mbpo'):
+            ledger=run_path(cfg,alg,seed,root)/'recovery_events.json'
+            if ledger.exists():input_hashes[f'{alg}_seed{seed}/recovery_events.json']=file_sha256(ledger)
     out=experiment_dir(cfg,root)/'reports'/'sample_complexity'
     if out.exists() and any(out.iterdir()) and not dry_run:
         manifest=out/'report_manifest.json'
@@ -249,6 +263,8 @@ def report_learning(cfg,seeds,root=PROJECT_ROOT,dry_run=False):
             m=read_json(manifest)
             if (m.get('seeds')==seeds and m.get('experiment')==cfg['name']
                 and m.get('source_file_sha256')==input_hashes and m.get('estimator_semantics')=='confirmed_v2'):
+                from .scientific_checks import check_report_inventory
+                check_report_inventory(out,m)
                 print('SKIP existing sample-complexity report:',out)
                 return
             raise ValueError('An existing learning report uses a different seed set; do not overwrite it')
@@ -260,7 +276,8 @@ def report_learning(cfg,seeds,root=PROJECT_ROOT,dry_run=False):
     if not dry_run:
         require_files([out/'report.json',out/'learning_curve_descriptive_sd.csv',
                        out/'learning_curve_mean_pm_seed_sd.png'])
-        atomic_json(out/'report_manifest.json',{'schema':1,'experiment':cfg['name'],
+        from .scientific_checks import report_inventory
+        atomic_json(out/'report_manifest.json',{'schema':1,'output_sha256':report_inventory(out),'experiment':cfg['name'],
               'seeds':seeds,'source_file_sha256':input_hashes,'estimator_semantics':'confirmed_v2',
               'protocol_sha256':verify_pair(cfg,seeds[0],root)['protocol_sha256'],
               'source':'MBPO_workspace.workflows.05_sample_complexity',
@@ -271,6 +288,7 @@ def report_learning(cfg,seeds,root=PROJECT_ROOT,dry_run=False):
 def run(args,root=PROJECT_ROOT):
     cfg=load_experiment(args.name,root)
     seeds=selected_seeds(cfg,parse_seeds(args.seeds))
+    if args.stage=='test' and args.kind in ('monte-carlo','all') and not args.confirm_test:raise ValueError('Test reporting requires --confirm-test')
     if args.kind in ('learning','all'):report_learning(cfg,seeds,root,dry_run=args.dry_run)
     if args.kind in ('monte-carlo','all'):report_mc(cfg,seeds,args.stage,root,dry_run=args.dry_run)
 
@@ -280,6 +298,7 @@ def build_parser():
     p.add_argument('--name',required=True)
     p.add_argument('--kind',choices=('learning','monte-carlo','all'),default='learning')
     p.add_argument('--stage',choices=('validation','test'),default='validation')
+    p.add_argument('--confirm-test',action='store_true')
     p.add_argument('--seeds',default=None,help='Default: all frozen training seeds')
     p.add_argument('--dry-run',action='store_true')
     return p

@@ -55,7 +55,9 @@ def run(args,root=None):
                 if sha_file(p)!=v:raise ValueError(f'Source changed while reporting: {p}')
             for seed in seeds:_require_matching_provenance(evaluation_output(cfg,args.stage,seed,root),_provenance(cfg,args.stage,seed,root,draws=c['draws']))
         code={name:sha_file(Path(__file__).with_name(name)) for name in ('advanced_report.py','advanced_learning.py','calendar_heatmaps.py')}
-        write_json(out/'report_manifest.json',dict(schema=1,experiment=cfg['name'],stage=args.stage,kind=args.kind,seeds=seeds,protocol_sha256=protocol,uncertainty_sha256=cfg['uncertainty_sha256'],sources=sources,code_sha256=code,note='Learning uses frozen validation only. Calendar uses indicated full held-out partition. No core changes.'))
+        from .scientific_checks import source_hashes,report_inventory
+        code.update(source_hashes(root,['PV_experiments/scientific_checks.py','MBPO_workspace/src/sample_complexity.py','MBPO_workspace/src/curve_statistics.py']))
+        write_json(out/'report_manifest.json',dict(schema=1,output_sha256=report_inventory(out),experiment=cfg['name'],stage=args.stage,kind=args.kind,seeds=seeds,protocol_sha256=protocol,uncertainty_sha256=cfg['uncertainty_sha256'],sources=sources,code_sha256=code,note='Learning uses frozen validation only. Calendar uses indicated full held-out partition. No core changes.'))
     if learning is not None:
         print('Confirmed targets:',learning['confirmed_count'],'of',learning['n_paired_seeds'],'seeds')
         print('Conditional sample reduction:',learning['conditional_sample_reduction_percent'])

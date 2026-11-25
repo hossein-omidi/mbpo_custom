@@ -97,15 +97,15 @@ def render_evaluation(data,out,stage):
             ax.bar(pos+offsets,t['mean'],width=.34 if len(fields)>1 else .55,label=field.replace('_kwh','').title(),alpha=.8)
             if S>1:ax.errorbar(pos+offsets,t['mean'],yerr=t.sd_seed_means,fmt='none',color='black',capsize=3,lw=1)
         ax.set(xticks=pos,xticklabels=['Fixed','Astronomical','SAC','MBPO'],ylabel='kWh / evaluated day',title=title);ax.legend();style(ax)
-    figset.save(fig,'E01_energy_and_effort','Does gross improvement survive actuator consumption?','Equal held-out days and draws; error bars ± sample SD of seed means, omitted for one seed.','all_day_draw_method.csv')
+    fig.suptitle('Means ± sample SD of seed means' if S>1 else 'Means — one seed; no seed SD');figset.save(fig,'E01_energy_and_effort','Does gross improvement survive actuator consumption?','Equal held-out days and draws; error bars ± sample SD of seed means, omitted for one seed.','all_day_draw_method.csv')
     for kind in ('month','season','year'):
         t=tables[kind]; labels=[k for k,_ in groups[kind] if len(_)]; fig,axes=plt.subplots(2,1,figsize=(9,7),sharex=True)
         for ax,field in zip(axes,('net_kwh','movement_kwh')):
             for m in METHODS:
                 a=t[(t.quantity==field)&(t.method==m)].set_index('group').loc[labels]
-                line(ax,np.arange(len(labels)),a['mean'].to_numpy(),m,a.sd_seed_means.to_numpy() if S>1 else None)
+                ax.errorbar(np.arange(len(labels))+(METHODS.index(m)-1.5)*.10,a['mean'].to_numpy(),yerr=a.sd_seed_means.to_numpy() if S>1 else None,fmt='o',capsize=2,color=COLORS[m],label=LABELS[m])
             ax.set_ylabel(field.replace('_kwh','').title()+' (kWh / day)');style(ax)
-        axes[0].legend(ncol=2,fontsize=8);axes[1].set_xticks(np.arange(len(labels)),labels);axes[1].set_xlabel({'month':'Calendar month','season':'Meteorological season','year':'Source year'}[kind]);figset.save(fig,f'E02_{kind}_net_and_effort','Does the controller advantage depend on calendar conditions?','Average energy per selected historical day; seed-mean SD; not annual totals or full-population estimates.',f'{kind}_energy_statistics.csv')
+        axes[0].legend(ncol=2,fontsize=8);axes[1].set_xticks(np.arange(len(labels)),labels);axes[1].set_xlabel({'month':'Calendar month','season':'Meteorological season','year':'Source year'}[kind]);fig.suptitle('Mean per evaluated day ± sample SD of seed means' if S>1 else 'Mean per evaluated day — one seed');figset.save(fig,f'E02_{kind}_net_and_effort','Does the controller advantage depend on calendar conditions?','Average energy per selected historical day; seed-mean SD; not annual totals or full-population estimates.',f'{kind}_energy_statistics.csv')
     # Pair before averaging. Each point is a historical day, not M independent days.
     fig,axes=plt.subplots(1,2,figsize=(11,4.4)); paired=[]
     for a,b in PAIRS:
@@ -134,7 +134,7 @@ def render_evaluation(data,out,stage):
         rows.extend(dict(method=m,step=i+1,utc_hour_unwrapped=clock[i],**{k:v[i] for k,v in st.items()}) for i in range(195))
         line(axes[0],clock,st['mean'],m,st['sd_total']);line(axes[1],clock,st['mean'],m,st['sd_seed_means'] if S>1 else None)
     for ax,title in zip(axes,('Descriptive spread over seed × day × weather','Between-training-seed SD of mean profiles' if S>1 else 'Single training seed — no seed SD')):
-        ax.set(ylabel='DC power (W)',title=title);style(ax)
+        ax.set(ylabel='DC power (W)',title=title+' (mean ± 1 SD)' if S>1 or ax is axes[0] else title);style(ax)
     axes[0].legend(ncol=2,fontsize=8);axes[1].set_xlabel('UTC hour (unwrapped; 25 = 01:00 next day)');save_csv(out,'power_moments.csv',rows)
     figset.save(fig,'E04_intraday_power','How do generation and its variability change within the day?','Two distinct bands: empirical mixture SD and sample SD of seed-level mean profiles; neither is a CI.','daily_power_mean_std_by_utc_step.csv')
     from .trajectories import representative_days
@@ -142,6 +142,6 @@ def render_evaluation(data,out,stage):
     for ax,sid in zip(axes[:,0],chosen):
         di=data['days'].index(sid)
         for mi,method in enumerate(METHODS):line(ax,clock,z[0,di,mi,:,0],method,z[0,di,mi,:,1])
-        ax.set(title=sid,ylabel='DC power (W)');style(ax)
+        ax.set(title=f'{sid} — seed {data["seeds"][0]}, mean ± weather-draw SD',ylabel='DC power (W)');style(ax)
     axes[0,0].legend(ncol=2,fontsize=7);axes[-1,0].set_xlabel('UTC hour (unwrapped)');figset.save(fig,'E05_seasonal_example_power','How variable is the response to uncertain weather on individual seasonal days?','First selected training seed; mean ± sample SD across the matched weather draws on each outcome-blind representative day.','daily_power_mean_std_by_utc_step.csv')
     figset.finish();write_json(out/'evaluation_scope.json',dict(stage=stage,days=data['days'],draws=M,seeds=data['seeds'],note='Equal-weight frozen held-out days. No annual yield extrapolation. Seed/day/draw spread is descriptive, not inferential.'))

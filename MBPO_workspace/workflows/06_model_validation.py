@@ -73,7 +73,7 @@ def _channel_metrics(actual, predicted, total_std=None, quantiles=None):
     return out
 
 
-def _prediction_rows(actual, predicted, uncertainty, metadata, quantiles=None):
+def _prediction_rows(actual, predicted, uncertainty, metadata, quantiles=None, predictive_sd=None):
     rows = []
     for i in range(len(actual)):
         row = dict(metadata[i])
@@ -82,6 +82,8 @@ def _prediction_rows(actual, predicted, uncertainty, metadata, quantiles=None):
             row[f"actual_delta_{name}"] = float(actual[i, j])
             row[f"predicted_delta_{name}"] = float(predicted[i, j])
             row[f"error_delta_{name}"] = float(predicted[i, j] - actual[i, j])
+            if predictive_sd is not None:
+                row[f'predictive_sd_{name}']=float(predictive_sd[i,j])
             if quantiles is not None:
                 for k,label in enumerate(('q025','q05','q95','q975')):
                     row[f'{label}_delta_{name}']=float(quantiles[k,i,j])
@@ -145,7 +147,7 @@ def _run_policy_trajectory(env, agent, scenario_id, realization_id=0):
     if len(states) != env.horizon:
         raise RuntimeError(f"Incomplete policy trajectory for {scenario_id}")
     return (np.asarray(states), np.asarray(actions), np.asarray(next_states),
-            np.asarray(rewards, dtype=np.float32))
+            np.asarray(rewards, dtype=np.float64))
 
 
 def _counterfactual_actions(policy_action):
@@ -188,6 +190,8 @@ def run_validation(args):
     requested_cfg = json.loads(json.dumps(cfg.to_dict()))
     if saved_cfg != requested_cfg:
         raise ValueError("Current MBPO configuration differs from the selected run config.json")
+    from PV_experiments.scientific_checks import verify_completed_run
+    verify_completed_run(run_dir,json.loads((run_dir/'run_metadata.json').read_text()))
     from mbpo.audit_release import load_verified_checkpoint, equivalent_pose_metrics
     ckpt,loaded_sha=load_verified_checkpoint(checkpoint_path,'mbpo',run_dir=run_dir,expected_seed=getattr(args,'expected_seed',None),expected_epoch=getattr(args,'expected_epoch',None),expected_sha=getattr(args,'expected_sha',None))
     if ckpt.get("schema") != 2 or ckpt.get("config_hash") != config_digest(cfg):
@@ -217,8 +221,6 @@ def run_validation(args):
                                 hidden_dim=m.hidden_dim, lr=m.model_lr,
                                 device=args.device, seed=seed + 100)
     ensemble.load_state_dict(ckpt["dynamics"])
-    if not ensemble.fitted:
-        raise ValueError("Checkpoint contains an unfitted dynamics ensemble")
 
     env = SACEnvironment(cfg.sac.eval_env)
     if env.resolved_mdp != ckpt.get("resolved_mdp"):
@@ -227,6 +229,19 @@ def run_validation(args):
     fake_env = StructuredFakeEnv(ensemble, env)
 
     try:
+        if not ensemble.fitted:
+            accounting=_load_training_stats(run_dir / "episodes.csv")
+            if accounting.get('synthetic_samples_used')!=0:
+                raise ValueError('Unfitted ensemble has nonzero or missing synthetic exposure')
+            summary=dict(validation_schema=2,model_status='unfitted',states_per_scenario=int(args.states_per_scenario),
+                checkpoint=str(checkpoint_path),loaded_policies={'mbpo':{'sha256':loaded_sha,'seed':seed,'epoch':int(ckpt['epoch'])}},
+                seed=seed,scenario_protocol_sha256=split['protocol_sha256'],validation_scenario_ids=scenario_ids,
+                validation_realization_id=int(args.realization_id),weather_uncertainty=uncertainty_spec,
+                internal_whole_day_holdout=None,external_on_policy_one_step=None,counterfactual_action_test=None,
+                training_synthetic_data_accounting=accounting,interpretation=['No fitted dynamics; no predictive diagnostics. Physical policy results remain valid.'])
+            outdir.mkdir(parents=True,exist_ok=True)
+            (outdir/'model_validation_summary.json').write_text(json.dumps(summary,indent=2,allow_nan=False),encoding='utf-8')
+            return summary
         # Internal held-out transitions: whole NSRDB days reserved by the MBPO replay.
         real_pool = ScenarioReplayBuffer(capacity=a["replay_size"], seed=seed + 1,
                                          validation_fraction=m.model_holdout_fraction)
@@ -244,7 +259,7 @@ def run_validation(args):
         internal_meta = [{"scenario_id": real_pool.scenario_names[int(real_pool.scenario_ids[i])],
                           "transition_index": int(i)} for i in holdout_idx]
         internal_rows = _prediction_rows(holdout_actual_delta, holdout_mean,
-                                         holdout_score, internal_meta, holdout_quantiles)
+                                         holdout_score, internal_meta, holdout_quantiles, holdout_total)
 
         # External validation on held-out days not used by the policy or dynamics fit.
         external_states, external_actions, external_next, external_rewards = [], [], [], []
@@ -383,10 +398,14 @@ def run_validation(args):
         external_rows = _prediction_rows(
             actual_delta, predicted_delta, disagreement,
             [{"scenario_id": m["scenario_id"], "step": m["step"]}
-             for m in external_meta], quantiles)
+             for m in external_meta], quantiles, total_std)
+        for i,row in enumerate(external_rows):
+            row.update(actual_next_power_norm=float(next_states[i,2]),actual_reward_kwh=float(rewards[i]),predicted_reward_kwh=float(pred_rewards[i]))
         _csv(outdir / "external_on_policy_predictions.csv", external_rows)
         summary = {
             "validation_schema": 2,
+            "model_status":"fitted",
+            "states_per_scenario":int(args.states_per_scenario),
             "hierarchical_diagnostic_samples":128,
             "feasibility_policy":"diagnostic only; cell_min=-60 C, GHI residual allowance=200 W/m2, rho_max=1; not guaranteed support bounds",
             "checkpoint": str(checkpoint_path),
@@ -488,6 +507,9 @@ def main():
         args.outdir = str(run_dir / "model_validation")
     summary = run_validation(args)
     print("Model validation written to:", args.outdir)
+    if summary["model_status"]=="unfitted":
+        print("Model diagnostics unavailable: unfitted ensemble; physical policy retained.")
+        return
     print("External on-policy power RMSE:",
           summary["external_on_policy_one_step"]["power_norm"]["rmse"])
     print("Counterfactual power RMSE:", summary["counterfactual_action_test"]["power_rmse_norm"])

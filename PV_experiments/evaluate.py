@@ -46,6 +46,8 @@ def _provenance(cfg,mode,seed,root,*,draws=None,realization_id=None):
       'model_max_train_samples':cfg.get('model_max_train_samples'),
       'device':cfg['device'],
     }
+    from .scientific_checks import source_hashes
+    result['statistical_sources']=source_hashes(root,['PV_experiments/scientific_checks.py']+([] if mode=='model' else ['MBPO_workspace/src/curve_statistics.py']))
     if mode=='model':
         result['realization_id']=int(realization_id)
     else:
@@ -72,6 +74,13 @@ def _verify_model_validation_summary(path,cfg,seed,realization_id,protocol_sha,r
     from mbpo.env.trajectory_uncertainty import normalized_spec
     if d.get('weather_uncertainty')!=normalized_spec(read_json(uncertainty_path(cfg,root))):
         raise ValueError(f'{path}: model-validation weather assumptions differ from frozen experiment')
+    from .scientific_checks import validate_model_tables,verify_model_accounting
+    verify_model_accounting(d,run_path(cfg,'mbpo',seed,root))
+    days=read_json(run_path(cfg,'mbpo',seed,root)/'scenario_split.json')['validation_ids']
+    predictions,_=validate_model_tables(Path(path).parent,d,days)
+    if predictions is not None:
+        from .scientific_checks import verify_model_physical_parity
+        verify_model_physical_parity(predictions,run_path(cfg,'mbpo',seed,root),cfg['epochs'],realization_id)
     for required in ('external_on_policy_one_step','counterfactual_action_test'):
         if required not in d:raise ValueError(f'{path}: incomplete {required} model diagnostic')
 
@@ -127,6 +136,7 @@ def evaluate_one(cfg,mode,seed,draws,root=PROJECT_ROOT,dry_run=False):
          '--outdir',str(out),'--device',cfg['device']]
     if not dry_run:
         cmd+=['--expected-seed',str(seed),'--expected-epoch',str(cfg['epochs']),'--expected-sac-sha',identity['sac_checkpoint_sha256'],'--expected-mbpo-sha',identity['mbpo_checkpoint_sha256']]
+    if mode=='test':cmd+=['--confirm-test']
     if mode=='smoke':cmd+=['--max-days','2']
     cmd+=command_override(cfg)
     execute(cfg,f'evaluate_{mode}',cmd,root=root,seed=seed,dry_run=dry_run)
@@ -136,6 +146,10 @@ def evaluate_one(cfg,mode,seed,draws,root=PROJECT_ROOT,dry_run=False):
         from mbpo.audit_release import seal_evaluation, verify_loaded_policies
         verify_loaded_policies(read_json(out/'mc_summary.json'),identity)
         if _provenance(cfg,mode,seed,root,draws=draws)!=identity: raise ValueError('Evaluation inputs changed during execution')
+        from .scientific_checks import validate_mc_tables
+        days=list(split['test_ids' if mode=='test' else 'validation_ids'])
+        if mode=='smoke':days=days[:2]
+        validate_mc_tables(out,days,draws,run_dirs={'sac':sac,'mbpo':mbpo} if mode!='test' else None,epoch=cfg['epochs'])
         seal_evaluation(out,identity)
 
 
@@ -181,7 +195,8 @@ def run(args,root=PROJECT_ROOT):
                 from mbpo.audit_release import seal_evaluation, verify_loaded_policies
                 verify_loaded_policies(read_json(out/'model_validation_summary.json'),identity)
                 if _provenance(cfg,mode,seed,root,realization_id=args.realization_id)!=identity: raise ValueError('Model evaluation inputs changed during execution')
-                seal_evaluation(out,identity)
+                from .scientific_checks import seal_model
+                seal_model(out,identity)
         else:
             if mode=='test' and not args.dry_run:
                 # Require a completed physical smoke run before consuming test data.

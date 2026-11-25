@@ -292,7 +292,7 @@ def plot_diagnostics(out, rows, clock_rows, paired):
 
     fig,ax=plt.subplots(figsize=(10,5))
     data=[[r['net_kwh'] for r in rows if r['method']==method] for method in METHODS]
-    ax.boxplot(data,labels=METHODS,showfliers=False)
+    ax.boxplot(data,labels=METHODS,showfliers=True)
     ax.set_ylabel('Daily net DC energy (kWh)')
     ax.set_title('Assumed weather-error distribution over held-out historical days')
     ax.grid(axis='y',alpha=.2);fig.tight_layout()
@@ -322,7 +322,8 @@ def main(argv=None):
     p.add_argument('--expected-mbpo-sha')
     p.add_argument('--mbpo-checkpoint',required=True)
     p.add_argument('--scenario-split-json',required=True)
-    p.add_argument('--split-role',choices=('test','validation'),default='test')
+    p.add_argument('--split-role',choices=('test','validation'),default='validation')
+    p.add_argument('--confirm-test',action='store_true')
     p.add_argument('--uncertainty-spec',required=True)
     p.add_argument('--draws',type=int,default=100)
     p.add_argument('--max-days',type=int,default=None,help='DEBUG subset only; never label as a full test')
@@ -332,6 +333,7 @@ def main(argv=None):
     p.add_argument('--model-epochs',type=int,default=None,help='Match any training-time MBPO override')
     p.add_argument('--model-max-train-samples',type=int,default=None,help='Match any training-time MBPO override')
     args=p.parse_args(argv)
+    if args.split_role=='test' and not args.confirm_test:p.error('Test partition requires --confirm-test')
     if args.draws<2:p.error('At least two Monte Carlo draws are required for SD')
     if args.max_days is not None and args.max_days<1:p.error('max-days must be positive')
     spec=normalized_spec(json.loads(Path(args.uncertainty_spec).read_text(encoding='utf-8')))
@@ -350,6 +352,14 @@ def main(argv=None):
     population_size=len(days)
     if args.max_days is not None:days=days[:args.max_days]
     if not days:raise ValueError('Empty selected historical partition')
+    from PV_experiments.scientific_checks import verify_completed_run,verify_run_comparability
+    runs=[]
+    for checkpoint in (args.sac_checkpoint,args.mbpo_checkpoint):
+        folder=Path(checkpoint).resolve().parent
+        meta=json.loads((folder/'run_metadata.json').read_text())
+        verify_completed_run(folder,meta)
+        runs.append(dict(root=folder,metadata=meta))
+    verify_run_comparability(runs)
     agents={
         'sac':load_policy(cfg,'sac',args.sac_checkpoint,args.device,
                           expected_protocol_sha256=split['protocol_sha256'], expected_seed=args.expected_seed, expected_epoch=args.expected_epoch, expected_sha=args.expected_sac_sha),

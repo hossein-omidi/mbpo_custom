@@ -62,13 +62,17 @@ def load_learning(cfg,seeds,root):
     seeds=sorted(seeds);splits=[verify_pair(cfg,s,root) for s in seeds]
     if any(s!=splits[0] for s in splits[1:]):raise ValueError('Frozen splits differ across seeds')
     runs={a:[_load_run(run_path(cfg,a,s,root),a) for s in seeds] for a in ALGORITHMS}
-    allruns=runs['sac']+runs['mbpo'];meta=allruns[0]['metadata'];steps=expected_steps(meta)
+    allruns=runs['sac']+runs['mbpo']
+    from .scientific_checks import verify_run_comparability
+    verify_run_comparability(allruns)
+    meta=allruns[0]['metadata'];steps=expected_steps(meta)
     if len(steps)<2:raise ValueError('At least two scheduled evaluations needed')
     keys=('scenario_protocol_sha256','resolved_mdp_sha256','shared_sac_config_sha256','validation_scenario_ids','test_scenario_ids','horizon','state_dim','action_dim','energy_objective','movement_cost_mode','movement_penalty','power_model','target_fraction','sustain_checkpoints','bootstrap_replicates','evaluation_interval_episodes','final_epoch','final_env_steps')
     days=list(meta['validation_scenario_ids']);sources={};times={a:[] for a in ALGORITHMS};mat={};updates=None;replay=[]
     if len(days)<2 or len(set(days))!=len(days):raise ValueError('Need at least two distinct frozen validation days')
     if meta['movement_cost_mode']!='geometry' or float(meta['movement_penalty'])!=1.:raise ValueError('Expected movement-aware geometry objective (gain 1) for this study')
     reference=None
+    recovery={}
     for a in ALGORITHMS:
         matrices=[]
         for seed,run in zip(seeds,runs[a]):
@@ -110,6 +114,9 @@ def load_learning(cfg,seeds,root):
                 cum=np.cumsum(counts,axis=0)[steps//int(m['horizon'])-1]
                 for k,vals in zip(steps,cum):
                     den=vals[3]+vals[4];replay.append(dict(seed=seed,env_steps=int(k),**{f:int(v) for f,v in zip(fields,vals)},actual_synthetic_batch_draw_fraction=float(vals[3]/den) if den else None))
+            from .scientific_checks import recovery_accounting
+            recovery[a,seed]=recovery_accounting(p,int(m['final_env_steps']),int(m['horizon']))
+            if (p/'recovery_events.json').exists():sources[f'{a}_seed{seed}/recovery_events.json']=sha_file(p/'recovery_events.json')
             # Include episode data, omitted in the earlier manager learning hash list.
             for name in ('run_metadata.json','scenario_split.json','episodes.csv','periodic_evaluation/evaluations.csv','periodic_evaluation/evaluation_days.csv','periodic_evaluation/evaluation_references.csv'):
                 sources[f'{a}_seed{seed}/{name}']=sha_file(p/name)
@@ -118,7 +125,7 @@ def load_learning(cfg,seeds,root):
     if not 0<fraction<1 or sustain<1 or sustain>len(steps):raise ValueError('Frozen target or sustain rule invalid for available checkpoints')
     if dual<=fixed:raise ValueError('Frozen relative target undefined: astronomical reference does not exceed fixed mounting. Use a separately preregistered absolute target protocol, not a post-hoc choice.')
     target=float(fixed+fraction*(dual-fixed))
-    return dict(seeds=seeds,days=days,steps=steps,updates=updates,matrix=mat,times=times,target=target,fraction=fraction,sustain=sustain,fixed=float(fixed),dual=float(dual),sources=sources,protocol=meta['scenario_protocol_sha256'],mdp=meta['resolved_mdp_sha256'],horizon=int(meta['horizon']),replay=replay)
+    return dict(seeds=seeds,days=days,steps=steps,updates=updates,matrix=mat,times=times,target=target,fraction=fraction,sustain=sustain,fixed=float(fixed),dual=float(dual),sources=sources,protocol=meta['scenario_protocol_sha256'],mdp=meta['resolved_mdp_sha256'],horizon=int(meta['horizon']),replay=replay,recovery=recovery)
 
 
 def compute(d):
@@ -137,6 +144,7 @@ def compute(d):
         for i,s in enumerate(seeds):
             onset,confirmed=event(y[i],steps,target,sustain);j=int(np.searchsorted(steps,confirmed)) if confirmed is not None else None
             row=dict(algorithm=a,seed=s,onset_steps=onset,confirmed_steps=confirmed,confirmed=confirmed is not None,last_observed_steps=B,restricted_steps=confirmed if confirmed is not None else B,auc_mean_net_kwh=float(auc[a][i]),final_net_kwh=float(y[i,-1]),logged_training_seconds=float(t[i,-1,0]),logged_evaluation_seconds=float(t[i,-1,1]),logged_total_seconds=float(t[i,-1,2]),logged_seconds_to_confirmation=float(t[i,j,2]) if j is not None else None,periodic_validation_transitions_to_confirmation=(j+1)*len(d['days'])*int(d['horizon']) if j is not None else None,periodic_validation_transitions_at_budget=len(steps)*len(d['days'])*int(d['horizon']))
+            row.update(d.get('recovery',{}).get((a,s),{}))
             rows.append(row);lookup[a,s]=row
         events=[lookup[a,s]['confirmed_steps'] for s in seeds]
         for j,k in enumerate(steps):
@@ -163,6 +171,8 @@ def render_learning(d,out):
         csv_out(out/'mbpo_replay_at_confirmation_or_budget.csv',endpoint)
         rep['mbpo_replay_at_confirmation_or_budget']=endpoint
         rep['definitions']['replay']='Accepted synthetic transitions are generated records; samples used are minibatch draws with reuse. Neither is an external training transition.'
+    rep['recovery_accounting']=[dict(algorithm=a,seed=s,**v) for (a,s),v in d.get('recovery',{}).items()]
+    rep['definitions']['recovery']='Learning axis counts committed transitions; known executed lower bound includes discarded complete episode rows. Unlogged partial work and discarded timing are not reconstructible.'
     write_json(out/'sample_efficiency_summary.json',rep)
     # Primary figure: separate performance and paired effect, exact sampled checkpoints.
     fig,axes=plt.subplots(2,1,figsize=(7.4,6.0),sharex=True,layout='constrained',height_ratios=[1.45,1])

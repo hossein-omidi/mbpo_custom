@@ -66,6 +66,8 @@ def _load_run(run_dir: str | Path, expected_algorithm: str) -> dict:
         raise ValueError(f"{root}: expected {expected_algorithm}, found {metadata.get('algorithm')}")
     if metadata.get("run_schema") != 2:
         raise ValueError(f"{root}: unsupported run schema; retrain with the verified evaluation patch")
+    from PV_experiments.scientific_checks import verify_completed_run
+    verify_completed_run(root,metadata)
     eval_root = root / "periodic_evaluation"
     aggregate = _read_csv(eval_root / "evaluations.csv")
     daily = _read_csv(eval_root / "evaluation_days.csv")
@@ -176,7 +178,9 @@ def _training_compute(run: dict) -> dict:
         vals = [v for v in vals if math.isfinite(v)]
         return float(sum(vals)) if vals else None
     final_steps = max(int(r["env_steps"]) for r in rows)
-    train_seconds = total("episode_seconds")
+    times=[_number(r["episode_seconds"],field="episode_seconds") for r in rows]
+    if any(t<0 for t in times):raise ValueError("Negative training time")
+    train_seconds=float(sum(times))
     eval_seconds = sum(_number(r["evaluation_seconds"], field="evaluation_seconds")
                        for r in _read_csv(run["root"] / "periodic_evaluation" / "evaluations.csv"))
     result = {
@@ -196,6 +200,8 @@ def _training_compute(run: dict) -> dict:
         "real_samples_used": total("real_samples_used"),
         "gradient_updates": int(max(int(r.get("updates", 0)) for r in rows)),
     }
+    from PV_experiments.scientific_checks import recovery_accounting
+    result.update(recovery_accounting(run["root"],final_steps,int(run["metadata"]["horizon"])))
     return result
 
 
@@ -223,6 +229,8 @@ def analyze_sample_complexity(
         raise ValueError(f"SAC and MBPO must use the same paired seed set: {sac_seeds} vs {mbpo_seeds}")
 
     all_runs = sac_runs + mbpo_runs
+    from PV_experiments.scientific_checks import verify_run_comparability
+    verify_run_comparability(all_runs)
     ref_meta = all_runs[0]["metadata"]
     target_fraction = float(ref_meta.get("target_fraction", 0.90)) if target_fraction is None else float(target_fraction)
     sustain_checkpoints = int(ref_meta.get("sustain_checkpoints", 2)) if sustain_checkpoints is None else int(sustain_checkpoints)
@@ -477,9 +485,9 @@ def _render_figures(out: Path, steps, sac_mean, sac_lo, sac_hi, mbpo_mean, mbpo_
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     ax.plot(steps, sac_mean, label="SAC", linewidth=2)
-    ax.fill_between(steps, sac_lo, sac_hi, alpha=0.18, label="SAC 95% two-way bootstrap band")
+    ax.fill_between(steps, sac_lo, sac_hi, alpha=0.18, label="SAC central 95% resampling band (sensitivity)")
     ax.plot(steps, mbpo_mean, label="MBPO", linewidth=2)
-    ax.fill_between(steps, mbpo_lo, mbpo_hi, alpha=0.18, label="MBPO 95% two-way bootstrap band")
+    ax.fill_between(steps, mbpo_lo, mbpo_hi, alpha=0.18, label="MBPO central 95% resampling band (sensitivity)")
     ax.axhline(target, linestyle="--", linewidth=1.2, label="Predefined target")
     ax.set(xlabel="Real PV simulator transitions", ylabel="Mean validation net energy (kWh / episode)",
            title="Empirical sample-efficiency learning curves")
@@ -488,7 +496,7 @@ def _render_figures(out: Path, steps, sac_mean, sac_lo, sac_hi, mbpo_mean, mbpo_
 
     fig, ax = plt.subplots(figsize=(9, 4.8))
     ax.plot(steps, diff_mean, linewidth=2, label="MBPO − SAC")
-    ax.fill_between(steps, diff_lo, diff_hi, alpha=0.2, label="Paired 95% two-way bootstrap band")
+    ax.fill_between(steps, diff_lo, diff_hi, alpha=0.2, label="Paired central 95% resampling band (sensitivity)")
     ax.axhline(0, linestyle="--", linewidth=1)
     ax.set(xlabel="Real PV simulator transitions", ylabel="Net-energy difference (kWh / episode)",
            title="Paired MBPO–SAC validation performance")
@@ -501,7 +509,10 @@ def _render_figures(out: Path, steps, sac_mean, sac_lo, sac_hi, mbpo_mean, mbpo_
         if rows:
             ax.scatter([r["seed"] for r in rows], [r["real_env_steps_to_target"] for r in rows],
                        marker=marker, s=65, label=algorithm.upper())
-    ax.set(xlabel="Training seed", ylabel="Real transitions to target",
+        missed=[r for r in per_seed_rows if r['algorithm']==algorithm and not r['reached_target']]
+        if missed:
+            ax.scatter([r['seed'] for r in missed],[r['last_evaluated_env_steps'] for r in missed],marker=marker,facecolors='none',edgecolors='k',s=65,label=algorithm.upper()+' not confirmed (budget)')
+    ax.set(xlabel="Training seed", ylabel="Confirmation steps or censored budget",
            title="Per-seed empirical sample complexity")
     ax.grid(alpha=0.25); ax.legend(); fig.tight_layout()
     fig.savefig(out / "sample_complexity_by_seed.png", dpi=180); plt.close(fig)
@@ -511,9 +522,15 @@ def _render_figures(out: Path, steps, sac_mean, sac_lo, sac_hi, mbpo_mean, mbpo_
     for algorithm in algos:
         vals = [r["measured_training_plus_evaluation_seconds"] for r in compute_rows
                 if r["algorithm"] == algorithm and r["measured_training_plus_evaluation_seconds"] is not None]
-        mean_time.append(float(np.mean(vals)) if vals else 0.0)
+        if len(vals)!=sum(r["algorithm"]==algorithm for r in compute_rows):raise ValueError("Missing compute timing")
+        mean_time.append(float(np.mean(vals)))
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    ax.bar(algos, mean_time)
+    paired={a:{r['seed']:r['measured_training_plus_evaluation_seconds'] for r in compute_rows if r['algorithm']==a} for a in algos}
+    if set(paired['sac'])!=set(paired['mbpo']):raise ValueError('Unpaired timing seeds')
+    for seed in sorted(paired['sac']):ax.plot([0,1],[paired[a][seed] for a in algos],'-o',alpha=.5,label=f'Seed {seed}')
+    sd=[np.std(list(paired[a].values()),ddof=1) for a in algos] if len(paired['sac'])>1 else None
+    ax.errorbar([0,1],mean_time,yerr=sd,fmt='D',color='k',capsize=3,label='Mean ± seed SD' if sd is not None else 'Mean')
+    ax.set_xticks([0,1],['SAC','MBPO']);ax.legend(fontsize=8)
     ax.set(ylabel="Measured training + periodic evaluation time (s)",
            title="Computational cost per training seed")
     ax.grid(axis="y", alpha=0.25); fig.tight_layout()
