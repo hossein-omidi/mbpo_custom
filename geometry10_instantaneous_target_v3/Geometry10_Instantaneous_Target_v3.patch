@@ -1,0 +1,1236 @@
+diff --git a/MBPO_workspace/src/dynamics.py b/MBPO_workspace/src/dynamics.py
+index 63d717f15c1caf086bbda9df67b74c7e44ac4a83..91efa2d134af7c3d4104840a26500b3a668ab21c 100644
+--- a/MBPO_workspace/src/dynamics.py
++++ b/MBPO_workspace/src/dynamics.py
+@@ -13,7 +13,7 @@ import torch
+ from torch import nn
+ from SAC_workspace.src.agents.sac_agent import mlp
+ 
+-DYNAMICS_SCHEMA = 4
++DYNAMICS_SCHEMA = 5
+ 
+ 
+ class GaussianDeltaNet(nn.Module):
+@@ -83,7 +83,7 @@ class DynamicsEnsemble:
+             raise ValueError('Non-finite or terminal-start training data')
+         xw = weather_features(states)
+         check_batch(states); check_batch(nxt)
+-        if np.any(np.abs(actions)>1.00001):
++        if np.any(np.abs(actions)>1.0):
+             raise ValueError('Invalid model-fit actions')
+         yw = (nxt[:, :2] - states[:, :2]).astype(np.float32)
+         # Teacher-forced next weather is used only to fit the conditional power model.
+@@ -169,7 +169,7 @@ class DynamicsEnsemble:
+         actions = np.asarray(actions, dtype=np.float32)
+         if (states.ndim != 2 or states.shape[1] != STATE_DIM or actions.shape != (len(states), 2)
+                 or not np.isfinite(states).all() or not np.isfinite(actions).all()
+-                or np.any(np.abs(actions) > 1.00001)):
++                or np.any(np.abs(actions) > 1.0)):
+             raise ValueError('Dynamics expects finite geometry10 states and bounded (N,2) actions')
+         return states, actions
+ 
+@@ -405,13 +405,13 @@ class StructuredFakeEnv:
+         states = check_batch(states)
+         if states.ndim != 2 or not len(states):
+             raise ValueError('Expected nonempty geometry10 rollout batch')
+-        if actions.shape != (len(states),2) or not np.isfinite(actions).all() or np.any(np.abs(actions)>1.00001):
++        if actions.shape != (len(states),2) or not np.isfinite(actions).all() or np.any(np.abs(actions)>1.0):
+             raise ValueError('Invalid synthetic action batch')
+-        actions = np.clip(actions, -1., 1.)
++        # Actions are validated above; preserve the exact policy command.
+         # Exact ephemeris from scenario + remaining time; no weather leakage.
+         next_solar = self.solar_context.next(states, scenario_ids)
+         new_tilt, new_az, tau, executed_tilt, executed_az, done = pose_transition(
+-            states, actions, self.max_delta_tilt, self.max_delta_azimuth, self.horizon)
++            states, actions, self.horizon)
+         delta,uncertainty = self.ensemble.predict_delta(states,actions,stochastic=stochastic)
+         delta = np.asarray(delta,dtype=np.float32)
+         uncertainty = np.asarray(uncertainty,dtype=np.float32)
+diff --git a/MBPO_workspace/src/sample_complexity.py b/MBPO_workspace/src/sample_complexity.py
+index d5184e0272e2f519ca6d46aedea668bcd968e588..97790a77135ba2927ee4cfaa34f41405726884ba 100644
+--- a/MBPO_workspace/src/sample_complexity.py
++++ b/MBPO_workspace/src/sample_complexity.py
+@@ -6,6 +6,7 @@ are reported separately and are never counted as physical environment samples.
+ """
+ from __future__ import annotations
+ from mbpo.audit_support import target_event, expected_steps
++from mbpo.geometry10 import ACTION_SEMANTICS
+ 
+ import csv
+ import json
+@@ -423,6 +424,9 @@ def analyze_sample_complexity(
+     _write_csv(out / "algorithm_summary.csv", summaries)
+     _write_csv(out / "computational_cost_by_seed.csv", compute_rows)
+ 
++    dual_field = ("dual_axis_instantaneous_validation_mean_kwh"
++                  if ref_meta.get("action_semantics") == ACTION_SEMANTICS
++                  else "dual_axis_slew_limited_validation_mean_kwh")
+     report = {
+         "analysis_schema": 1,
+         "algorithms": ["sac", "mbpo"],
+@@ -442,7 +446,7 @@ def analyze_sample_complexity(
+         "target_kwh_per_episode": float(target),
+         "sustain_checkpoints": int(sustain_checkpoints),
+         "fixed_validation_mean_kwh": fixed_mean,
+-        "dual_axis_slew_limited_validation_mean_kwh": dual_mean,
++        dual_field: dual_mean,
+         "sample_reduction": reduction_summary,
+         "algorithm_summary": summaries,
+         "computational_cost": compute_rows,
+diff --git a/MBPO_workspace/workflows/06_model_validation.py b/MBPO_workspace/workflows/06_model_validation.py
+index 72f8f5cdb38d9ed5b9d74dfd3061730e0c9632e7..18651ed6175cc8d33b52a911d510c485a706209f 100644
+--- a/MBPO_workspace/workflows/06_model_validation.py
++++ b/MBPO_workspace/workflows/06_model_validation.py
+@@ -6,7 +6,7 @@ replay the same policy prefix to reconstruct each observed state, then compare
+ several alternative actions against the real next transition.
+ """
+ from __future__ import annotations
+-from mbpo.geometry10 import TAU, PANEL_AZ, SOLAR, angular_rmse_deg
++from mbpo.geometry10 import TAU, PANEL_AZ, SOLAR, angular_rmse_deg, hold_action
+ 
+ import argparse
+ import csv
+@@ -151,16 +151,18 @@ def _run_policy_trajectory(env, agent, scenario_id, realization_id=0):
+             np.asarray(rewards, dtype=np.float64))
+ 
+ 
+-def _counterfactual_actions(policy_action):
++def _counterfactual_actions(policy_action, state):
++    # Action probes with independent tilt/azimuth effects under target semantics.
++    hold = hold_action(float(state[3]) * 90.0)
+     return [
+         ("policy", np.asarray(policy_action, dtype=np.float32)),
+-        ("zero", np.asarray([0.0, 0.0], dtype=np.float32)),
++        ("hold", hold),
+         ("tilt_positive", np.asarray([1.0, 0.0], dtype=np.float32)),
+         ("tilt_negative", np.asarray([-1.0, 0.0], dtype=np.float32)),
+-        ("azimuth_positive", np.asarray([0.0, 1.0], dtype=np.float32)),
+-        ("azimuth_negative", np.asarray([0.0, -1.0], dtype=np.float32)),
+-        ("diagonal_positive", np.asarray([1.0, 1.0], dtype=np.float32)),
+-        ("diagonal_negative", np.asarray([-1.0, -1.0], dtype=np.float32)),
++        ("azimuth_positive", np.asarray([hold[0], 0.5], dtype=np.float32)),
++        ("azimuth_negative", np.asarray([hold[0], -0.5], dtype=np.float32)),
++        ("diagonal_positive", np.asarray([1.0, 0.5], dtype=np.float32)),
++        ("diagonal_negative", np.asarray([-1.0, -0.5], dtype=np.float32)),
+     ]
+ 
+ 
+@@ -298,7 +300,7 @@ def run_validation(args):
+             selected_steps = np.unique(np.linspace(
+                 0, env.horizon - 1, num=min(int(args.states_per_scenario), env.horizon), dtype=int))
+             for t in selected_steps:
+-                for action_name, candidate in _counterfactual_actions(actions[t]):
++                for action_name, candidate in _counterfactual_actions(actions[t], states[t]):
+                     replay_obs = env.reset(
+                         scenario_id=sid, realization_id=args.realization_id)
+                     for prefix_action in actions[:int(t)]:
+diff --git a/MBPO_workspace/workflows/09_monte_carlo_evaluate.py b/MBPO_workspace/workflows/09_monte_carlo_evaluate.py
+index 32d321daa1aabeb07518037ab8e6d0da47aad66a..2df33122c5151f0640f326c437201daa6f48983f 100644
+--- a/MBPO_workspace/workflows/09_monte_carlo_evaluate.py
++++ b/MBPO_workspace/workflows/09_monte_carlo_evaluate.py
+@@ -18,27 +18,23 @@ from datetime import datetime
+ from pathlib import Path
+ import numpy as np
+ from mbpo.env.trajectory_uncertainty import normalized_spec,spec_fingerprint
++from mbpo.env.baseline_contract import astronomical_action
++from mbpo.geometry10 import hold_action
+ 
+-METHODS=('fixed_no_motion','sun_slew_limited','sac','mbpo')
++METHODS=('fixed_no_motion','sun_tracking','sac','mbpo')
+ PAIR_NAMES=(('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),
+-            ('mbpo','sun_slew_limited'),('sac','sun_slew_limited'))
++            ('mbpo','sun_tracking'),('sac','sun_tracking'))
+ 
+ 
+ def action_for(method,env,obs,agent):
+-    if method=='fixed_no_motion':return np.zeros(2,dtype=np.float32)
+-    if method in ('mbpo','sac'):return agent.act(obs,deterministic=True)
+-    if method!='sun_slew_limited':raise ValueError(method)
+-    from mbpo.env.pvlib_physics import dual_axis_tracking_targets
+     u=env.unwrapped
+-    # Match the existing PeriodicEvaluator astronomical baseline: the
+-    # sun position at the CURRENT decision timestamp determines the action.
+-    # The plant then advances to t+1 and computes the resulting power.
+-    sp=u._solar_position(u.current_time)
+-    if float(sp.zenith)>=90.:return np.zeros(2,dtype=np.float32)
+-    tilt,az=dual_axis_tracking_targets(float(sp.zenith),float(sp.azimuth))
+-    dt=np.clip((tilt-u.tilt)/u.max_delta_tilt,-1,1)
+-    da=((az-u.azimuth+180)%360-180)/u.max_delta_azimuth
+-    return np.array([dt,np.clip(da,-1,1)],dtype=np.float32)
++    if method=='fixed_no_motion':
++        return hold_action(float(u.tilt))
++    if method in ('mbpo','sac'):
++        return agent.act(obs,deterministic=True)
++    if method!='sun_tracking':
++        raise ValueError(method)
++    return astronomical_action(u)
+ 
+ 
+ def run_one(env,method,sid,draw,policy=None):
+diff --git a/PV_experiments/calendar_heatmaps.py b/PV_experiments/calendar_heatmaps.py
+index 4dfa5d2adfaa5ccf032bf89bd88f03a903feaaf8..e0158d5966563c55883ea846ff2c162e6b8f3430 100644
+--- a/PV_experiments/calendar_heatmaps.py
++++ b/PV_experiments/calendar_heatmaps.py
+@@ -12,8 +12,8 @@ from matplotlib.patches import Patch
+ import matplotlib.pyplot as plt
+ from .advanced_learning import finite,same,sha_file,write_json,save,csv_out
+ 
+-METHODS=('fixed_no_motion','sun_slew_limited','sac','mbpo')
+-LABELS={'fixed_no_motion':'Fixed mounting','sun_slew_limited':'Astronomical tracking','sac':'SAC','mbpo':'MBPO','mbpo_minus_sac':'MBPO − SAC','mbpo_minus_sun_slew_limited':'MBPO − astronomical'}
++METHODS=('fixed_no_motion','sun_tracking','sac','mbpo')
++LABELS={'fixed_no_motion':'Fixed mounting','sun_tracking':'Astronomical tracking','sac':'SAC','mbpo':'MBPO','mbpo_minus_sac':'MBPO − SAC','mbpo_minus_sun_tracking':'MBPO − astronomical'}
+ FIELDS=('gross_kwh','movement_kwh','net_kwh')
+ MONTHS=[calendar.month_abbr[m] for m in range(1,13)]
+ 
+@@ -80,7 +80,7 @@ def aggregate(d,metric,layout):
+     if metric in FIELDS:
+         idx=FIELDS.index(metric);data={a:finite(d['values'][:,:,:,i,idx]) for i,a in enumerate(METHODS)}
+     elif metric=='paired_net_gain_kwh':
+-        x=d['values'][...,2];data={name:x[:,:,:,3]-x[:,:,:,j] for name,j in [('mbpo_minus_sac',2),('mbpo_minus_sun_slew_limited',1)]}
++        x=d['values'][...,2];data={name:x[:,:,:,3]-x[:,:,:,j] for name,j in [('mbpo_minus_sac',2),('mbpo_minus_sun_tracking',1)]}
+     else:raise ValueError(metric)
+     years=range(int(catalogue.year.min()),int(catalogue.year.max())+1)
+     # Include calendar cells without eligible catalogue days (shown grey if valid).
+diff --git a/PV_experiments/report.py b/PV_experiments/report.py
+index 27539cc39932d089aed64a269259070a47954288..9097918cc985dc0112d5bd666d53f03ebf6edbc9 100644
+--- a/PV_experiments/report.py
++++ b/PV_experiments/report.py
+@@ -54,7 +54,7 @@ def _validate_raw_mc_file(path:Path,summary:dict,days:set[str]):
+     No interpolation, no averaging by episode number, and no unpaired
+     Monte Carlo records are accepted.
+     """
+-    methods=('sac','mbpo','fixed_no_motion','sun_slew_limited')
++    methods=('sac','mbpo','fixed_no_motion','sun_tracking')
+     draws=int(summary['draws_per_day'])
+     if draws<2:raise ValueError('Monte Carlo summary has fewer than two draws')
+     expected={(day,rid) for day in days for rid in range(draws)}
+@@ -77,7 +77,7 @@ def _validate_raw_mc_file(path:Path,summary:dict,days:set[str]):
+             if old!=weather:
+                 raise ValueError(f'{path}: SAC/MBPO/baseline weather realization mismatch {key}')
+             by_key[key]=net
+-            if method in ('fixed_no_motion','sun_slew_limited'):
++            if method in ('fixed_no_motion','sun_tracking'):
+                 baselines[key]=net
+     if len(by_key)!=len(expected)*len(methods):
+         raise ValueError(f'{path}: missing Monte Carlo day/draw/controller combinations')
+@@ -89,8 +89,8 @@ def _validate_raw_mc_file(path:Path,summary:dict,days:set[str]):
+         if not math.isclose(mean,reported,rel_tol=1e-8,abs_tol=1e-8):
+             raise ValueError(f'{path}: {method} MC summary mean disagrees with raw transitions')
+     for label in ('mbpo_minus_sac','mbpo_minus_fixed_no_motion',
+-                  'sac_minus_fixed_no_motion','mbpo_minus_sun_slew_limited',
+-                  'sac_minus_sun_slew_limited'):
++                  'sac_minus_fixed_no_motion','mbpo_minus_sun_tracking',
++                  'sac_minus_sun_tracking'):
+         left,right=label.split('_minus_')
+         mean=statistics.fmean(by_key[(sid,rid,left)]-by_key[(sid,rid,right)]
+                               for sid,rid in sorted(expected))
+@@ -174,7 +174,7 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
+         return
+     out.mkdir(parents=True,exist_ok=True)
+     metric_rows=[]
+-    for alg in ('sac','mbpo','fixed_no_motion','sun_slew_limited'):
++    for alg in ('sac','mbpo','fixed_no_motion','sun_tracking'):
+         vals=[float(data['methods'][alg]['mean_net_kwh']) for _,_,data in inputs]
+         mu,sd=summary_statistics(vals)
+         metric_rows.append({'method':alg,'n_training_seeds':len(seeds),
+@@ -184,7 +184,7 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
+             'weather_draws_per_day':inputs[0][2]['draws_per_day']})
+     differences=[]
+     for key in ('mbpo_minus_sac','mbpo_minus_fixed_no_motion','sac_minus_fixed_no_motion',
+-                'mbpo_minus_sun_slew_limited','sac_minus_sun_slew_limited'):
++                'mbpo_minus_sun_tracking','sac_minus_sun_tracking'):
+         vals=[float(data['paired_net_energy_differences'][key]['mean_net_kwh']) for _,_,data in inputs]
+         mu,sd=summary_statistics(vals)
+         differences.append({'paired_method_difference':key,'n_training_seeds':len(seeds),
+diff --git a/PV_experiments/representation/offline.py b/PV_experiments/representation/offline.py
+index 1ab3dbf83159b9033feb18625f6c08a3bf32860f..6376e1c39b1bab79d2424981c0c535387760ad88 100644
+--- a/PV_experiments/representation/offline.py
++++ b/PV_experiments/representation/offline.py
+@@ -111,7 +111,7 @@ def render_evaluation(data,out,stage):
+     t=overall[overall.quantity=='net_kwh'].set_index('method').loc[list(METHODS)]
+     axes[0].errorbar(pos,t['mean'],yerr=t.sd_total,fmt='o',color='black',capsize=4)
+     axes[0].set(xticks=pos,xticklabels=['Fixed','Astronomical','SAC','MBPO'],ylabel='Net energy (kWh / evaluated day)',title='Mean ± empirical mixture SD')
+-    pairs=[('mbpo','sac'),('mbpo','sun_slew_limited'),('mbpo','fixed_no_motion')]
++    pairs=[('mbpo','sac'),('mbpo','sun_tracking'),('mbpo','fixed_no_motion')]
+     for i,(a,b) in enumerate(pairs):
+         z=x[:,:,:,METHODS.index(a),2]-x[:,:,:,METHODS.index(b),2]
+         seed_values=z.mean(axis=(1,2)); sd=seed_values.std(ddof=1) if S>1 else None
+diff --git a/PV_experiments/representation/statistics.py b/PV_experiments/representation/statistics.py
+index 85815e9e384635e17832150469272c1fb08adfc1..4b0c6bf2c57317ee127e685e0bccd0b556210e49 100644
+--- a/PV_experiments/representation/statistics.py
++++ b/PV_experiments/representation/statistics.py
+@@ -3,13 +3,13 @@ from __future__ import annotations
+ import numpy as np
+ import pandas as pd
+ 
+-METHODS=('fixed_no_motion','sun_slew_limited','sac','mbpo')
++METHODS=('fixed_no_motion','sun_tracking','sac','mbpo')
+ ORACLE='poa_instant_ideal'
+-LABELS=dict(fixed_no_motion='Fixed (30° south)',sun_slew_limited='Astronomical (slew limited)',sac='SAC',mbpo='MBPO',poa_instant_ideal='Instantaneous DC upper reference')
+-COLORS=dict(fixed_no_motion='#666666',sun_slew_limited='#D55E00',sac='#0072B2',mbpo='#009E73',poa_instant_ideal='#555555')
+-LABELS.update(mbpo_minus_sac='MBPO − SAC',mbpo_minus_sun_slew_limited='MBPO − astronomical')
+-COLORS.update(mbpo_minus_sac='#009E73',mbpo_minus_sun_slew_limited='#D55E00')
+-PAIRS=(('mbpo','sac'),('mbpo','sun_slew_limited'),('sac','sun_slew_limited'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'))
++LABELS=dict(fixed_no_motion='Fixed (30° south)',sun_tracking='Astronomical (instantaneous)',sac='SAC',mbpo='MBPO',poa_instant_ideal='Instantaneous DC upper reference')
++COLORS=dict(fixed_no_motion='#666666',sun_tracking='#D55E00',sac='#0072B2',mbpo='#009E73',poa_instant_ideal='#555555')
++LABELS.update(mbpo_minus_sac='MBPO − SAC',mbpo_minus_sun_tracking='MBPO − astronomical')
++COLORS.update(mbpo_minus_sac='#009E73',mbpo_minus_sun_tracking='#D55E00')
++PAIRS=(('mbpo','sac'),('mbpo','sun_tracking'),('sac','sun_tracking'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'))
+ 
+ 
+ def finite(x):
+diff --git a/PV_experiments/representation/trajectories.py b/PV_experiments/representation/trajectories.py
+index a0bf03e0c8f5c15d0b54fdb04d5ca950f431f569..3c9cbcf091d6e50419e4aec79a971539c26d697b 100644
+--- a/PV_experiments/representation/trajectories.py
++++ b/PV_experiments/representation/trajectories.py
+@@ -6,6 +6,8 @@ import numpy as np
+ import pandas as pd
+ from .statistics import METHODS,ORACLE,LABELS,COLORS,clock_grid,check_close,finite,from_day_moments,circular_stats,season,trajectory_clock,cumulative_plot_series
+ from .common import Figures,save_csv,write_json,atomic_json,read_json,sha,style,line,plt
++from mbpo.geometry10 import (ACTION_SEMANTICS, hold_action,
++    action_for_target_orientation, target_orientation_from_action)
+ 
+ FIELDS=('power_w','gross_kwh','movement_kwh','net_kwh','tilt_deg','azimuth_deg','action_tilt','action_azimuth','delta_tilt_deg','delta_azimuth_deg','poa_wm2','cell_temp_c')
+ WEATHER=('dni_wm2','ghi_wm2','dhi_wm2','ambient_temperature_c','wind_speed_m_s','surface_albedo','solar_zenith_deg','solar_azimuth_deg')
+@@ -33,31 +35,64 @@ class Recorder:
+         self.records=[];self.info=[];obs=self.env.reset(*args,**kw);u=self.unwrapped
+         self.pose=(float(u.tilt),float(u.azimuth));return obs
+     def step(self,action):
+-        u=self.unwrapped; previous=(float(u.tilt),float(u.azimuth)); a=finite(action)
+-        if a.shape!=(2,) or (np.abs(a)>1.00001).any():raise ValueError('Invalid command')
+-        if self.method=='fixed_no_motion':check_close(a,[0,0],'Fixed baseline action')
+-        if self.method=='sun_slew_limited':
++        u=self.unwrapped
++        previous=(float(u.tilt),float(u.azimuth))
++        a=finite(action)
++        if a.shape!=(2,) or (np.abs(a)>1.0).any():
++            raise ValueError('Invalid command')
++        if self.method=='fixed_no_motion':
++            check_close(a,hold_action(previous[0]),'Fixed baseline hold action')
++        if self.method=='sun_tracking':
+             sp=u._solar_position(u.current_time)
+-            expected=[0.,0.] if sp.zenith>=90 else [np.clip((np.clip(sp.zenith,0,90)-previous[0])/u.max_delta_tilt,-1,1),np.clip(shortest(sp.azimuth,previous[1])/u.max_delta_azimuth,-1,1)]
+-            check_close(a,expected,'Astronomical current-time command',atol=1e-6)
++            if sp.zenith>=90:
++                expected=hold_action(previous[0])
++            else:
++                from mbpo.env.pvlib_physics import dual_axis_tracking_targets
++                target_tilt,target_azimuth=dual_axis_tracking_targets(
++                    float(sp.zenith),float(sp.azimuth))
++                expected=action_for_target_orientation(
++                    previous[0],previous[1],float(target_tilt),float(target_azimuth))
++            check_close(a,expected,'Astronomical instantaneous target command',atol=1e-6)
++
+         obs,reward,done,info=self.env.step(action)
+-        dt=float(info['delta_tilt_deg']);da=float(info['delta_azimuth_deg']); tilt=float(info['tilt']);az=float(info['azimuth'])
+-        if not (0<=tilt<=90 and 0<=az<360):raise ValueError('Panel orientation outside valid domain')
+-        check_close([dt,da],[tilt-previous[0],shortest(az,previous[1])],'Executed movement')
+-        check_close([tilt,shortest(az,(previous[1]+a[1]*u.max_delta_azimuth)%360)],[np.clip(previous[0]+a[0]*u.max_delta_tilt,0,90),0.],'Command to physical pose',atol=1e-5)
+-        if abs(dt)>u.max_delta_tilt+1e-6 or abs(da)>u.max_delta_azimuth+1e-6:raise ValueError('Slew limits violated')
++        if info.get('action_semantics')!=ACTION_SEMANTICS:
++            raise ValueError('Physical transition used an unexpected action contract')
++        dt=float(info['delta_tilt_deg'])
++        da=float(info['delta_azimuth_deg'])
++        tilt=float(info['tilt'])
++        az=float(info['azimuth'])
++        if not (0<=tilt<=90 and 0<=az<360):
++            raise ValueError('Panel orientation outside valid domain')
++
++        target_tilt,target_azimuth,expected_dt,expected_da=target_orientation_from_action(
++            previous[0],previous[1],a)
++        check_close([dt,da],[expected_dt,expected_da],'Executed target displacement')
++        check_close([tilt,shortest(az,target_azimuth)],[target_tilt,0.],
++                    'Action-to-target pose mapping',atol=1e-5)
++
++        # The target is instantaneous in the MDP; motor energy still reflects
++        # physical travel time. The maximum possible sequential travel is
++        # 90/tilt_rate + 180/azimuth_rate and must fit the five-minute interval.
+         seconds=abs(dt)/u.slew_rate_tilt_deg_s+abs(da)/u.slew_rate_azimuth_deg_s
+-        if seconds>u.interval_hours*3600+1e-7:raise ValueError('Sequential actuator time exceeds interval')
++        if seconds>u.interval_hours*3600+1e-7:
++            raise ValueError('Sequential actuator time exceeds interval')
+         cost=u.movement_penalty*u.actuator_power_w*seconds/3.6e6
+-        if u.movement_cost_mode!='geometry':raise ValueError('Nonphysical movement cost mode')
++        if u.movement_cost_mode!='geometry':
++            raise ValueError('Nonphysical movement cost mode')
+         check_close(info['movement_cost'],cost,'Actuator energy',atol=1e-10)
+-        check_close(info['energy_kwh'],info['power_dc_w']*u.interval_hours/1000,'Physical power integration',atol=1e-10)
++        check_close(info['energy_kwh'],info['power_dc_w']*u.interval_hours/1000,
++                    'Physical power integration',atol=1e-10)
+         check_close(reward,info['energy_kwh']-cost,'Net reward',atol=1e-10)
+-        if self.method=='fixed_no_motion':check_close([tilt,az,dt,da,cost],[*self.pose,0,0,0],'Fixed pose and cost')
+-        self.records.append([info['power_dc_w'],info['energy_kwh'],cost,reward,tilt,az,a[0],a[1],dt,da,info['poa_global'],info['cell_temperature_c']]);self.info.append(dict(info))
++        if self.method=='fixed_no_motion':
++            check_close([tilt,az,dt,da,cost],[*self.pose,0,0,0],
++                        'Fixed pose and cost', atol=3e-6)
++        self.records.append([info['power_dc_w'],info['energy_kwh'],cost,reward,
++            tilt,az,a[0],a[1],dt,da,info['poa_global'],info['cell_temperature_c']])
++        self.info.append(dict(info))
+         return obs,reward,done,info
+ 
+ 
++
+ def oracle_from_weather(u,infos):
+     """Certified instantaneous maximum of isotropic POA and monotone PVWatts DC.
+ 
+@@ -91,7 +126,7 @@ def collect(cfg,split,data,stage,scope,root,out):
+     mc=importlib.import_module('MBPO_workspace.workflows.09_monte_carlo_evaluate')
+     if tuple(mc.METHODS)!=METHODS:raise ValueError('Current evaluation registry differs from audited representation contract')
+     phys=load_physics_config(cfg,root); days=data['days'] if scope=='full' else representative_days(data['days']);M=data['draws'];
+-    plan=dict(schema=1,stage=stage,scope=scope,days=days,draws=M,seeds=data['seeds'],fields=list(FIELDS),weather_fields=list(WEATHER),oracle_fields=list(ORACLE_FIELDS),methods=list(METHODS),sources=data['sources'],collector_sha256=sha(Path(__file__)))
++    plan=dict(schema=1,stage=stage,scope=scope,days=days,draws=M,seeds=data['seeds'],fields=list(FIELDS),weather_fields=list(WEATHER),oracle_fields=list(ORACLE_FIELDS),methods=list(METHODS),action_semantics=ACTION_SEMANTICS,sources=data['sources'],collector_sha256=sha(Path(__file__)))
+     planfile=out/'collection_plan.json';progress=out/'collection_progress.json'
+     if planfile.exists():
+         if read_json(planfile)!=plan:raise ValueError('Existing collection inputs or code changed; select a new trajectory tag')
+@@ -145,13 +180,13 @@ def collect(cfg,split,data,stage,scope,root,out):
+                 finally:
+                     if os.path.exists(tmp):os.unlink(tmp)
+                 u=env.unwrapped
+-                audit=dict(min_oracle_margin_w=float((oracle[:,None,:,0]-raw[:,:,:,0]).min()),max_actuator_seconds=float((np.abs(raw[:,:,:,8])/u.slew_rate_tilt_deg_s+np.abs(raw[:,:,:,9])/u.slew_rate_azimuth_deg_s).max()),max_fixed_movement_kwh=float(raw[:,0,:,2].max()),checked_feasible_steps=int(M*len(METHODS)*195),actuator_parameters=dict(power_w=float(u.actuator_power_w),tilt_rate_deg_s=float(u.slew_rate_tilt_deg_s),azimuth_rate_deg_s=float(u.slew_rate_azimuth_deg_s),cost_gain=float(u.movement_penalty),max_delta_tilt_deg=float(u.max_delta_tilt),max_delta_azimuth_deg=float(u.max_delta_azimuth)))
++                audit=dict(min_oracle_margin_w=float((oracle[:,None,:,0]-raw[:,:,:,0]).min()),max_actuator_seconds=float((np.abs(raw[:,:,:,8])/u.slew_rate_tilt_deg_s+np.abs(raw[:,:,:,9])/u.slew_rate_azimuth_deg_s).max()),max_fixed_movement_kwh=float(raw[:,0,:,2].max()),checked_feasible_steps=int(M*len(METHODS)*195),actuator_parameters=dict(power_w=float(u.actuator_power_w),tilt_rate_deg_s=float(u.slew_rate_tilt_deg_s),azimuth_rate_deg_s=float(u.slew_rate_azimuth_deg_s),cost_gain=float(u.movement_penalty)))
+                 files[name]=dict(sha256=sha(p),audit=audit);atomic_json(progress,files);print(f'Collected {stage} seed {seed} {sid} ({M} paired draws)',flush=True)
+         finally:env.close()
+     if set(files)!=expected:raise ValueError('Incomplete rich trajectory collection')
+     audits=[v['audit'] for v in files.values()]
+     if any(a['actuator_parameters']!=audits[0]['actuator_parameters'] for a in audits):raise ValueError('Actuator parameters changed across collection')
+-    atomic_json(out/'baseline_audit.json',dict(scope=scope,stage=stage,days=days,seeds=data['seeds'],draws=M,checked_feasible_steps=sum(a['checked_feasible_steps'] for a in audits),min_oracle_margin_w=min(a['min_oracle_margin_w'] for a in audits),max_actuator_seconds=max(a['max_actuator_seconds'] for a in audits),max_fixed_movement_kwh=max(a['max_fixed_movement_kwh'] for a in audits),fixed_pose_deg=[30,180],actuator_parameters=audits[0]['actuator_parameters'],oracle='isotropic POA maximizer, DC monotonicity certified for each exact perturbed weather row; no movement or net energy',astronomical='current decision-time sun position, same slew bounds, darkness holds; no future-weather access',cost='executed angular movement, sequential motors; excludes overnight reset, holding/idle and other losses'))
++    atomic_json(out/'baseline_audit.json',dict(scope=scope,stage=stage,days=days,seeds=data['seeds'],draws=M,checked_feasible_steps=sum(a['checked_feasible_steps'] for a in audits),min_oracle_margin_w=min(a['min_oracle_margin_w'] for a in audits),max_actuator_seconds=max(a['max_actuator_seconds'] for a in audits),max_fixed_movement_kwh=max(a['max_fixed_movement_kwh'] for a in audits),fixed_pose_deg=[30,180],action_semantics=ACTION_SEMANTICS,actuator_parameters=audits[0]['actuator_parameters'],oracle='isotropic POA maximizer, DC monotonicity certified for each exact perturbed weather row; no movement or net energy',astronomical='current decision-time sun position, instantaneous dual-axis target, darkness holds; no future-weather access',cost='executed angular movement, sequential motors; excludes overnight reset, holding/idle and other losses'))
+     atomic_json(out/'trajectory_manifest.json',dict(**plan,files={k:v['sha256'] for k,v in files.items()},note='Full paired physical replay on selected days; oracle is gross only and unconstrained. No simulated net oracle.'))
+ 
+ 
+@@ -180,7 +215,7 @@ def load_rich_day(directory,manifest,data,sid):
+ 
+ def render_rich(directory,data,stage,scope,out):
+     directory=Path(directory);m=read_json(directory/'trajectory_manifest.json');days=data['days'] if scope=='full' else representative_days(data['days']);M=data['draws'];S=len(data['seeds']);
+-    required={'schema':1,'stage':stage,'scope':scope,'days':days,'draws':M,'seeds':data['seeds'],'fields':list(FIELDS),'weather_fields':list(WEATHER),'oracle_fields':list(ORACLE_FIELDS),'methods':list(METHODS),'sources':data['sources']}
++    required={'schema':1,'stage':stage,'scope':scope,'days':days,'draws':M,'seeds':data['seeds'],'fields':list(FIELDS),'weather_fields':list(WEATHER),'oracle_fields':list(ORACLE_FIELDS),'methods':list(METHODS),'action_semantics':ACTION_SEMANTICS,'sources':data['sources']}
+     if any(m.get(k)!=v for k,v in required.items()):raise ValueError('Rich collection is stale or not the requested scope')
+     if set(m['files'])!={f'seed{s}/{d}.npz' for s in data['seeds'] for d in days}:raise ValueError('Rich collection coverage mismatch')
+     figs=Figures(out); moments={}; effort=[]; occupancy={method:np.zeros((18,36),dtype=float) for method in METHODS}; circ=[]; gap_heat=[]; selected=set(representative_days(days)); clock=8.75+np.arange(1,196)/12
+@@ -197,10 +232,10 @@ def render_rich(directory,data,stage,scope,out):
+                 for draw in range(M):effort.append(dict(seed=seed,scenario_id=sid,draw=draw,method=method,tilt_travel_deg=np.abs(p[si,draw,:,8]).sum(),azimuth_travel_deg=np.abs(p[si,draw,:,9]).sum(),movement_kwh=p[si,draw,:,2].sum(),gross_kwh=p[si,draw,:,1].sum(),net_kwh=p[si,draw,:,3].sum(),diffuse_fraction=w[draw,:,2].sum()/w[draw,:,1].sum() if w[draw,:,1].sum()>0 else np.nan,oracle_gross_kwh=oracle[draw,:,1].sum()))
+         for name,a in [('power_w',oracle[:,:,0]),('cumulative_gross_kwh',np.cumsum(oracle[:,:,1],axis=-1))]:
+             a=np.broadcast_to(a,(S,)+a.shape);moments.setdefault((ORACLE,name),[]).append((a.mean(axis=1),a.std(axis=1,ddof=1)))
+-        for a,b in [('mbpo','sac'),('mbpo','sun_slew_limited')]:
++        for a,b in [('mbpo','sac'),('mbpo','sun_tracking')]:
+             x=raw[:,:,METHODS.index(a)];y=raw[:,:,METHODS.index(b)]
+             for key,v in [('power_difference_w',x[:,:,:,0]-y[:,:,:,0]),('cumulative_net_difference_kwh',np.cumsum(x[:,:,:,3]-y[:,:,:,3],axis=-1))]:moments.setdefault((f'{a}_minus_{b}',key),[]).append((v.mean(axis=1),v.std(axis=1,ddof=1)))
+-        for method in ('sac','mbpo','sun_slew_limited','fixed_no_motion'):
++        for method in ('sac','mbpo','sun_tracking','fixed_no_motion'):
+             gap=oracle[None,:,:,0]-raw[:,:,METHODS.index(method),:,0];moments.setdefault((method,'oracle_gross_power_gap_w'),[]).append((gap.mean(axis=1),gap.std(axis=1,ddof=1)))
+         if sid in selected:
+             # Deterministic, outcome-blind selected seed/draw, no averaged circular coordinates.
+@@ -217,13 +252,13 @@ def render_rich(directory,data,stage,scope,out):
+                     a=p[:,:,:,field].reshape(S*M,195);line(ax,trajectory_clock('action_tilt')[0],a.mean(axis=0),method,a.std(axis=0,ddof=0))
+             axes[0].set_ylabel('Normalized tilt command');axes[1].set(ylabel='Normalized azimuth command',xlabel='Decision UTC hour (unwrapped)');axes[0].legend(ncol=2,fontsize=8)
+             for ax in axes:style(ax)
+-            fig.suptitle(f'{sid} — signed commands, mean ± empirical seed/draw SD');figs.save(fig,f'R02_daily_actions_{sid}','What are the signed control commands during the day?','Same historical day; equal seed/draw empirical mean ± population SD. Commands timestamped at decision time; normalized requested increments, not executed angles.',f'{sid}.npz')
++            fig.suptitle(f'{sid} — signed commands, mean ± empirical seed/draw SD');figs.save(fig,f'R02_daily_actions_{sid}','What are the signed control commands during the day?','Same historical day; equal seed/draw empirical mean ± population SD. Commands timestamped at decision time; normalized tilt-target and relative-azimuth coordinates, not executed angles.',f'{sid}.npz')
+     # Compact sufficient statistics over all collected historical days.
+     summary={}; rows=[]
+     for (method,key),pairs in moments.items():
+         mu=np.stack([p[0] for p in pairs],axis=1); sd=np.stack([p[1] for p in pairs],axis=1);s=from_day_moments(mu,sd,M);summary[(method,key)]=s; times,basis=trajectory_clock(key);rows.extend(dict(method=method,quantity=key,step=i+1,utc_hour_unwrapped=times[i],clock_basis=basis,n_days=len(days),**{k:v[i] for k,v in s.items()}) for i in range(195))
+     save_csv(out,'rich_curve_statistics.csv',rows);save_csv(out,'circular_azimuth_statistics.csv',circ);eff=pd.DataFrame(effort);save_csv(out,'daily_effort_and_oracle.csv',eff)
+-    for names,keys,filename,question in [((METHODS+(ORACLE,)),('cumulative_gross_kwh','cumulative_net_kwh','cumulative_actuator_kwh'),'R03_cumulative_energy','Where during the day do gross gains and movement costs accumulate?'),(('mbpo_minus_sac','mbpo_minus_sun_slew_limited'),('power_difference_w','cumulative_net_difference_kwh'),'R04_paired_response','When does MBPO gain or lose relative to competing feasible controllers?'),(METHODS,('oracle_gross_power_gap_w',),'R05_oracle_gap','How far are feasible controllers from instantaneous gross generation capacity?')]:
++    for names,keys,filename,question in [((METHODS+(ORACLE,)),('cumulative_gross_kwh','cumulative_net_kwh','cumulative_actuator_kwh'),'R03_cumulative_energy','Where during the day do gross gains and movement costs accumulate?'),(('mbpo_minus_sac','mbpo_minus_sun_tracking'),('power_difference_w','cumulative_net_difference_kwh'),'R04_paired_response','When does MBPO gain or lose relative to competing feasible controllers?'),(METHODS,('oracle_gross_power_gap_w',),'R05_oracle_gap','How far are feasible controllers from instantaneous gross generation capacity?')]:
+         fig,axes=plt.subplots(len(keys),1,figsize=(9,3.3*len(keys)),sharex=True,squeeze=False)
+         for ax,key in zip(axes[:,0],keys):
+             for name in names:
+@@ -238,7 +273,7 @@ def render_rich(directory,data,stage,scope,out):
+     # Magnitudes expose cancellation in signed command averages. Executed motion
+     # is shown at the resulting response timestamp, not assumed equal to request.
+     fig,axes=plt.subplots(2,2,figsize=(10,7),sharex=False)
+-    for ax,key,label in zip(axes.flat,('abs_action_tilt','abs_action_azimuth','abs_delta_tilt_deg','abs_delta_azimuth_deg'),('Absolute tilt command','Absolute azimuth command','Absolute executed tilt (deg)','Absolute executed azimuth (deg)')):
++    for ax,key,label in zip(axes.flat,('abs_action_tilt','abs_action_azimuth','abs_delta_tilt_deg','abs_delta_azimuth_deg'),('Absolute normalized tilt coordinate','Absolute normalized azimuth coordinate','Absolute executed tilt (deg)','Absolute executed azimuth (deg)')):
+         tx,basis=trajectory_clock(key)
+         for name in METHODS:
+             z=summary[(name,key)];line(ax,tx,z['mean'],name,z['sd_total'])
+diff --git a/PV_experiments/scientific_checks.py b/PV_experiments/scientific_checks.py
+index 4671277679331aea3c71af6b937b401f89f05949..2c831c94f160259b9c95b95c3be771f1674956a3 100644
+--- a/PV_experiments/scientific_checks.py
++++ b/PV_experiments/scientific_checks.py
+@@ -5,9 +5,9 @@ import json
+ import numpy as np
+ import pandas as pd
+ 
+-METHODS=('fixed_no_motion','sun_slew_limited','sac','mbpo')
++METHODS=('fixed_no_motion','sun_tracking','sac','mbpo')
+ FIELDS=('gross_kwh','movement_kwh','net_kwh')
+-ACTIONS=('policy','zero','tilt_positive','tilt_negative','azimuth_positive','azimuth_negative','diagonal_positive','diagonal_negative')
++ACTIONS=('policy','hold','tilt_positive','tilt_negative','azimuth_positive','azimuth_negative','diagonal_positive','diagonal_negative')
+ CHANNELS=('dni_norm','dhi_norm','power_norm')
+ 
+ 
+@@ -103,7 +103,7 @@ def validate_daily_summary(x,days,summary):
+             same(np.quantile(y[i],[.05,.5,.95]),[v[k] for k in ('q05','median','q95')],'MC day quantiles')
+     if set(summary['methods'])!=set(METHODS):raise ValueError('Incorrect MC methods in summary')
+     for j,method in enumerate(METHODS):check(x[:,:,j,2],summary['methods'][method])
+-    pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),('mbpo','sun_slew_limited'),('sac','sun_slew_limited')]
++    pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),('mbpo','sun_tracking'),('sac','sun_tracking')]
+     if set(summary['paired_net_energy_differences'])!={a+'_minus_'+b for a,b in pairs}:raise ValueError('Incorrect MC paired methods')
+     for a,b in pairs:check(x[:,:,METHODS.index(a),2]-x[:,:,METHODS.index(b),2],summary['paired_net_energy_differences'][a+'_minus_'+b])
+ 
+diff --git a/PostProcessing_MC_patch/tools/verify_mc_environment.py b/PostProcessing_MC_patch/tools/verify_mc_environment.py
+index 83c9a7365d751a391e59002fd068040f804281f8..ae60e1d8554c7c5f03cb858e699fec9f95570792 100644
+--- a/PostProcessing_MC_patch/tools/verify_mc_environment.py
++++ b/PostProcessing_MC_patch/tools/verify_mc_environment.py
+@@ -38,7 +38,7 @@ def one_episode(env,sid,rid):
+     moving_steps=0
+     for t in range(env.horizon):
+         action=np.array([.7,.8] if t%4==0 else [-.5,-.6] if t%4==1 else [0.,0.],dtype=np.float32)
+-        tilt,az,tau,dt,da,terminal=pose_transition(obs[None,:],action[None,:],u.max_delta_tilt,u.max_delta_azimuth,env.horizon)
++        tilt,az,tau,dt,da,terminal=pose_transition(obs[None,:],action[None,:],env.horizon)
+         obs,reward,done,info=env.step(action)
+         if not np.allclose(obs[3:6],np.r_[tilt,az[0]],rtol=0,atol=4e-5) or not np.isclose(obs[-1],tau[0],atol=1e-7) or bool(done)!=bool(terminal[0]):
+             raise AssertionError('Scripted movement pose/horizon parity failed')
+@@ -149,9 +149,10 @@ def main(argv=None):
+         baseline.reset(scenario_id=sid)
+         raw=baseline.unwrapped.weather_profile.copy(deep=True)
+         physical=baseline.unwrapped
++        from mbpo.geometry10 import hold_action
+         nominal_energy=0.
+         for t in range(baseline.horizon):
+-            _obs,_rew,done,info=baseline.step(np.zeros(2,dtype=np.float32))
++            _obs,_rew,done,info=baseline.step(hold_action(physical.tilt))
+             nominal_energy+=float(info['energy_kwh'])
+         if not raw.equals(physical.weather_profile):
+             raise AssertionError('Unperturbed NSRDB weather changed during nominal episode')
+diff --git a/SAC_workspace/src/agents/sac_agent.py b/SAC_workspace/src/agents/sac_agent.py
+index 77eee8ee022ed81c9524d3e1c0a2402be76d97c6..98e6808902726b926d8b0ff557543d48d4ae94b5 100644
+--- a/SAC_workspace/src/agents/sac_agent.py
++++ b/SAC_workspace/src/agents/sac_agent.py
+@@ -6,7 +6,7 @@ Reference task: gamma=1, finite horizon validated from the shared environment co
+ No BNN, model pool, fake environment, or imaginary rollouts.
+ """
+ from __future__ import annotations
+-from mbpo.geometry10 import STATE_DIM, ACTION_DIM, check_batch
++from mbpo.geometry10 import ACTION_SEMANTICS, STATE_DIM, ACTION_DIM, check_batch
+ import copy
+ import math
+ from typing import Sequence
+@@ -114,7 +114,8 @@ class SACAgent:
+             raise ValueError('Expected a single geometry10 observation')
+         s = torch.as_tensor(state, device=self.device).reshape(1,self.state_dim)
+         a, _ = self.actor(s, deterministic=deterministic, with_logprob=False)
+-        return np.clip(a.squeeze(0).cpu().numpy(), -1., 1.).astype(np.float32)
++        # The actor's tanh already enforces the action domain; do not distort it again.
++        return a.squeeze(0).cpu().numpy().astype(np.float32)
+ 
+     def compute_target(self, batch):
+         s2, r, done = batch['next_states'], batch['rewards'], batch['dones']
+@@ -168,7 +169,7 @@ class SACAgent:
+         return metrics
+ 
+     def state_dict(self):
+-        return {'state_dim': self.state_dim, 'actor': self.actor.state_dict(), 'critic': self.critic.state_dict(),
++        return {'action_semantics': ACTION_SEMANTICS, 'state_dim': self.state_dim, 'actor': self.actor.state_dict(), 'critic': self.critic.state_dict(),
+                 'critic_target': self.critic_target.state_dict(),
+                 'actor_opt': self.actor_opt.state_dict(), 'critic_opt': self.critic_opt.state_dict(),
+                 'alpha_opt': self.alpha_opt.state_dict(), 'log_alpha': self.log_alpha.detach().clone(),
+@@ -177,6 +178,8 @@ class SACAgent:
+                 'min_alpha': self.min_alpha}
+ 
+     def load_state_dict(self, state):
++        if state.get('action_semantics') != ACTION_SEMANTICS:
++            raise ValueError('Checkpoint uses incompatible PV action semantics')
+         if state.get('state_dim') != self.state_dim:
+             raise ValueError('Incompatible observation dimension in checkpoint')
+         for k in ('gamma', 'tau', 'reward_scale', 'target_entropy', 'min_alpha'):
+diff --git a/SAC_workspace/src/environment/environment.py b/SAC_workspace/src/environment/environment.py
+index f03bbf29ff1d5bc01b3e424c0a8b59555190a6ba..34fbcdc05ac2368b7c535afeedc1d9e63ab22df1 100644
+--- a/SAC_workspace/src/environment/environment.py
++++ b/SAC_workspace/src/environment/environment.py
+@@ -5,7 +5,8 @@ Normalized actions stay [-1,1]^2. Degrees and rewards are computed by the
+ original environment, not approximated or transformed inside this adapter.
+ """
+ from __future__ import annotations
+-from mbpo.geometry10 import MODE, STATE_DIM, TAU, FEATURE_NAMES, LOW, HIGH, POWER_NORM
++from mbpo.geometry10 import (MODE, STATE_DIM, TAU, FEATURE_NAMES, LOW, HIGH,
++    POWER_NORM, ACTION_SEMANTICS)
+ import numpy as np
+ import pandas as pd
+ from importlib import metadata
+@@ -98,6 +99,7 @@ class SACEnvironment:
+             'observation_features': list(FEATURE_NAMES),
+             'observation_contract_sha256': __import__('hashlib').sha256(__import__('pathlib').Path(__import__('mbpo.geometry10',fromlist=['build']).__file__).read_bytes()).hexdigest(),
+             'horizon': self.horizon,
++            'action_semantics': ACTION_SEMANTICS,
+         }
+         if source.weather_source == 'nsrdb_multiyear':
+             from mbpo.env.stage_a_data_contract import nsrdb_dataset_fingerprint
+@@ -144,12 +146,14 @@ class SACEnvironment:
+         return observation
+ 
+     def step(self, action):
+-        a = np.asarray(action, dtype=np.float32)
++        a = np.asarray(action, dtype=np.float64)
+         if a.shape != (2,) or not np.isfinite(a).all():
+             raise ValueError(f'Action must be finite shape (2,), got {a}')
+-        if (np.abs(a) > 1.00001).any():
++        if (np.abs(a) > 1.0).any():
+             raise ValueError('Policy generated action outside [-1,1]^2')
+-        obs, reward, done, info = self.env.step(np.clip(a, -1., 1.))
++        obs, reward, done, info = self.env.step(a)
++        if info.get('action_semantics') != ACTION_SEMANTICS:
++            raise RuntimeError('Physical environment action semantics differ from Geometry10 contract')
+         self.steps += 1
+         if self.steps > self.horizon or (self.steps == self.horizon) != bool(done):
+             raise RuntimeError('Episode horizon or terminal signal disagrees with reference')
+diff --git a/SAC_workspace/src/training/experiment_protocol.py b/SAC_workspace/src/training/experiment_protocol.py
+index 56c6ae27ad5298cb041cc029b71bb3bb2b90e426..9527bba24833d525b72775b8bc6cdf657a2026d3 100644
+--- a/SAC_workspace/src/training/experiment_protocol.py
++++ b/SAC_workspace/src/training/experiment_protocol.py
+@@ -19,7 +19,9 @@ from typing import Any
+ import numpy as np
+ 
+ PROTOCOL_VERSION = "pv_nsrdb_month_stratified_v1"
+-from mbpo.geometry10 import MODE, STATE_DIM, ACTION_DIM
++from mbpo.env.baseline_contract import astronomical_action
++from mbpo.geometry10 import (MODE, STATE_DIM, ACTION_DIM, ACTION_SEMANTICS,
++    hold_action)
+ 
+ 
+ def canonical_json_sha256(value: Any) -> str:
+@@ -250,6 +252,7 @@ def prepare_run_metadata(
+         "scenario_split_file": "scenario_split.json",
+         "state_dim": STATE_DIM,
+         "observation_mode": MODE,
++        "action_semantics": ACTION_SEMANTICS,
+         "action_dim": ACTION_DIM,
+         "horizon": int(horizon),
+         "power_model": resolved_mdp.get("power_model", "legacy"),
+@@ -358,6 +361,8 @@ class PeriodicEvaluator:
+             "sustain_checkpoints": int(protocol["sustain_checkpoints"]),
+             "bootstrap_replicates": int(protocol["bootstrap_replicates"]),
+             "policy_evaluation": "deterministic_actor_mean_tanh",
++            "action_semantics": ACTION_SEMANTICS,
++            "astronomical_baseline": "instantaneous_dual_axis_target",
+             "environment": "original StageAPVTrackingEnv; no learned model transitions",
+             "energy_objective": (
+                 "gross_DC_kWh_no_actuator_consumption"
+@@ -379,28 +384,9 @@ class PeriodicEvaluator:
+             if controller == "policy":
+                 action = policy.act(obs, deterministic=True)
+             elif controller == "fixed":
+-                action = np.zeros(2, dtype=np.float32)
+-            elif controller == "dual_axis_slew_limited":
+-                if float(underlying.max_delta_tilt) <= 0 or float(underlying.max_delta_azimuth) <= 0:
+-                    raise ValueError("Positive action increments are required for the dual-axis baseline")
+-                solar = underlying._solar_position(underlying.current_time)
+-                if float(solar.zenith) >= 90.0:
+-                    action = np.zeros(2, dtype=np.float32)
+-                else:
+-                    from mbpo.env.pvlib_physics import dual_axis_tracking_targets
+-                    target_tilt, target_azimuth = dual_axis_tracking_targets(
+-                        float(solar.zenith), float(solar.azimuth))
+-                    delta_tilt = np.clip(float(target_tilt) - float(underlying.tilt),
+-                                         -underlying.max_delta_tilt, underlying.max_delta_tilt)
+-                    delta_azimuth = ((float(target_azimuth) - float(underlying.azimuth) + 180.0)
+-                                     % 360.0) - 180.0
+-                    delta_azimuth = np.clip(delta_azimuth,
+-                                            -underlying.max_delta_azimuth,
+-                                            underlying.max_delta_azimuth)
+-                    action = np.asarray([
+-                        delta_tilt / underlying.max_delta_tilt,
+-                        delta_azimuth / underlying.max_delta_azimuth,
+-                    ], dtype=np.float32)
++                action = hold_action(float(underlying.tilt))
++            elif controller == "dual_axis_instantaneous":
++                action = astronomical_action(underlying)
+             else:
+                 raise ValueError(f"Unknown evaluation controller: {controller}")
+             obs, reward, done, info = self.env.step(action)
+@@ -426,6 +412,8 @@ class PeriodicEvaluator:
+             if ids != self.validation_ids:
+                 raise ValueError("Saved evaluation baseline scenarios differ from scenario_split.json")
+             for row in rows:
++                if row.get("action_semantics") != ACTION_SEMANTICS:
++                    raise ValueError("Cached baseline uses incompatible action semantics")
+                 for key in ("fixed_net_energy_kwh", "dual_axis_net_energy_kwh"):
+                     if not math.isfinite(float(row[key])):
+                         raise ValueError("Nonfinite saved evaluation reference")
+@@ -433,9 +421,10 @@ class PeriodicEvaluator:
+         rows = []
+         for sid in self.validation_ids:
+             fixed = self._run_episode(sid, controller="fixed")
+-            dual = self._run_episode(sid, controller="dual_axis_slew_limited")
++            dual = self._run_episode(sid, controller="dual_axis_instantaneous")
+             rows.append({
+                 "scenario_id": sid,
++                "action_semantics": ACTION_SEMANTICS,
+                 "fixed_net_energy_kwh": fixed["net_energy_kwh"],
+                 "fixed_gross_energy_kwh": fixed["gross_energy_kwh"],
+                 "fixed_movement_cost_kwh": fixed["movement_cost_kwh"],
+diff --git a/SAC_workspace/src/training/replay_buffer.py b/SAC_workspace/src/training/replay_buffer.py
+index 4c96d43d018d6a0791c6003d2ee76257463d8dbe..845f763ce3b4db940ec3f215deec411a711815d0 100644
+--- a/SAC_workspace/src/training/replay_buffer.py
++++ b/SAC_workspace/src/training/replay_buffer.py
+@@ -1,6 +1,6 @@
+ """Fixed-size FIFO replay memory using ONLY transitions from PVTrackingEnv.step."""
+ from __future__ import annotations
+-from mbpo.geometry10 import STATE_DIM, ACTION_DIM
++from mbpo.geometry10 import ACTION_SEMANTICS, STATE_DIM, ACTION_DIM
+ import numpy as np
+ 
+ class ReplayBuffer:
+@@ -26,7 +26,7 @@ class ReplayBuffer:
+         next_state = encode(next_state)
+         action = np.asarray(action, dtype=np.float32)
+         if (action.shape != (2,) or not np.isfinite(action).all()
+-                or (np.abs(action) > 1.00001).any()):
++                or (np.abs(action) > 1.0).any()):
+             raise ValueError('Replay action must be finite and inside [-1,1]^2')
+         if not np.isfinite(reward) or done not in (0, 1, False, True):
+             raise ValueError('Invalid transition reward or terminal flag')
+@@ -46,11 +46,13 @@ class ReplayBuffer:
+         return {k: getattr(self, k)[ix].copy() for k in ('states','actions','rewards','next_states','dones')}
+ 
+     def state_dict(self):
+-        return {'state_dim': self.state_dim, 'capacity': self.capacity, 'count': self.count, 'head': self.head,
++        return {'action_semantics': ACTION_SEMANTICS, 'state_dim': self.state_dim, 'capacity': self.capacity, 'count': self.count, 'head': self.head,
+                 'rng': self.rng.bit_generator.state,
+                 **{k: getattr(self,k)[:self.count].copy() for k in ('states','actions','rewards','next_states','dones')}}
+ 
+     def load_state_dict(self, data):
++        if data.get('action_semantics') != ACTION_SEMANTICS:
++            raise ValueError('Checkpoint uses incompatible PV action semantics')
+         if data.get('state_dim') != self.state_dim:
+             raise ValueError('Replay observation dimension differs from checkpoint')
+         if data['capacity'] != self.capacity:
+@@ -65,6 +67,6 @@ class ReplayBuffer:
+             getattr(self,k)[:self.count] = data[k]
+         from mbpo.geometry10 import check_batch
+         check_batch(self.states[:self.count]); check_batch(self.next_states[:self.count])
+-        if (self.count < self.capacity and self.head != self.count) or np.any(np.abs(self.actions[:self.count]) > 1.00001) or not np.isin(self.dones[:self.count], [0., 1.]).all():
++        if (self.count < self.capacity and self.head != self.count) or np.any(np.abs(self.actions[:self.count]) > 1.0) or not np.isin(self.dones[:self.count], [0., 1.]).all():
+             raise ValueError('Invalid saved replay indices, actions or terminal flags')
+         self.rng.bit_generator.state = data['rng']
+diff --git a/check_geometry10_components.py b/check_geometry10_components.py
+index ed308c543f7c77d7393c68d2d59ba83e83dee48e..28b58fbed3e29f37b443b7f2b29b0c95e658a1f6 100644
+--- a/check_geometry10_components.py
++++ b/check_geometry10_components.py
+@@ -53,7 +53,7 @@ a,b=model.predict_delta(rs,acts);c,d=model2.predict_delta(rs,acts);np.testing.as
+ print('PASS ensemble checkpoint stochastic continuation')
+ # Use actual predicted deltas, exact pose and clock; use fixture solar geometry, not PVLib.
+ mp=ReplayBuffer(1600,seed=8)
+-new_tilt,new_az,tau,dt,da,done=pose_transition(rs,acts,5,10,195)
++new_tilt,new_az,tau,dt,da,done=pose_transition(rs,acts,195)
+ nxt=rs.copy();nxt[:,:3]=np.clip(rs[:,:3]+delta,0,1);nxt[:,3]=new_tilt;nxt[:,4:6]=new_az;nxt[:,TAU]=tau
+ check_batch(nxt);reward=nxt[:,2]/6-30*(abs(dt)/1.5+abs(da)/2)/3.6e6
+ for i in range(len(rs)):mp.add(rs[i],acts[i],reward[i],nxt[i],done[i])
+diff --git a/geometry10_tests/test_audit_support.py b/geometry10_tests/test_audit_support.py
+index b8ebff5fe9d46ddd2f5faa1ab69d81006807707a..d3c602c2f78bd7ee54e952f57cae339b77bf8880 100644
+--- a/geometry10_tests/test_audit_support.py
++++ b/geometry10_tests/test_audit_support.py
+@@ -83,7 +83,7 @@ def test_hierarchical_envelope_counts_all_draws():
+ 
+ 
+ def test_action_regret_and_difference_error():
+-    rows=[dict(scenario_id='d',step=0,action_type='zero',actual_reward_kwh=.001,predicted_reward_kwh=.002),
++    rows=[dict(scenario_id='d',step=0,action_type='hold',actual_reward_kwh=.001,predicted_reward_kwh=.002),
+           dict(scenario_id='d',step=0,action_type='move',actual_reward_kwh=.002,predicted_reward_kwh=.001)]
+     r=counterfactual_metrics(rows);assert r['pairwise_agreement']==0 and np.isclose(r['mean_one_step_regret_kwh'],.001)
+     assert np.isclose(r['reward_difference_rmse_kwh'],.002)
+diff --git a/geometry10_tests/test_managed.py b/geometry10_tests/test_managed.py
+index cc9f7025691f9f52ee939fc47b74d4c7954eb7c3..e303b29d09ce0dda6bb0d720a71f23b824fd44fa 100644
+--- a/geometry10_tests/test_managed.py
++++ b/geometry10_tests/test_managed.py
+@@ -122,15 +122,18 @@ def test_real_physics_and_exact_model_transition():
+         rng=np.random.default_rng(3)
+         for k in range(env.horizon):
+             a=rng.uniform(-1,1,size=2).astype(np.float32)
+-            n,r,done,info=env.step(a);on,ro,odone,oinfo=old.step(a)
++            # Match poses reachable under both action contracts.
++            target=np.clip(old.tilt+a[0]*old.max_delta_tilt,0,90)
++            target_a=np.array([target/45-1,a[1]*old.max_delta_azimuth/180],np.float32)
++            n,r,done,info=env.step(target_a);on,ro,odone,oinfo=old.step(a)
+             assert np.isclose(r,ro,atol=1e-10) and done==odone
+-            assert np.isclose(info['power_dc_w'],oinfo['power_dc_w'],atol=1e-10)
++            assert np.isclose(info['power_dc_w'],oinfo['power_dc_w'],atol=1e-5)
+             assert np.allclose(n[:4],on[:4],atol=1e-7)
+             assert np.allclose(n[SOLAR],solar_features(info['solar_zenith_deg'],info['solar_azimuth_deg']),atol=1e-6)
+             assert np.isclose(n[TAU],on[5],atol=1e-7)
+             # Exact pose, time, ephemeris and movement accounting with stub delta.
+             stub.delta=(n[:3]-s[:3])[None,:]
+-            pred,pr,pd,_,mask=fake.step(s[None,:],a[None,:],stochastic=False,scenario_ids=[sid])
++            pred,pr,pd,_,mask=fake.step(s[None,:],target_a[None,:],stochastic=False,scenario_ids=[sid])
+             assert mask[0] and bool(pd[0])==done
+             assert np.allclose(pred[0],n,atol=4e-5,rtol=0)
+             # power normalization/float32 roundoff only
+@@ -167,7 +170,7 @@ def test_fake_rollout_prediction_validation():
+     assert mask[0] and not d[0]
+     assert np.allclose(nxt[0,SOLAR],grid[1],atol=1e-7)
+     assert nxt[0,3]==1.
+-    expected=170./12000.-30.*(1./1.5+10./2.)/3.6e6
++    expected=170./12000.-30.*(1./1.5+180./2.)/3.6e6
+     assert np.isclose(r[0],expected,atol=1e-7)
+     stub.delta=np.array([[0.,0.,np.inf]],np.float32)
+     assert not fake.step(s,action,stochastic=False,scenario_ids=['a'])[-1][0]
+diff --git a/geometry10_tests/test_representation_final.py b/geometry10_tests/test_representation_final.py
+index c966906d8ed372abc1bce47df7336e6edbf663fb..5204265a6ec3784187ad2dbdffc26ca65e60440f 100644
+--- a/geometry10_tests/test_representation_final.py
++++ b/geometry10_tests/test_representation_final.py
+@@ -108,7 +108,7 @@ def test_actual_rich_renderer(tmp_path,monkeypatch):
+     from PV_experiments.representation import trajectories as tr
+     data,raw,w,o=fixture([0,1]);directory=tmp_path/'collection';directory.mkdir();out=tmp_path/'report';out.mkdir()
+     # Bypass physical replay only; render the actual full rich statistics and plots.
+-    manifest=dict(schema=1,stage='validation',scope='full',days=data['days'],draws=2,seeds=[0,1],fields=list(tr.FIELDS),weather_fields=list(tr.WEATHER),oracle_fields=list(tr.ORACLE_FIELDS),methods=list(METHODS),sources={},files={f'seed{s}/{d}.npz':'fixture' for s in data['seeds'] for d in data['days']})
++    manifest=dict(action_semantics=tr.ACTION_SEMANTICS,schema=1,stage='validation',scope='full',days=data['days'],draws=2,seeds=[0,1],fields=list(tr.FIELDS),weather_fields=list(tr.WEATHER),oracle_fields=list(tr.ORACLE_FIELDS),methods=list(METHODS),sources={},files={f'seed{s}/{d}.npz':'fixture' for s in data['seeds'] for d in data['days']})
+     (directory/'trajectory_manifest.json').write_text(json.dumps(manifest))
+     def load(directory,manifest,data,sid):
+         d=data['days'].index(sid);return raw[:,d],w[d],o[d]
+diff --git a/geometry10_tests/test_schema.py b/geometry10_tests/test_schema.py
+index 8cdbee67c079f6f7100408a53185163ce759fdcd..ecc41fbbdf33e5753e6a9757136295ba0999a371 100644
+--- a/geometry10_tests/test_schema.py
++++ b/geometry10_tests/test_schema.py
+@@ -37,17 +37,17 @@ def test_night_and_terminal():
+     x=build(0,0,0,30,180,120,360,0)
+     assert np.all(x[:3]==0) and x[TAU]==0
+     assert np.isclose(x[6],2/3) and np.isclose(x[8],1)
+-    with pytest.raises(ValueError):pose_transition(x[None,:],np.zeros((1,2)),5,10,195)
++    with pytest.raises(ValueError):pose_transition(x[None,:],np.zeros((1,2)),195)
+ 
+ 
+-def test_slew_clipping_and_wrap():
++def test_target_extremes_and_wrap():
+     x=np.stack([state(359,89,1/195),state(1,1,2/195)])
+     a=np.array([[1,1],[-1,-1]],dtype=float)
+-    tilt,az,tau,dt,da,done=pose_transition(x,a,5,10,195)
++    tilt,az,tau,dt,da,done=pose_transition(x,a,195)
+     assert np.allclose(tilt,[1,0])
+-    assert np.allclose(azimuth(az),[9,351],atol=1e-4)
++    assert np.allclose(azimuth(az),[179,181],atol=1e-4)
+     assert np.allclose(dt,[1,-1],atol=1e-5)
+-    assert np.allclose(da,[10,-10],atol=1e-5)
++    assert np.allclose(da,[180,-180],atol=1e-5)
+     assert np.allclose(tau,[0,1/195]) and done.tolist()==[True,False]
+ 
+ 
+@@ -78,7 +78,7 @@ def test_solar_context_selects_correct_day_and_time():
+ 
+ def test_invalid_off_grid_tau_rejected():
+     x=state(tau=.12345)[None,:]
+-    with pytest.raises(ValueError):pose_transition(x,np.zeros((1,2)),5,10,195)
++    with pytest.raises(ValueError):pose_transition(x,np.zeros((1,2)),195)
+ 
+ 
+ def test_power_normalization_is_invertible_not_saturated():
+@@ -89,13 +89,11 @@ def test_power_normalization_is_invertible_not_saturated():
+         with pytest.raises(ValueError):build(500,100,power,30,180,60,90,1)
+ 
+ 
+-def test_action_roundoff_matches_real_action_clipping():
++def test_invalid_action_is_rejected():
+     x=state(az=120,tilt=30,tau=1)[None,:]
+     a=np.array([[1.000001,-1.000001]])
+-    result=pose_transition(x,a,5,10,195)
+-    assert np.allclose(result[3],[5.],atol=1e-7)
+-    assert np.allclose(result[4],[-10.],atol=1e-7)
+-    with pytest.raises(ValueError):pose_transition(x,[[1.01,0]],5,10,195)
++    with pytest.raises(ValueError):pose_transition(x,a,195)
++    with pytest.raises(ValueError):pose_transition(x,[[1.01,0]],195)
+ 
+ 
+ def test_solar_context_rejects_wrong_metadata_shape():
+diff --git a/geometry10_tests/test_scientific_representation.py b/geometry10_tests/test_scientific_representation.py
+index 04be736ae1f2013e8f576e47fdd26c10fd972518..0f01008d4f080d2dcbca5a75f78a434725e53924 100644
+--- a/geometry10_tests/test_scientific_representation.py
++++ b/geometry10_tests/test_scientific_representation.py
+@@ -37,7 +37,7 @@ def mc(tmp_path):
+     pd.DataFrame(clock).to_csv(tmp_path/'daily_power_mean_std_by_utc_step.csv',index=False)
+     pd.DataFrame(pooled).to_csv(tmp_path/'mc_pooled_power_mean_sd_by_utc_step.csv',index=False)
+     pd.DataFrame(clock).query('scenario_id == "2020-01-01"').to_csv(tmp_path/'first_day_power_mean_sd.csv',index=False)
+-    pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),('mbpo','sun_slew_limited'),('sac','sun_slew_limited')]
++    pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),('mbpo','sun_tracking'),('sac','sun_tracking')]
+     dump(tmp_path/'mc_summary.json',dict(methods={a:nested(net[:,:,j],days) for j,a in enumerate(METHODS)},paired_net_energy_differences={a+'_minus_'+b:nested(net[:,:,METHODS.index(a)]-net[:,:,METHODS.index(b)],days) for a,b in pairs}))
+     for a in ('sac','mbpo'):
+         folder=tmp_path/a; e=folder/'periodic_evaluation';e.mkdir(parents=True);dirs[a]=folder; j=METHODS.index(a)
+diff --git a/geometry10_tests/test_target_action_integration.py b/geometry10_tests/test_target_action_integration.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..54e128d0b44148bc77ab977510bd65ddca29ff44
+--- /dev/null
++++ b/geometry10_tests/test_target_action_integration.py
+@@ -0,0 +1,61 @@
++"""Regression coverage for action semantics across checkpoints and physical evaluations."""
++import importlib
++import json
++from pathlib import Path
++
++import numpy as np
++import pytest
++
++from mbpo.geometry10 import action_for_target_orientation, target_orientation_from_action
++
++
++def test_inverse_and_domain():
++    action = action_for_target_orientation(30., 359., 72., 1.)
++    tilt, az, dt, da = target_orientation_from_action(30., 359., action)
++    np.testing.assert_allclose([tilt, az, dt, da], [72., 1., 42., 2.], atol=2e-6)
++    for invalid in ([0., np.nan], [1.001, 0.], [0.]):
++        with pytest.raises(ValueError):
++            target_orientation_from_action(30., 359., invalid)
++
++
++def test_old_agent_and_replay_are_rejected():
++    from SAC_workspace.src.agents.sac_agent import SACAgent
++    from SAC_workspace.src.training.replay_buffer import ReplayBuffer
++
++    for component in (SACAgent(), ReplayBuffer(8)):
++        saved = component.state_dict()
++        component.load_state_dict(saved)
++        del saved["action_semantics"]
++        with pytest.raises(ValueError, match="action semantics"):
++            component.load_state_dict(saved)
++
++
++def test_mc_periodic_and_recorder_share_baselines():
++    from PV_experiments.representation.trajectories import Recorder
++    from SAC_workspace.src.config.config import load_config
++    from SAC_workspace.src.environment.environment import SACEnvironment
++    from SAC_workspace.src.training.experiment_protocol import PeriodicEvaluator, build_scenario_protocol
++
++    mc = importlib.import_module("MBPO_workspace.workflows.09_monte_carlo_evaluate")
++    root = Path(__file__).resolve().parents[1]
++    spec = json.loads((root / "PostProcessing_MC_patch/examples/hypothetical_uncertainty_5pct.json").read_text())
++    cfg = load_config(require_data=False, weather_uncertainty=spec)
++    if not cfg.manifest.is_file():
++        pytest.skip("Prepare the repository NSRDB catalog for physical baseline parity")
++    scenario = build_scenario_protocol(cfg.manifest, cfg.protocol)["train_ids"][0]
++    env = SACEnvironment(cfg.eval_env)
++    evaluator = PeriodicEvaluator.__new__(PeriodicEvaluator)
++    evaluator.env = env
++    try:
++        for method, controller in [("fixed_no_motion", "fixed"), ("sun_tracking", "dual_axis_instantaneous")]:
++            daily = mc.run_one(Recorder(env, method), method, scenario, 0)
++            periodic = evaluator._run_episode(scenario, controller=controller)
++            for key, other in [("gross_kwh", "gross_energy_kwh"), ("net_kwh", "net_energy_kwh"),
++                               ("movement_kwh", "movement_cost_kwh")]:
++                assert daily[key] == pytest.approx(periodic[other], abs=1e-12, rel=0.)
++            if method == "fixed_no_motion":
++                assert daily["movement_kwh"] == 0.
++            else:
++                assert daily["movement_kwh"] > 0.
++    finally:
++        env.close()
+diff --git a/geometry10_tests/test_training_numerics.py b/geometry10_tests/test_training_numerics.py
+index 6a53fb9b0d56f3d13963b8cf06322796a6f5e96f..38abbf7c070be6a99a1d4906d5882ced40a6ffe3 100644
+--- a/geometry10_tests/test_training_numerics.py
++++ b/geometry10_tests/test_training_numerics.py
+@@ -101,19 +101,19 @@ def test_angle_wrap_and_pose_parity_dense():
+     rem=rng.integers(1,196,n); rem[:2]=1
+     a=rng.uniform(-1,1,(n,2)).astype(np.float32); a[:4]=[[1,1],[-1,-1],[1,1],[-1,-1]]
+     states=np.stack([build(100,20,12,t,g,70,1,k/195) for t,g,k in zip(tilt0,az0,rem)])
+-    tilt,pair,tau,dt,da,done=pose_transition(states,a,5.,10.,195)
+-    expected_tilt=np.clip(tilt0+a[:,0].astype(float)*5,0,90)
+-    expected_az=(az0+a[:,1].astype(float)*10)%360
++    tilt,pair,tau,dt,da,done=pose_transition(states,a,195)
++    expected_tilt=45*(1+a[:,0].astype(float))
++    expected_az=(az0+a[:,1].astype(float)*180)%360
+     np.testing.assert_allclose(tilt*90,expected_tilt,atol=5e-6,rtol=0)
+     np.testing.assert_allclose(pair,circular(expected_az),atol=1e-7,rtol=0)
+     np.testing.assert_allclose(dt,expected_tilt-tilt0,atol=5e-6,rtol=0)
+-    np.testing.assert_allclose(da,a[:,1].astype(float)*10,atol=1e-10,rtol=0)
++    np.testing.assert_allclose(da,a[:,1].astype(float)*180,atol=1e-10,rtol=0)
+     np.testing.assert_array_equal(done,rem==1)
+     np.testing.assert_allclose(tau,(rem-1)/195,atol=1e-12,rtol=0)
+     assert np.linalg.norm(circular(359.999)-circular(.001))<4e-5
+     np.testing.assert_allclose(np.linalg.norm(pair,axis=1),1,atol=1e-12)
+     cost=30*(abs(dt)/1.5+abs(da)/2)/3.6e6
+-    assert (cost>=0).all() and cost.max()<=30*(5/1.5+10/2)/3.6e6+1e-12
++    assert (cost>=0).all() and cost.max()<=30*(90/1.5+180/2)/3.6e6+1e-12
+ 
+ 
+ def test_budget_arithmetic_and_batch_fraction():
+@@ -154,9 +154,9 @@ def test_real_environment_angular_boundaries_when_data_available():
+         for i in range(env.horizon):
+             # Start at (30,180); move through 360, reverse through 0, repeat.
+             direction=1. if (i//20)%2==0 else -1.
+-            a=np.array([direction,direction],np.float32)
++            a=np.array([direction,0.4*direction],np.float32)
+             old_az=float(u.azimuth)
+-            tilt,pair,tau,dt,da,done=pose_transition(s[None,:],a[None,:],u.max_delta_tilt,u.max_delta_azimuth,env.horizon)
++            tilt,pair,tau,dt,da,done=pose_transition(s[None,:],a[None,:],env.horizon)
+             n,r,terminal,info=env.step(a)
+             np.testing.assert_allclose(n[3:6],np.r_[tilt,pair[0]],atol=4e-5,rtol=0)
+             np.testing.assert_allclose(n[TAU],tau[0],atol=1e-7,rtol=0)
+diff --git a/mbpo/audit_support.py b/mbpo/audit_support.py
+index 74d3543409543b6bddc6fb800fa61803d7b8908b..286a06dbdd75ec033b2792d24174b3c81afd05db 100644
+--- a/mbpo/audit_support.py
++++ b/mbpo/audit_support.py
+@@ -226,9 +226,9 @@ def counterfactual_metrics(rows, tolerance_kwh=1e-7):
+     errors=[]; regret=[]; correct=total=0; ties=0
+     for block in groups.values():
+         y=np.array([r['actual_reward_kwh'] for r in block]); p=np.array([r['predicted_reward_kwh'] for r in block])
+-        zero=[i for i,r in enumerate(block) if r['action_type']=='zero']
+-        if len(zero)!=1: raise ValueError('Counterfactual group needs one zero action')
+-        j=zero[0]; others=np.arange(len(block))!=j
++        hold=[i for i,r in enumerate(block) if r['action_type']=='hold']
++        if len(hold)!=1: raise ValueError('Counterfactual group needs one hold action')
++        j=hold[0]; others=np.arange(len(block))!=j
+         errors.extend(((p-p[j])-(y-y[j]))[others]); regret.append(float(y.max()-y[np.argmax(p)]))
+         for i in range(len(y)):
+             for k in range(i):
+diff --git a/mbpo/env/baseline_contract.py b/mbpo/env/baseline_contract.py
+index 0db6e7ab84c3fce497411220bdcf527455747941..1581e2f9da38fcad33bb8f9d2929d6e6bca5effd 100644
+--- a/mbpo/env/baseline_contract.py
++++ b/mbpo/env/baseline_contract.py
+@@ -21,6 +21,18 @@ _PVW = (
+ )
+ 
+ 
++def astronomical_action(env):
++    """Point at the decision-time sun, holding the panel in darkness."""
++    from mbpo.geometry10 import action_for_target_orientation, hold_action
++    from mbpo.env.pvlib_physics import dual_axis_tracking_targets
++
++    sun = env._solar_position(env.current_time)
++    if sun.zenith >= 90.0:
++        return hold_action(env.tilt)
++    tilt, azimuth = dual_axis_tracking_targets(sun.zenith, sun.azimuth)
++    return action_for_target_orientation(env.tilt, env.azimuth, tilt, azimuth)
++
++
+ def isotropic_max_poa_tilt(
+         solar_zenith_deg, dni_wm2, ghi_wm2, dhi_wm2,
+         albedo=_DEFAULT_ALBEDO):
+@@ -102,6 +114,9 @@ def validate_paired_reference_group(group, *, require_oracle=False):
+     if initial.shape != (2,) or not np.isfinite(initial).all():
+         raise ValueError('Invalid fixed-mount orientation')
+ 
++    from mbpo.geometry10 import ACTION_SEMANTICS, hold_action
++    command = (hold_action(initial[0]) if fixed['infos'][0].get('action_semantics') == ACTION_SEMANTICS
++               else np.zeros(2))
+     for t in range(n):
+         if not np.allclose(
+                 [fixed['tilt'][t], fixed['azimuth'][t]], initial, rtol=0, atol=1e-7):
+@@ -109,8 +124,8 @@ def validate_paired_reference_group(group, *, require_oracle=False):
+         if not np.allclose(
+                 [fixed['action_tilt'][t], fixed['action_azimuth'][t],
+                  fixed['delta_tilt_deg'][t], fixed['delta_azimuth_deg'][t]],
+-                0., rtol=0, atol=1e-7):
+-            raise ValueError('Fixed-mount action or movement was nonzero')
++                [*command, 0., 0.], rtol=0, atol=1e-7):
++            raise ValueError('Fixed-mount hold command or movement mismatch')
+         if abs(float(fixed['cost'][t])) > 1e-10:
+             raise ValueError('Fixed-mount movement cost was nonzero')
+ 
+diff --git a/mbpo/env/pv_tracking.py b/mbpo/env/pv_tracking.py
+index 686be049de3aef8320a8bc213950967d29efd998..83cdbde0cd55d7acd6dcd7ccd88a39de61ed60de 100644
+--- a/mbpo/env/pv_tracking.py
++++ b/mbpo/env/pv_tracking.py
+@@ -194,6 +194,8 @@ class PVTrackingEnv(gym.Env):
+         self.freq = freq
+         self.efficiency = efficiency
+         self.area = area
++        # Retained for legacy incremental modes and legacy-cost normalization;
++        # Geometry10 target actions are not slew-limited by these values.
+         self.max_delta_tilt = max_delta_tilt
+         self.max_delta_azimuth = max_delta_azimuth
+         self.randomize_day = randomize_day
+@@ -920,16 +922,26 @@ class PVTrackingEnv(gym.Env):
+         return self._maybe_noise_observation(obs)
+ 
+     def step(self, action):
+-        previous_tilt = float(self.tilt)
+-        previous_azimuth = float(self.azimuth)
+-        delta_tilt = float(action[0]) * self.max_delta_tilt
+-        delta_azimuth = float(action[1]) * self.max_delta_azimuth
+-
+-        self.tilt = clip_panel_tilt_deg(self.tilt + delta_tilt)
+-        executed_delta_tilt = float(self.tilt - previous_tilt)
+-        self.azimuth = wrap_panel_azimuth_deg(self.azimuth + delta_azimuth)
+-        executed_delta_azimuth = float(
+-            (self.azimuth - previous_azimuth + 180.0) % 360.0 - 180.0)
++        if self.observation_mode == 'geometry10':
++            from mbpo.geometry10 import ACTION_SEMANTICS, target_orientation_from_action
++            if np.shape(action) != (2,):
++                raise ValueError("Expected one two-dimensional PV action")
++            self.tilt, self.azimuth, executed_delta_tilt, executed_delta_azimuth = (
++                target_orientation_from_action(self.tilt, self.azimuth, action))
++            delta_tilt, delta_azimuth = executed_delta_tilt, executed_delta_azimuth
++            action_semantics = ACTION_SEMANTICS
++        else:
++            previous_tilt = float(self.tilt)
++            previous_azimuth = float(self.azimuth)
++            delta_tilt = float(action[0]) * self.max_delta_tilt
++            delta_azimuth = float(action[1]) * self.max_delta_azimuth
++
++            self.tilt = clip_panel_tilt_deg(self.tilt + delta_tilt)
++            executed_delta_tilt = float(self.tilt - previous_tilt)
++            self.azimuth = wrap_panel_azimuth_deg(self.azimuth + delta_azimuth)
++            executed_delta_azimuth = float(
++                (self.azimuth - previous_azimuth + 180.0) % 360.0 - 180.0)
++            action_semantics = 'legacy_incremental_v1'
+ 
+         self.step_index += 1
+         done = self.step_index >= len(self.times) - 1
+@@ -1041,6 +1053,7 @@ class PVTrackingEnv(gym.Env):
+                 self.azimuth,
+             ),
+             'observation_mode': self.observation_mode,
++            'action_semantics': action_semantics,
+             'dni_wm2': float(weather['dni']),
+             'dhi_wm2': float(weather['dhi']),
+             'ghi_wm2': float(weather['ghi']),
+diff --git a/mbpo/geometry10.py b/mbpo/geometry10.py
+index 45b6df5f89a407133da76d7c8c999d0fdbcf58d4..b1f5ab47f5cc2053cec1da1f71d37ab953655f82 100644
+--- a/mbpo/geometry10.py
++++ b/mbpo/geometry10.py
+@@ -9,6 +9,7 @@ import numpy as np
+ MODE = 'geometry10'
+ STATE_DIM = 10
+ ACTION_DIM = 2
++ACTION_SEMANTICS = 'instantaneous_target_tilt_absolute_azimuth_relative_v1'
+ TAU = 9
+ PANEL_AZ = slice(4, 6)
+ SOLAR = slice(6, 9)
+@@ -34,6 +35,64 @@ def azimuth(pair):
+     return np.mod(np.rad2deg(np.arctan2(a[..., 0], a[..., 1])), 360.)
+ 
+ 
++def target_orientation_from_action(current_tilt_deg, current_azimuth_deg, actions):
++    # Decode target actions: absolute tilt and relative circular azimuth.
++    a = np.asarray(actions, dtype=np.float64)
++    if (a.ndim < 1 or a.shape[-1] != ACTION_DIM
++            or not np.isfinite(a).all() or np.any(np.abs(a) > 1.0)):
++        raise ValueError("Actions must be finite and inside [-1, 1]")
++    old_tilt = np.asarray(current_tilt_deg, dtype=np.float64)
++    old_azimuth = np.asarray(current_azimuth_deg, dtype=np.float64)
++    try:
++        old_tilt, old_azimuth, a_tilt, a_azimuth = np.broadcast_arrays(
++            old_tilt, old_azimuth, a[..., 0], a[..., 1])
++    except ValueError as exc:
++        raise ValueError("Current pose and action batch shapes are incompatible") from exc
++    if (not np.isfinite(old_tilt).all() or not np.isfinite(old_azimuth).all()
++            or np.any((old_tilt < 0.0) | (old_tilt > 90.0))
++            or np.any((old_azimuth < 0.0) | (old_azimuth >= 360.0))):
++        raise ValueError("Current panel pose is outside its physical domain")
++    target_tilt = 45.0 * (a_tilt + 1.0)
++    delta_azimuth = 180.0 * a_azimuth
++    target_azimuth = (old_azimuth + delta_azimuth) % 360.0
++    target_azimuth = np.where(target_azimuth == 360.0, 0.0, target_azimuth)
++    delta_tilt = target_tilt - old_tilt
++    if np.ndim(target_tilt) == 0:
++        return (float(target_tilt), float(target_azimuth),
++                float(delta_tilt), float(delta_azimuth))
++    return target_tilt, target_azimuth, delta_tilt, delta_azimuth
++
++
++def action_for_target_orientation(current_tilt_deg, current_azimuth_deg,
++                                  target_tilt_deg, target_azimuth_deg):
++    # Encode a physical target pose using the Geometry10 action convention.
++    current_tilt, current_azimuth, target_tilt, target_azimuth = np.broadcast_arrays(
++        np.asarray(current_tilt_deg, dtype=np.float64),
++        np.asarray(current_azimuth_deg, dtype=np.float64),
++        np.asarray(target_tilt_deg, dtype=np.float64),
++        np.asarray(target_azimuth_deg, dtype=np.float64))
++    if not all(np.isfinite(v).all() for v in
++               (current_tilt, current_azimuth, target_tilt, target_azimuth)):
++        raise ValueError("Current and target poses must be finite")
++    if (np.any((current_tilt < 0.0) | (current_tilt > 90.0))
++            or np.any((target_tilt < 0.0) | (target_tilt > 90.0))
++            or np.any((current_azimuth < 0.0) | (current_azimuth >= 360.0))
++            or np.any((target_azimuth < 0.0) | (target_azimuth >= 360.0))):
++        raise ValueError("Current and target poses must lie in the physical domain")
++    delta_azimuth = (target_azimuth - current_azimuth + 180.0) % 360.0 - 180.0
++    return np.stack((target_tilt / 45.0 - 1.0, delta_azimuth / 180.0),
++                    axis=-1).astype(np.float32)
++
++
++def hold_action(current_tilt_deg):
++    # Return the command that leaves both panel angles unchanged.
++    tilt = np.asarray(current_tilt_deg, dtype=np.float64)
++    if not np.isfinite(tilt).all() or np.any((tilt < 0.0) | (tilt > 90.0)):
++        raise ValueError("Current tilt must be finite and inside [0, 90] degrees")
++    return np.stack((tilt / 45.0 - 1.0, np.zeros_like(tilt)),
++                    axis=-1)
++
++
+ def solar_features(zenith, solar_azimuth):
+     z = np.asarray(zenith, dtype=float)
+     a = np.asarray(solar_azimuth, dtype=float)
+@@ -77,26 +136,26 @@ def angular_rmse_deg(a,b):
+     return float(np.sqrt(np.mean(d*d)))
+ 
+ 
+-def pose_transition(states,actions,max_tilt,max_az,horizon):
+-    """Exact real-environment angular/time convention, including wrap and clipping."""
++def pose_transition(states, actions, horizon):
++    # Exact instantaneous target-pose and finite-horizon transition.
+     x = check_batch(states)
+-    a = np.asarray(actions,dtype=np.float32)
+-    if x.ndim!=2 or a.shape!=(len(x),2) or not np.isfinite(a).all() or np.any(np.abs(a)>1.00001):
+-        raise ValueError('Invalid geometry10 action batch')
+-    if not np.isfinite([horizon,max_tilt,max_az]).all() or horizon<=0 or max_tilt<=0 or not 0<max_az<=180 or np.any(x[:,TAU]<=0):
+-        raise ValueError('Invalid horizon, limits, or terminal starting state')
+-    a=np.clip(a,-1.,1.)
+-    old_tilt=x[:,3].astype(float)*90.
+-    old_az=azimuth(x[:,PANEL_AZ].astype(float))
+-    new_tilt=np.clip(old_tilt+a[:,0].astype(float)*max_tilt,0,90.)
+-    new_az=(old_az+a[:,1].astype(float)*max_az)%360.
+-    dt=new_tilt-old_tilt
+-    da=(new_az-old_az+180.)%360.-180.
+-    remaining=np.rint(x[:,TAU].astype(float)*horizon).astype(int)
+-    if np.any(remaining<1) or np.any(remaining>horizon) or not np.allclose(x[:,TAU],remaining/horizon,atol=2e-6,rtol=0):
+-        raise ValueError('Remaining time does not match finite-horizon grid')
+-    tau=(remaining-1)/horizon
+-    return new_tilt/90.,circular(new_az),tau,dt,da,remaining==1
++    a = np.asarray(actions, dtype=np.float32)
++    if (x.ndim != 2 or a.shape != (len(x), ACTION_DIM)
++            or not np.isfinite(a).all() or np.any(np.abs(a) > 1.0)):
++        raise ValueError("Invalid geometry10 action batch")
++    if (not np.isfinite(horizon) or horizon <= 0 or np.any(x[:, TAU] <= 0)):
++        raise ValueError("Invalid horizon or terminal starting state")
++    old_tilt = x[:, 3].astype(float) * 90.0
++    old_azimuth = azimuth(x[:, PANEL_AZ].astype(float)) % 360.0
++    new_tilt, new_azimuth, delta_tilt, delta_azimuth = target_orientation_from_action(
++        old_tilt, old_azimuth, a)
++    remaining = np.rint(x[:, TAU].astype(float) * horizon).astype(int)
++    if (np.any(remaining < 1) or np.any(remaining > horizon)
++            or not np.allclose(x[:, TAU], remaining / horizon, atol=2e-6, rtol=0)):
++        raise ValueError("Remaining time does not match finite-horizon grid")
++    tau = (remaining - 1) / horizon
++    return (new_tilt / 90.0, circular(new_azimuth), tau,
++            delta_tilt, delta_azimuth, remaining == 1)
+ 
+ 
+ class SolarContext:
+diff --git a/tests/check_geometry10_components.py b/tests/check_geometry10_components.py
+index ed308c543f7c77d7393c68d2d59ba83e83dee48e..28b58fbed3e29f37b443b7f2b29b0c95e658a1f6 100644
+--- a/tests/check_geometry10_components.py
++++ b/tests/check_geometry10_components.py
+@@ -53,7 +53,7 @@ a,b=model.predict_delta(rs,acts);c,d=model2.predict_delta(rs,acts);np.testing.as
+ print('PASS ensemble checkpoint stochastic continuation')
+ # Use actual predicted deltas, exact pose and clock; use fixture solar geometry, not PVLib.
+ mp=ReplayBuffer(1600,seed=8)
+-new_tilt,new_az,tau,dt,da,done=pose_transition(rs,acts,5,10,195)
++new_tilt,new_az,tau,dt,da,done=pose_transition(rs,acts,195)
+ nxt=rs.copy();nxt[:,:3]=np.clip(rs[:,:3]+delta,0,1);nxt[:,3]=new_tilt;nxt[:,4:6]=new_az;nxt[:,TAU]=tau
+ check_batch(nxt);reward=nxt[:,2]/6-30*(abs(dt)/1.5+abs(da)/2)/3.6e6
+ for i in range(len(rs)):mp.add(rs[i],acts[i],reward[i],nxt[i],done[i])
+diff --git a/tests/verify_geometry10_training.py b/tests/verify_geometry10_training.py
+index 2f8d27ea4288a90cae35fcf1a9a2647d7cbce52d..7ab62d8c337290bef04130255718cb40c45aca04 100644
+--- a/tests/verify_geometry10_training.py
++++ b/tests/verify_geometry10_training.py
+@@ -117,7 +117,7 @@ def audit_checkpoint(root,cfg,meta,summary):
+         s=check_batch(data['states']); t=check_batch(data['next_states']); a=np.asarray(data['actions']);r=np.asarray(data['rewards']);d=np.asarray(data['dones']);require(s.shape==(n,10) and t.shape==s.shape and a.shape==(n,2) and r.shape==d.shape==(n,1),'Replay tensor shape mismatch')
+         require(np.isfinite(r).all() and np.isin(d,[0,1]).all(),'Invalid replay reward/done')
+         if n:
+-            tilt,pair,tau,dt,da,done=pose_transition(s,a,float(mdp['max_delta_tilt']),float(mdp['max_delta_azimuth']),h)
++            tilt,pair,tau,dt,da,done=pose_transition(s,a,h)
+             require(np.allclose(t[:,3],tilt,atol=1e-6,rtol=0) and np.allclose(t[:,4:6],pair,atol=2e-6,rtol=0),'Replay executed geometry mismatch')
+             require(np.allclose(t[:,9],tau,atol=1e-6,rtol=0) and np.array_equal(d[:,0].astype(bool),done),'Replay terminal/time mismatch')
+             expected=t[:,2].astype(float)/6-scale*power*(abs(dt)/vt+abs(da)/va)/3.6e6
+diff --git a/verify_geometry10_training.py b/verify_geometry10_training.py
+index 2f8d27ea4288a90cae35fcf1a9a2647d7cbce52d..7ab62d8c337290bef04130255718cb40c45aca04 100644
+--- a/verify_geometry10_training.py
++++ b/verify_geometry10_training.py
+@@ -117,7 +117,7 @@ def audit_checkpoint(root,cfg,meta,summary):
+         s=check_batch(data['states']); t=check_batch(data['next_states']); a=np.asarray(data['actions']);r=np.asarray(data['rewards']);d=np.asarray(data['dones']);require(s.shape==(n,10) and t.shape==s.shape and a.shape==(n,2) and r.shape==d.shape==(n,1),'Replay tensor shape mismatch')
+         require(np.isfinite(r).all() and np.isin(d,[0,1]).all(),'Invalid replay reward/done')
+         if n:
+-            tilt,pair,tau,dt,da,done=pose_transition(s,a,float(mdp['max_delta_tilt']),float(mdp['max_delta_azimuth']),h)
++            tilt,pair,tau,dt,da,done=pose_transition(s,a,h)
+             require(np.allclose(t[:,3],tilt,atol=1e-6,rtol=0) and np.allclose(t[:,4:6],pair,atol=2e-6,rtol=0),'Replay executed geometry mismatch')
+             require(np.allclose(t[:,9],tau,atol=1e-6,rtol=0) and np.array_equal(d[:,0].astype(bool),done),'Replay terminal/time mismatch')
+             expected=t[:,2].astype(float)/6-scale*power*(abs(dt)/vt+abs(da)/va)/3.6e6

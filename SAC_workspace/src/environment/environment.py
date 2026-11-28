@@ -5,7 +5,8 @@ Normalized actions stay [-1,1]^2. Degrees and rewards are computed by the
 original environment, not approximated or transformed inside this adapter.
 """
 from __future__ import annotations
-from mbpo.geometry10 import MODE, STATE_DIM, TAU, FEATURE_NAMES, LOW, HIGH, POWER_NORM
+from mbpo.geometry10 import (MODE, STATE_DIM, TAU, FEATURE_NAMES, LOW, HIGH,
+    POWER_NORM, ACTION_SEMANTICS)
 import numpy as np
 import pandas as pd
 from importlib import metadata
@@ -98,6 +99,7 @@ class SACEnvironment:
             'observation_features': list(FEATURE_NAMES),
             'observation_contract_sha256': __import__('hashlib').sha256(__import__('pathlib').Path(__import__('mbpo.geometry10',fromlist=['build']).__file__).read_bytes()).hexdigest(),
             'horizon': self.horizon,
+            'action_semantics': ACTION_SEMANTICS,
         }
         if source.weather_source == 'nsrdb_multiyear':
             from mbpo.env.stage_a_data_contract import nsrdb_dataset_fingerprint
@@ -144,12 +146,14 @@ class SACEnvironment:
         return observation
 
     def step(self, action):
-        a = np.asarray(action, dtype=np.float32)
+        a = np.asarray(action, dtype=np.float64)
         if a.shape != (2,) or not np.isfinite(a).all():
             raise ValueError(f'Action must be finite shape (2,), got {a}')
-        if (np.abs(a) > 1.00001).any():
+        if (np.abs(a) > 1.0).any():
             raise ValueError('Policy generated action outside [-1,1]^2')
-        obs, reward, done, info = self.env.step(np.clip(a, -1., 1.))
+        obs, reward, done, info = self.env.step(a)
+        if info.get('action_semantics') != ACTION_SEMANTICS:
+            raise RuntimeError('Physical environment action semantics differ from Geometry10 contract')
         self.steps += 1
         if self.steps > self.horizon or (self.steps == self.horizon) != bool(done):
             raise RuntimeError('Episode horizon or terminal signal disagrees with reference')

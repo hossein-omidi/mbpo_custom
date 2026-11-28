@@ -6,6 +6,7 @@ are reported separately and are never counted as physical environment samples.
 """
 from __future__ import annotations
 from mbpo.audit_support import target_event, expected_steps
+from mbpo.geometry10 import ACTION_SEMANTICS
 
 import csv
 import json
@@ -423,6 +424,9 @@ def analyze_sample_complexity(
     _write_csv(out / "algorithm_summary.csv", summaries)
     _write_csv(out / "computational_cost_by_seed.csv", compute_rows)
 
+    dual_field = ("dual_axis_instantaneous_validation_mean_kwh"
+                  if ref_meta.get("action_semantics") == ACTION_SEMANTICS
+                  else "dual_axis_slew_limited_validation_mean_kwh")
     report = {
         "analysis_schema": 1,
         "algorithms": ["sac", "mbpo"],
@@ -442,7 +446,7 @@ def analyze_sample_complexity(
         "target_kwh_per_episode": float(target),
         "sustain_checkpoints": int(sustain_checkpoints),
         "fixed_validation_mean_kwh": fixed_mean,
-        "dual_axis_slew_limited_validation_mean_kwh": dual_mean,
+        dual_field: dual_mean,
         "sample_reduction": reduction_summary,
         "algorithm_summary": summaries,
         "computational_cost": compute_rows,

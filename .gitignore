@@ -74,6 +74,11 @@ smoke_runs/
 sequential_stage_artifacts/
 outputs/
 
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+
 evaluation/
 training_plots/
 verification/

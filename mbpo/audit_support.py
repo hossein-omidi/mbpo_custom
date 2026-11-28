@@ -226,9 +226,9 @@ def counterfactual_metrics(rows, tolerance_kwh=1e-7):
     errors=[]; regret=[]; correct=total=0; ties=0
     for block in groups.values():
         y=np.array([r['actual_reward_kwh'] for r in block]); p=np.array([r['predicted_reward_kwh'] for r in block])
-        zero=[i for i,r in enumerate(block) if r['action_type']=='zero']
-        if len(zero)!=1: raise ValueError('Counterfactual group needs one zero action')
-        j=zero[0]; others=np.arange(len(block))!=j
+        hold=[i for i,r in enumerate(block) if r['action_type']=='hold']
+        if len(hold)!=1: raise ValueError('Counterfactual group needs one hold action')
+        j=hold[0]; others=np.arange(len(block))!=j
         errors.extend(((p-p[j])-(y-y[j]))[others]); regret.append(float(y.max()-y[np.argmax(p)]))
         for i in range(len(y)):
             for k in range(i):

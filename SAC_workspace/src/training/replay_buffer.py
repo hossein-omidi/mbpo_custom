@@ -1,6 +1,6 @@
 """Fixed-size FIFO replay memory using ONLY transitions from PVTrackingEnv.step."""
 from __future__ import annotations
-from mbpo.geometry10 import STATE_DIM, ACTION_DIM
+from mbpo.geometry10 import ACTION_SEMANTICS, STATE_DIM, ACTION_DIM
 import numpy as np
 
 class ReplayBuffer:
@@ -26,7 +26,7 @@ class ReplayBuffer:
         next_state = encode(next_state)
         action = np.asarray(action, dtype=np.float32)
         if (action.shape != (2,) or not np.isfinite(action).all()
-                or (np.abs(action) > 1.00001).any()):
+                or (np.abs(action) > 1.0).any()):
             raise ValueError('Replay action must be finite and inside [-1,1]^2')
         if not np.isfinite(reward) or done not in (0, 1, False, True):
             raise ValueError('Invalid transition reward or terminal flag')
@@ -46,11 +46,13 @@ class ReplayBuffer:
         return {k: getattr(self, k)[ix].copy() for k in ('states','actions','rewards','next_states','dones')}
 
     def state_dict(self):
-        return {'state_dim': self.state_dim, 'capacity': self.capacity, 'count': self.count, 'head': self.head,
+        return {'action_semantics': ACTION_SEMANTICS, 'state_dim': self.state_dim, 'capacity': self.capacity, 'count': self.count, 'head': self.head,
                 'rng': self.rng.bit_generator.state,
                 **{k: getattr(self,k)[:self.count].copy() for k in ('states','actions','rewards','next_states','dones')}}
 
     def load_state_dict(self, data):
+        if data.get('action_semantics') != ACTION_SEMANTICS:
+            raise ValueError('Checkpoint uses incompatible PV action semantics')
         if data.get('state_dim') != self.state_dim:
             raise ValueError('Replay observation dimension differs from checkpoint')
         if data['capacity'] != self.capacity:
@@ -65,6 +67,6 @@ class ReplayBuffer:
             getattr(self,k)[:self.count] = data[k]
         from mbpo.geometry10 import check_batch
         check_batch(self.states[:self.count]); check_batch(self.next_states[:self.count])
-        if (self.count < self.capacity and self.head != self.count) or np.any(np.abs(self.actions[:self.count]) > 1.00001) or not np.isin(self.dones[:self.count], [0., 1.]).all():
+        if (self.count < self.capacity and self.head != self.count) or np.any(np.abs(self.actions[:self.count]) > 1.0) or not np.isin(self.dones[:self.count], [0., 1.]).all():
             raise ValueError('Invalid saved replay indices, actions or terminal flags')
         self.rng.bit_generator.state = data['rng']

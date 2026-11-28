@@ -19,7 +19,9 @@ from typing import Any
 import numpy as np
 
 PROTOCOL_VERSION = "pv_nsrdb_month_stratified_v1"
-from mbpo.geometry10 import MODE, STATE_DIM, ACTION_DIM
+from mbpo.env.baseline_contract import astronomical_action
+from mbpo.geometry10 import (MODE, STATE_DIM, ACTION_DIM, ACTION_SEMANTICS,
+    hold_action)
 
 
 def canonical_json_sha256(value: Any) -> str:
@@ -250,6 +252,7 @@ def prepare_run_metadata(
         "scenario_split_file": "scenario_split.json",
         "state_dim": STATE_DIM,
         "observation_mode": MODE,
+        "action_semantics": ACTION_SEMANTICS,
         "action_dim": ACTION_DIM,
         "horizon": int(horizon),
         "power_model": resolved_mdp.get("power_model", "legacy"),
@@ -358,6 +361,8 @@ class PeriodicEvaluator:
             "sustain_checkpoints": int(protocol["sustain_checkpoints"]),
             "bootstrap_replicates": int(protocol["bootstrap_replicates"]),
             "policy_evaluation": "deterministic_actor_mean_tanh",
+            "action_semantics": ACTION_SEMANTICS,
+            "astronomical_baseline": "instantaneous_dual_axis_target",
             "environment": "original StageAPVTrackingEnv; no learned model transitions",
             "energy_objective": (
                 "gross_DC_kWh_no_actuator_consumption"
@@ -379,28 +384,9 @@ class PeriodicEvaluator:
             if controller == "policy":
                 action = policy.act(obs, deterministic=True)
             elif controller == "fixed":
-                action = np.zeros(2, dtype=np.float32)
-            elif controller == "dual_axis_slew_limited":
-                if float(underlying.max_delta_tilt) <= 0 or float(underlying.max_delta_azimuth) <= 0:
-                    raise ValueError("Positive action increments are required for the dual-axis baseline")
-                solar = underlying._solar_position(underlying.current_time)
-                if float(solar.zenith) >= 90.0:
-                    action = np.zeros(2, dtype=np.float32)
-                else:
-                    from mbpo.env.pvlib_physics import dual_axis_tracking_targets
-                    target_tilt, target_azimuth = dual_axis_tracking_targets(
-                        float(solar.zenith), float(solar.azimuth))
-                    delta_tilt = np.clip(float(target_tilt) - float(underlying.tilt),
-                                         -underlying.max_delta_tilt, underlying.max_delta_tilt)
-                    delta_azimuth = ((float(target_azimuth) - float(underlying.azimuth) + 180.0)
-                                     % 360.0) - 180.0
-                    delta_azimuth = np.clip(delta_azimuth,
-                                            -underlying.max_delta_azimuth,
-                                            underlying.max_delta_azimuth)
-                    action = np.asarray([
-                        delta_tilt / underlying.max_delta_tilt,
-                        delta_azimuth / underlying.max_delta_azimuth,
-                    ], dtype=np.float32)
+                action = hold_action(float(underlying.tilt))
+            elif controller == "dual_axis_instantaneous":
+                action = astronomical_action(underlying)
             else:
                 raise ValueError(f"Unknown evaluation controller: {controller}")
             obs, reward, done, info = self.env.step(action)
@@ -426,6 +412,8 @@ class PeriodicEvaluator:
             if ids != self.validation_ids:
                 raise ValueError("Saved evaluation baseline scenarios differ from scenario_split.json")
             for row in rows:
+                if row.get("action_semantics") != ACTION_SEMANTICS:
+                    raise ValueError("Cached baseline uses incompatible action semantics")
                 for key in ("fixed_net_energy_kwh", "dual_axis_net_energy_kwh"):
                     if not math.isfinite(float(row[key])):
                         raise ValueError("Nonfinite saved evaluation reference")
@@ -433,9 +421,10 @@ class PeriodicEvaluator:
         rows = []
         for sid in self.validation_ids:
             fixed = self._run_episode(sid, controller="fixed")
-            dual = self._run_episode(sid, controller="dual_axis_slew_limited")
+            dual = self._run_episode(sid, controller="dual_axis_instantaneous")
             rows.append({
                 "scenario_id": sid,
+                "action_semantics": ACTION_SEMANTICS,
                 "fixed_net_energy_kwh": fixed["net_energy_kwh"],
                 "fixed_gross_energy_kwh": fixed["gross_energy_kwh"],
                 "fixed_movement_cost_kwh": fixed["movement_cost_kwh"],

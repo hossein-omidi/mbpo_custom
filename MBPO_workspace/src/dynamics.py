@@ -13,7 +13,7 @@ import torch
 from torch import nn
 from SAC_workspace.src.agents.sac_agent import mlp
 
-DYNAMICS_SCHEMA = 4
+DYNAMICS_SCHEMA = 5
 
 
 class GaussianDeltaNet(nn.Module):
@@ -83,7 +83,7 @@ class DynamicsEnsemble:
             raise ValueError('Non-finite or terminal-start training data')
         xw = weather_features(states)
         check_batch(states); check_batch(nxt)
-        if np.any(np.abs(actions)>1.00001):
+        if np.any(np.abs(actions)>1.0):
             raise ValueError('Invalid model-fit actions')
         yw = (nxt[:, :2] - states[:, :2]).astype(np.float32)
         # Teacher-forced next weather is used only to fit the conditional power model.
@@ -169,7 +169,7 @@ class DynamicsEnsemble:
         actions = np.asarray(actions, dtype=np.float32)
         if (states.ndim != 2 or states.shape[1] != STATE_DIM or actions.shape != (len(states), 2)
                 or not np.isfinite(states).all() or not np.isfinite(actions).all()
-                or np.any(np.abs(actions) > 1.00001)):
+                or np.any(np.abs(actions) > 1.0)):
             raise ValueError('Dynamics expects finite geometry10 states and bounded (N,2) actions')
         return states, actions
 
@@ -405,13 +405,13 @@ class StructuredFakeEnv:
         states = check_batch(states)
         if states.ndim != 2 or not len(states):
             raise ValueError('Expected nonempty geometry10 rollout batch')
-        if actions.shape != (len(states),2) or not np.isfinite(actions).all() or np.any(np.abs(actions)>1.00001):
+        if actions.shape != (len(states),2) or not np.isfinite(actions).all() or np.any(np.abs(actions)>1.0):
             raise ValueError('Invalid synthetic action batch')
-        actions = np.clip(actions, -1., 1.)
+        # Actions are validated above; preserve the exact policy command.
         # Exact ephemeris from scenario + remaining time; no weather leakage.
         next_solar = self.solar_context.next(states, scenario_ids)
         new_tilt, new_az, tau, executed_tilt, executed_az, done = pose_transition(
-            states, actions, self.max_delta_tilt, self.max_delta_azimuth, self.horizon)
+            states, actions, self.horizon)
         delta,uncertainty = self.ensemble.predict_delta(states,actions,stochastic=stochastic)
         delta = np.asarray(delta,dtype=np.float32)
         uncertainty = np.asarray(uncertainty,dtype=np.float32)

@@ -194,6 +194,8 @@ class PVTrackingEnv(gym.Env):
         self.freq = freq
         self.efficiency = efficiency
         self.area = area
+        # Retained for legacy incremental modes and legacy-cost normalization;
+        # Geometry10 target actions are not slew-limited by these values.
         self.max_delta_tilt = max_delta_tilt
         self.max_delta_azimuth = max_delta_azimuth
         self.randomize_day = randomize_day
@@ -920,16 +922,26 @@ class PVTrackingEnv(gym.Env):
         return self._maybe_noise_observation(obs)
 
     def step(self, action):
-        previous_tilt = float(self.tilt)
-        previous_azimuth = float(self.azimuth)
-        delta_tilt = float(action[0]) * self.max_delta_tilt
-        delta_azimuth = float(action[1]) * self.max_delta_azimuth
+        if self.observation_mode == 'geometry10':
+            from mbpo.geometry10 import ACTION_SEMANTICS, target_orientation_from_action
+            if np.shape(action) != (2,):
+                raise ValueError("Expected one two-dimensional PV action")
+            self.tilt, self.azimuth, executed_delta_tilt, executed_delta_azimuth = (
+                target_orientation_from_action(self.tilt, self.azimuth, action))
+            delta_tilt, delta_azimuth = executed_delta_tilt, executed_delta_azimuth
+            action_semantics = ACTION_SEMANTICS
+        else:
+            previous_tilt = float(self.tilt)
+            previous_azimuth = float(self.azimuth)
+            delta_tilt = float(action[0]) * self.max_delta_tilt
+            delta_azimuth = float(action[1]) * self.max_delta_azimuth
 
-        self.tilt = clip_panel_tilt_deg(self.tilt + delta_tilt)
-        executed_delta_tilt = float(self.tilt - previous_tilt)
-        self.azimuth = wrap_panel_azimuth_deg(self.azimuth + delta_azimuth)
-        executed_delta_azimuth = float(
-            (self.azimuth - previous_azimuth + 180.0) % 360.0 - 180.0)
+            self.tilt = clip_panel_tilt_deg(self.tilt + delta_tilt)
+            executed_delta_tilt = float(self.tilt - previous_tilt)
+            self.azimuth = wrap_panel_azimuth_deg(self.azimuth + delta_azimuth)
+            executed_delta_azimuth = float(
+                (self.azimuth - previous_azimuth + 180.0) % 360.0 - 180.0)
+            action_semantics = 'legacy_incremental_v1'
 
         self.step_index += 1
         done = self.step_index >= len(self.times) - 1
@@ -1041,6 +1053,7 @@ class PVTrackingEnv(gym.Env):
                 self.azimuth,
             ),
             'observation_mode': self.observation_mode,
+            'action_semantics': action_semantics,
             'dni_wm2': float(weather['dni']),
             'dhi_wm2': float(weather['dhi']),
             'ghi_wm2': float(weather['ghi']),

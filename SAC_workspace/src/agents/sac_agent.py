@@ -6,7 +6,7 @@ Reference task: gamma=1, finite horizon validated from the shared environment co
 No BNN, model pool, fake environment, or imaginary rollouts.
 """
 from __future__ import annotations
-from mbpo.geometry10 import STATE_DIM, ACTION_DIM, check_batch
+from mbpo.geometry10 import ACTION_SEMANTICS, STATE_DIM, ACTION_DIM, check_batch
 import copy
 import math
 from typing import Sequence
@@ -114,7 +114,8 @@ class SACAgent:
             raise ValueError('Expected a single geometry10 observation')
         s = torch.as_tensor(state, device=self.device).reshape(1,self.state_dim)
         a, _ = self.actor(s, deterministic=deterministic, with_logprob=False)
-        return np.clip(a.squeeze(0).cpu().numpy(), -1., 1.).astype(np.float32)
+        # The actor's tanh already enforces the action domain; do not distort it again.
+        return a.squeeze(0).cpu().numpy().astype(np.float32)
 
     def compute_target(self, batch):
         s2, r, done = batch['next_states'], batch['rewards'], batch['dones']
@@ -168,7 +169,7 @@ class SACAgent:
         return metrics
 
     def state_dict(self):
-        return {'state_dim': self.state_dim, 'actor': self.actor.state_dict(), 'critic': self.critic.state_dict(),
+        return {'action_semantics': ACTION_SEMANTICS, 'state_dim': self.state_dim, 'actor': self.actor.state_dict(), 'critic': self.critic.state_dict(),
                 'critic_target': self.critic_target.state_dict(),
                 'actor_opt': self.actor_opt.state_dict(), 'critic_opt': self.critic_opt.state_dict(),
                 'alpha_opt': self.alpha_opt.state_dict(), 'log_alpha': self.log_alpha.detach().clone(),
@@ -177,6 +178,8 @@ class SACAgent:
                 'min_alpha': self.min_alpha}
 
     def load_state_dict(self, state):
+        if state.get('action_semantics') != ACTION_SEMANTICS:
+            raise ValueError('Checkpoint uses incompatible PV action semantics')
         if state.get('state_dim') != self.state_dim:
             raise ValueError('Incompatible observation dimension in checkpoint')
         for k in ('gamma', 'tau', 'reward_scale', 'target_entropy', 'min_alpha'):

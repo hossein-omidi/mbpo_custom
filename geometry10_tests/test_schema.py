@@ -37,17 +37,17 @@ def test_night_and_terminal():
     x=build(0,0,0,30,180,120,360,0)
     assert np.all(x[:3]==0) and x[TAU]==0
     assert np.isclose(x[6],2/3) and np.isclose(x[8],1)
-    with pytest.raises(ValueError):pose_transition(x[None,:],np.zeros((1,2)),5,10,195)
+    with pytest.raises(ValueError):pose_transition(x[None,:],np.zeros((1,2)),195)
 
 
-def test_slew_clipping_and_wrap():
+def test_target_extremes_and_wrap():
     x=np.stack([state(359,89,1/195),state(1,1,2/195)])
     a=np.array([[1,1],[-1,-1]],dtype=float)
-    tilt,az,tau,dt,da,done=pose_transition(x,a,5,10,195)
+    tilt,az,tau,dt,da,done=pose_transition(x,a,195)
     assert np.allclose(tilt,[1,0])
-    assert np.allclose(azimuth(az),[9,351],atol=1e-4)
+    assert np.allclose(azimuth(az),[179,181],atol=1e-4)
     assert np.allclose(dt,[1,-1],atol=1e-5)
-    assert np.allclose(da,[10,-10],atol=1e-5)
+    assert np.allclose(da,[180,-180],atol=1e-5)
     assert np.allclose(tau,[0,1/195]) and done.tolist()==[True,False]
 
 
@@ -78,7 +78,7 @@ def test_solar_context_selects_correct_day_and_time():
 
 def test_invalid_off_grid_tau_rejected():
     x=state(tau=.12345)[None,:]
-    with pytest.raises(ValueError):pose_transition(x,np.zeros((1,2)),5,10,195)
+    with pytest.raises(ValueError):pose_transition(x,np.zeros((1,2)),195)
 
 
 def test_power_normalization_is_invertible_not_saturated():
@@ -89,13 +89,11 @@ def test_power_normalization_is_invertible_not_saturated():
         with pytest.raises(ValueError):build(500,100,power,30,180,60,90,1)
 
 
-def test_action_roundoff_matches_real_action_clipping():
+def test_invalid_action_is_rejected():
     x=state(az=120,tilt=30,tau=1)[None,:]
     a=np.array([[1.000001,-1.000001]])
-    result=pose_transition(x,a,5,10,195)
-    assert np.allclose(result[3],[5.],atol=1e-7)
-    assert np.allclose(result[4],[-10.],atol=1e-7)
-    with pytest.raises(ValueError):pose_transition(x,[[1.01,0]],5,10,195)
+    with pytest.raises(ValueError):pose_transition(x,a,195)
+    with pytest.raises(ValueError):pose_transition(x,[[1.01,0]],195)
 
 
 def test_solar_context_rejects_wrong_metadata_shape():

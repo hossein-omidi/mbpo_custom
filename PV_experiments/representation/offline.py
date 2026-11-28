@@ -111,7 +111,7 @@ def render_evaluation(data,out,stage):
     t=overall[overall.quantity=='net_kwh'].set_index('method').loc[list(METHODS)]
     axes[0].errorbar(pos,t['mean'],yerr=t.sd_total,fmt='o',color='black',capsize=4)
     axes[0].set(xticks=pos,xticklabels=['Fixed','Astronomical','SAC','MBPO'],ylabel='Net energy (kWh / evaluated day)',title='Mean ± empirical mixture SD')
-    pairs=[('mbpo','sac'),('mbpo','sun_slew_limited'),('mbpo','fixed_no_motion')]
+    pairs=[('mbpo','sac'),('mbpo','sun_tracking'),('mbpo','fixed_no_motion')]
     for i,(a,b) in enumerate(pairs):
         z=x[:,:,:,METHODS.index(a),2]-x[:,:,:,METHODS.index(b),2]
         seed_values=z.mean(axis=(1,2)); sd=seed_values.std(ddof=1) if S>1 else None

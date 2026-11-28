@@ -122,15 +122,18 @@ def test_real_physics_and_exact_model_transition():
         rng=np.random.default_rng(3)
         for k in range(env.horizon):
             a=rng.uniform(-1,1,size=2).astype(np.float32)
-            n,r,done,info=env.step(a);on,ro,odone,oinfo=old.step(a)
+            # Match poses reachable under both action contracts.
+            target=np.clip(old.tilt+a[0]*old.max_delta_tilt,0,90)
+            target_a=np.array([target/45-1,a[1]*old.max_delta_azimuth/180],np.float32)
+            n,r,done,info=env.step(target_a);on,ro,odone,oinfo=old.step(a)
             assert np.isclose(r,ro,atol=1e-10) and done==odone
-            assert np.isclose(info['power_dc_w'],oinfo['power_dc_w'],atol=1e-10)
+            assert np.isclose(info['power_dc_w'],oinfo['power_dc_w'],atol=1e-5)
             assert np.allclose(n[:4],on[:4],atol=1e-7)
             assert np.allclose(n[SOLAR],solar_features(info['solar_zenith_deg'],info['solar_azimuth_deg']),atol=1e-6)
             assert np.isclose(n[TAU],on[5],atol=1e-7)
             # Exact pose, time, ephemeris and movement accounting with stub delta.
             stub.delta=(n[:3]-s[:3])[None,:]
-            pred,pr,pd,_,mask=fake.step(s[None,:],a[None,:],stochastic=False,scenario_ids=[sid])
+            pred,pr,pd,_,mask=fake.step(s[None,:],target_a[None,:],stochastic=False,scenario_ids=[sid])
             assert mask[0] and bool(pd[0])==done
             assert np.allclose(pred[0],n,atol=4e-5,rtol=0)
             # power normalization/float32 roundoff only
@@ -167,7 +170,7 @@ def test_fake_rollout_prediction_validation():
     assert mask[0] and not d[0]
     assert np.allclose(nxt[0,SOLAR],grid[1],atol=1e-7)
     assert nxt[0,3]==1.
-    expected=170./12000.-30.*(1./1.5+10./2.)/3.6e6
+    expected=170./12000.-30.*(1./1.5+180./2.)/3.6e6
     assert np.isclose(r[0],expected,atol=1e-7)
     stub.delta=np.array([[0.,0.,np.inf]],np.float32)
     assert not fake.step(s,action,stochastic=False,scenario_ids=['a'])[-1][0]

@@ -53,7 +53,7 @@ a,b=model.predict_delta(rs,acts);c,d=model2.predict_delta(rs,acts);np.testing.as
 print('PASS ensemble checkpoint stochastic continuation')
 # Use actual predicted deltas, exact pose and clock; use fixture solar geometry, not PVLib.
 mp=ReplayBuffer(1600,seed=8)
-new_tilt,new_az,tau,dt,da,done=pose_transition(rs,acts,5,10,195)
+new_tilt,new_az,tau,dt,da,done=pose_transition(rs,acts,195)
 nxt=rs.copy();nxt[:,:3]=np.clip(rs[:,:3]+delta,0,1);nxt[:,3]=new_tilt;nxt[:,4:6]=new_az;nxt[:,TAU]=tau
 check_batch(nxt);reward=nxt[:,2]/6-30*(abs(dt)/1.5+abs(da)/2)/3.6e6
 for i in range(len(rs)):mp.add(rs[i],acts[i],reward[i],nxt[i],done[i])
