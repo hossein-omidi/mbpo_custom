@@ -1,0 +1,33 @@
+{
+  "patch": "Integrated Geometry10 Instantaneous-Target Action Patch v2",
+  "base_branch": "PostProcessing",
+  "action_semantics": "instantaneous_target_tilt_absolute_azimuth_relative_v1",
+  "changed_files": [
+    "mbpo/geometry10.py",
+    "mbpo/env/pv_tracking.py",
+    "SAC_workspace/src/environment/environment.py",
+    "SAC_workspace/src/agents/sac_agent.py",
+    "SAC_workspace/src/training/replay_buffer.py",
+    "SAC_workspace/src/training/experiment_protocol.py",
+    "MBPO_workspace/src/dynamics.py",
+    "MBPO_workspace/workflows/09_monte_carlo_evaluate.py",
+    "MBPO_workspace/workflows/06_model_validation.py",
+    "mbpo/audit_support.py",
+    "PV_experiments/representation/statistics.py",
+    "PV_experiments/representation/trajectories.py"
+  ],
+  "expected_source_blob_sha": {
+    "mbpo/geometry10.py": "45b6df5f89a407133da76d7c8c999d0fdbcf58d4",
+    "mbpo/env/pv_tracking.py": "686be049de3aef8320a8bc213950967d29efd998",
+    "SAC_workspace/src/environment/environment.py": "f03bbf29ff1d5bc01b3e424c0a8b59555190a6ba",
+    "SAC_workspace/src/agents/sac_agent.py": "77eee8ee022ed81c9524d3e1c0a2402be76d97c6",
+    "SAC_workspace/src/training/replay_buffer.py": "4c96d43d018d6a0791c6003d2ee76257463d8dbe",
+    "SAC_workspace/src/training/experiment_protocol.py": "56c6ae27ad5298cb041cc029b71bb3bb2b90e426",
+    "MBPO_workspace/src/dynamics.py": "63d717f15c1caf086bbda9df67b74c7e44ac4a83",
+    "MBPO_workspace/workflows/09_monte_carlo_evaluate.py": "32d321daa1aabeb07518037ab8e6d0da47aad66a",
+    "MBPO_workspace/workflows/06_model_validation.py": "72f8f5cdb38d9ed5b9d74dfd3061730e0c9632e7",
+    "mbpo/audit_support.py": "74d3543409543b6bddc6fb800fa61803d7b8908b",
+    "PV_experiments/representation/statistics.py": "85815e9e384635e17832150469272c1fb08adfc1",
+    "PV_experiments/representation/trajectories.py": "a0bf03e0c8f5c15d0b54fdb04d5ca950f431f569"
+  }
+}
