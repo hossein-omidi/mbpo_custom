@@ -38,7 +38,7 @@ def one_episode(env,sid,rid):
     moving_steps=0
     for t in range(env.horizon):
         action=np.array([.7,.8] if t%4==0 else [-.5,-.6] if t%4==1 else [0.,0.],dtype=np.float32)
-        tilt,az,tau,dt,da,terminal=pose_transition(obs[None,:],action[None,:],u.max_delta_tilt,u.max_delta_azimuth,env.horizon)
+        tilt,az,tau,dt,da,terminal=pose_transition(obs[None,:],action[None,:],env.horizon)
         obs,reward,done,info=env.step(action)
         if not np.allclose(obs[3:6],np.r_[tilt,az[0]],rtol=0,atol=4e-5) or not np.isclose(obs[-1],tau[0],atol=1e-7) or bool(done)!=bool(terminal[0]):
             raise AssertionError('Scripted movement pose/horizon parity failed')
@@ -149,9 +149,10 @@ def main(argv=None):
         baseline.reset(scenario_id=sid)
         raw=baseline.unwrapped.weather_profile.copy(deep=True)
         physical=baseline.unwrapped
+        from mbpo.geometry10 import hold_action
         nominal_energy=0.
         for t in range(baseline.horizon):
-            _obs,_rew,done,info=baseline.step(np.zeros(2,dtype=np.float32))
+            _obs,_rew,done,info=baseline.step(hold_action(physical.tilt))
             nominal_energy+=float(info['energy_kwh'])
         if not raw.equals(physical.weather_profile):
             raise AssertionError('Unperturbed NSRDB weather changed during nominal episode')

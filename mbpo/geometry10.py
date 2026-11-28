@@ -9,6 +9,7 @@ import numpy as np
 MODE = 'geometry10'
 STATE_DIM = 10
 ACTION_DIM = 2
+ACTION_SEMANTICS = 'instantaneous_target_tilt_absolute_azimuth_relative_v1'
 TAU = 9
 PANEL_AZ = slice(4, 6)
 SOLAR = slice(6, 9)
@@ -32,6 +33,64 @@ def circular(deg):
 def azimuth(pair):
     a = np.asarray(pair)
     return np.mod(np.rad2deg(np.arctan2(a[..., 0], a[..., 1])), 360.)
+
+
+def target_orientation_from_action(current_tilt_deg, current_azimuth_deg, actions):
+    # Decode target actions: absolute tilt and relative circular azimuth.
+    a = np.asarray(actions, dtype=np.float64)
+    if (a.ndim < 1 or a.shape[-1] != ACTION_DIM
+            or not np.isfinite(a).all() or np.any(np.abs(a) > 1.0)):
+        raise ValueError("Actions must be finite and inside [-1, 1]")
+    old_tilt = np.asarray(current_tilt_deg, dtype=np.float64)
+    old_azimuth = np.asarray(current_azimuth_deg, dtype=np.float64)
+    try:
+        old_tilt, old_azimuth, a_tilt, a_azimuth = np.broadcast_arrays(
+            old_tilt, old_azimuth, a[..., 0], a[..., 1])
+    except ValueError as exc:
+        raise ValueError("Current pose and action batch shapes are incompatible") from exc
+    if (not np.isfinite(old_tilt).all() or not np.isfinite(old_azimuth).all()
+            or np.any((old_tilt < 0.0) | (old_tilt > 90.0))
+            or np.any((old_azimuth < 0.0) | (old_azimuth >= 360.0))):
+        raise ValueError("Current panel pose is outside its physical domain")
+    target_tilt = 45.0 * (a_tilt + 1.0)
+    delta_azimuth = 180.0 * a_azimuth
+    target_azimuth = (old_azimuth + delta_azimuth) % 360.0
+    target_azimuth = np.where(target_azimuth == 360.0, 0.0, target_azimuth)
+    delta_tilt = target_tilt - old_tilt
+    if np.ndim(target_tilt) == 0:
+        return (float(target_tilt), float(target_azimuth),
+                float(delta_tilt), float(delta_azimuth))
+    return target_tilt, target_azimuth, delta_tilt, delta_azimuth
+
+
+def action_for_target_orientation(current_tilt_deg, current_azimuth_deg,
+                                  target_tilt_deg, target_azimuth_deg):
+    # Encode a physical target pose using the Geometry10 action convention.
+    current_tilt, current_azimuth, target_tilt, target_azimuth = np.broadcast_arrays(
+        np.asarray(current_tilt_deg, dtype=np.float64),
+        np.asarray(current_azimuth_deg, dtype=np.float64),
+        np.asarray(target_tilt_deg, dtype=np.float64),
+        np.asarray(target_azimuth_deg, dtype=np.float64))
+    if not all(np.isfinite(v).all() for v in
+               (current_tilt, current_azimuth, target_tilt, target_azimuth)):
+        raise ValueError("Current and target poses must be finite")
+    if (np.any((current_tilt < 0.0) | (current_tilt > 90.0))
+            or np.any((target_tilt < 0.0) | (target_tilt > 90.0))
+            or np.any((current_azimuth < 0.0) | (current_azimuth >= 360.0))
+            or np.any((target_azimuth < 0.0) | (target_azimuth >= 360.0))):
+        raise ValueError("Current and target poses must lie in the physical domain")
+    delta_azimuth = (target_azimuth - current_azimuth + 180.0) % 360.0 - 180.0
+    return np.stack((target_tilt / 45.0 - 1.0, delta_azimuth / 180.0),
+                    axis=-1).astype(np.float32)
+
+
+def hold_action(current_tilt_deg):
+    # Return the command that leaves both panel angles unchanged.
+    tilt = np.asarray(current_tilt_deg, dtype=np.float64)
+    if not np.isfinite(tilt).all() or np.any((tilt < 0.0) | (tilt > 90.0)):
+        raise ValueError("Current tilt must be finite and inside [0, 90] degrees")
+    return np.stack((tilt / 45.0 - 1.0, np.zeros_like(tilt)),
+                    axis=-1)
 
 
 def solar_features(zenith, solar_azimuth):
@@ -77,26 +136,26 @@ def angular_rmse_deg(a,b):
     return float(np.sqrt(np.mean(d*d)))
 
 
-def pose_transition(states,actions,max_tilt,max_az,horizon):
-    """Exact real-environment angular/time convention, including wrap and clipping."""
+def pose_transition(states, actions, horizon):
+    # Exact instantaneous target-pose and finite-horizon transition.
     x = check_batch(states)
-    a = np.asarray(actions,dtype=np.float32)
-    if x.ndim!=2 or a.shape!=(len(x),2) or not np.isfinite(a).all() or np.any(np.abs(a)>1.00001):
-        raise ValueError('Invalid geometry10 action batch')
-    if not np.isfinite([horizon,max_tilt,max_az]).all() or horizon<=0 or max_tilt<=0 or not 0<max_az<=180 or np.any(x[:,TAU]<=0):
-        raise ValueError('Invalid horizon, limits, or terminal starting state')
-    a=np.clip(a,-1.,1.)
-    old_tilt=x[:,3].astype(float)*90.
-    old_az=azimuth(x[:,PANEL_AZ].astype(float))
-    new_tilt=np.clip(old_tilt+a[:,0].astype(float)*max_tilt,0,90.)
-    new_az=(old_az+a[:,1].astype(float)*max_az)%360.
-    dt=new_tilt-old_tilt
-    da=(new_az-old_az+180.)%360.-180.
-    remaining=np.rint(x[:,TAU].astype(float)*horizon).astype(int)
-    if np.any(remaining<1) or np.any(remaining>horizon) or not np.allclose(x[:,TAU],remaining/horizon,atol=2e-6,rtol=0):
-        raise ValueError('Remaining time does not match finite-horizon grid')
-    tau=(remaining-1)/horizon
-    return new_tilt/90.,circular(new_az),tau,dt,da,remaining==1
+    a = np.asarray(actions, dtype=np.float32)
+    if (x.ndim != 2 or a.shape != (len(x), ACTION_DIM)
+            or not np.isfinite(a).all() or np.any(np.abs(a) > 1.0)):
+        raise ValueError("Invalid geometry10 action batch")
+    if (not np.isfinite(horizon) or horizon <= 0 or np.any(x[:, TAU] <= 0)):
+        raise ValueError("Invalid horizon or terminal starting state")
+    old_tilt = x[:, 3].astype(float) * 90.0
+    old_azimuth = azimuth(x[:, PANEL_AZ].astype(float)) % 360.0
+    new_tilt, new_azimuth, delta_tilt, delta_azimuth = target_orientation_from_action(
+        old_tilt, old_azimuth, a)
+    remaining = np.rint(x[:, TAU].astype(float) * horizon).astype(int)
+    if (np.any(remaining < 1) or np.any(remaining > horizon)
+            or not np.allclose(x[:, TAU], remaining / horizon, atol=2e-6, rtol=0)):
+        raise ValueError("Remaining time does not match finite-horizon grid")
+    tau = (remaining - 1) / horizon
+    return (new_tilt / 90.0, circular(new_azimuth), tau,
+            delta_tilt, delta_azimuth, remaining == 1)
 
 
 class SolarContext:

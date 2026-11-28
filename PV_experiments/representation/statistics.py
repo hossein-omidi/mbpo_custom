@@ -3,13 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-METHODS=('fixed_no_motion','sun_slew_limited','sac','mbpo')
+METHODS=('fixed_no_motion','sun_tracking','sac','mbpo')
 ORACLE='poa_instant_ideal'
-LABELS=dict(fixed_no_motion='Fixed (30° south)',sun_slew_limited='Astronomical (slew limited)',sac='SAC',mbpo='MBPO',poa_instant_ideal='Instantaneous DC upper reference')
-COLORS=dict(fixed_no_motion='#666666',sun_slew_limited='#D55E00',sac='#0072B2',mbpo='#009E73',poa_instant_ideal='#555555')
-LABELS.update(mbpo_minus_sac='MBPO − SAC',mbpo_minus_sun_slew_limited='MBPO − astronomical')
-COLORS.update(mbpo_minus_sac='#009E73',mbpo_minus_sun_slew_limited='#D55E00')
-PAIRS=(('mbpo','sac'),('mbpo','sun_slew_limited'),('sac','sun_slew_limited'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'))
+LABELS=dict(fixed_no_motion='Fixed (30° south)',sun_tracking='Astronomical (instantaneous)',sac='SAC',mbpo='MBPO',poa_instant_ideal='Instantaneous DC upper reference')
+COLORS=dict(fixed_no_motion='#666666',sun_tracking='#D55E00',sac='#0072B2',mbpo='#009E73',poa_instant_ideal='#555555')
+LABELS.update(mbpo_minus_sac='MBPO − SAC',mbpo_minus_sun_tracking='MBPO − astronomical')
+COLORS.update(mbpo_minus_sac='#009E73',mbpo_minus_sun_tracking='#D55E00')
+PAIRS=(('mbpo','sac'),('mbpo','sun_tracking'),('sac','sun_tracking'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'))
 
 
 def finite(x):

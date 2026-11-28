@@ -12,8 +12,8 @@ from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
 from .advanced_learning import finite,same,sha_file,write_json,save,csv_out
 
-METHODS=('fixed_no_motion','sun_slew_limited','sac','mbpo')
-LABELS={'fixed_no_motion':'Fixed mounting','sun_slew_limited':'Astronomical tracking','sac':'SAC','mbpo':'MBPO','mbpo_minus_sac':'MBPO − SAC','mbpo_minus_sun_slew_limited':'MBPO − astronomical'}
+METHODS=('fixed_no_motion','sun_tracking','sac','mbpo')
+LABELS={'fixed_no_motion':'Fixed mounting','sun_tracking':'Astronomical tracking','sac':'SAC','mbpo':'MBPO','mbpo_minus_sac':'MBPO − SAC','mbpo_minus_sun_tracking':'MBPO − astronomical'}
 FIELDS=('gross_kwh','movement_kwh','net_kwh')
 MONTHS=[calendar.month_abbr[m] for m in range(1,13)]
 
@@ -80,7 +80,7 @@ def aggregate(d,metric,layout):
     if metric in FIELDS:
         idx=FIELDS.index(metric);data={a:finite(d['values'][:,:,:,i,idx]) for i,a in enumerate(METHODS)}
     elif metric=='paired_net_gain_kwh':
-        x=d['values'][...,2];data={name:x[:,:,:,3]-x[:,:,:,j] for name,j in [('mbpo_minus_sac',2),('mbpo_minus_sun_slew_limited',1)]}
+        x=d['values'][...,2];data={name:x[:,:,:,3]-x[:,:,:,j] for name,j in [('mbpo_minus_sac',2),('mbpo_minus_sun_tracking',1)]}
     else:raise ValueError(metric)
     years=range(int(catalogue.year.min()),int(catalogue.year.max())+1)
     # Include calendar cells without eligible catalogue days (shown grey if valid).

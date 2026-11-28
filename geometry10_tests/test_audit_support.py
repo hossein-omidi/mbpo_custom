@@ -83,7 +83,7 @@ def test_hierarchical_envelope_counts_all_draws():
 
 
 def test_action_regret_and_difference_error():
-    rows=[dict(scenario_id='d',step=0,action_type='zero',actual_reward_kwh=.001,predicted_reward_kwh=.002),
+    rows=[dict(scenario_id='d',step=0,action_type='hold',actual_reward_kwh=.001,predicted_reward_kwh=.002),
           dict(scenario_id='d',step=0,action_type='move',actual_reward_kwh=.002,predicted_reward_kwh=.001)]
     r=counterfactual_metrics(rows);assert r['pairwise_agreement']==0 and np.isclose(r['mean_one_step_regret_kwh'],.001)
     assert np.isclose(r['reward_difference_rmse_kwh'],.002)

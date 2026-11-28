@@ -6,7 +6,7 @@ replay the same policy prefix to reconstruct each observed state, then compare
 several alternative actions against the real next transition.
 """
 from __future__ import annotations
-from mbpo.geometry10 import TAU, PANEL_AZ, SOLAR, angular_rmse_deg
+from mbpo.geometry10 import TAU, PANEL_AZ, SOLAR, angular_rmse_deg, hold_action
 
 import argparse
 import csv
@@ -151,16 +151,18 @@ def _run_policy_trajectory(env, agent, scenario_id, realization_id=0):
             np.asarray(rewards, dtype=np.float64))
 
 
-def _counterfactual_actions(policy_action):
+def _counterfactual_actions(policy_action, state):
+    # Action probes with independent tilt/azimuth effects under target semantics.
+    hold = hold_action(float(state[3]) * 90.0)
     return [
         ("policy", np.asarray(policy_action, dtype=np.float32)),
-        ("zero", np.asarray([0.0, 0.0], dtype=np.float32)),
+        ("hold", hold),
         ("tilt_positive", np.asarray([1.0, 0.0], dtype=np.float32)),
         ("tilt_negative", np.asarray([-1.0, 0.0], dtype=np.float32)),
-        ("azimuth_positive", np.asarray([0.0, 1.0], dtype=np.float32)),
-        ("azimuth_negative", np.asarray([0.0, -1.0], dtype=np.float32)),
-        ("diagonal_positive", np.asarray([1.0, 1.0], dtype=np.float32)),
-        ("diagonal_negative", np.asarray([-1.0, -1.0], dtype=np.float32)),
+        ("azimuth_positive", np.asarray([hold[0], 0.5], dtype=np.float32)),
+        ("azimuth_negative", np.asarray([hold[0], -0.5], dtype=np.float32)),
+        ("diagonal_positive", np.asarray([1.0, 0.5], dtype=np.float32)),
+        ("diagonal_negative", np.asarray([-1.0, -0.5], dtype=np.float32)),
     ]
 
 
@@ -298,7 +300,7 @@ def run_validation(args):
             selected_steps = np.unique(np.linspace(
                 0, env.horizon - 1, num=min(int(args.states_per_scenario), env.horizon), dtype=int))
             for t in selected_steps:
-                for action_name, candidate in _counterfactual_actions(actions[t]):
+                for action_name, candidate in _counterfactual_actions(actions[t], states[t]):
                     replay_obs = env.reset(
                         scenario_id=sid, realization_id=args.realization_id)
                     for prefix_action in actions[:int(t)]:

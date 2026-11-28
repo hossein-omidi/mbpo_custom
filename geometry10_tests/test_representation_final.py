@@ -108,7 +108,7 @@ def test_actual_rich_renderer(tmp_path,monkeypatch):
     from PV_experiments.representation import trajectories as tr
     data,raw,w,o=fixture([0,1]);directory=tmp_path/'collection';directory.mkdir();out=tmp_path/'report';out.mkdir()
     # Bypass physical replay only; render the actual full rich statistics and plots.
-    manifest=dict(schema=1,stage='validation',scope='full',days=data['days'],draws=2,seeds=[0,1],fields=list(tr.FIELDS),weather_fields=list(tr.WEATHER),oracle_fields=list(tr.ORACLE_FIELDS),methods=list(METHODS),sources={},files={f'seed{s}/{d}.npz':'fixture' for s in data['seeds'] for d in data['days']})
+    manifest=dict(action_semantics=tr.ACTION_SEMANTICS,schema=1,stage='validation',scope='full',days=data['days'],draws=2,seeds=[0,1],fields=list(tr.FIELDS),weather_fields=list(tr.WEATHER),oracle_fields=list(tr.ORACLE_FIELDS),methods=list(METHODS),sources={},files={f'seed{s}/{d}.npz':'fixture' for s in data['seeds'] for d in data['days']})
     (directory/'trajectory_manifest.json').write_text(json.dumps(manifest))
     def load(directory,manifest,data,sid):
         d=data['days'].index(sid);return raw[:,d],w[d],o[d]

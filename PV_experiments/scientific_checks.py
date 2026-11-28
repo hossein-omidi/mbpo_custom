@@ -5,9 +5,9 @@ import json
 import numpy as np
 import pandas as pd
 
-METHODS=('fixed_no_motion','sun_slew_limited','sac','mbpo')
+METHODS=('fixed_no_motion','sun_tracking','sac','mbpo')
 FIELDS=('gross_kwh','movement_kwh','net_kwh')
-ACTIONS=('policy','zero','tilt_positive','tilt_negative','azimuth_positive','azimuth_negative','diagonal_positive','diagonal_negative')
+ACTIONS=('policy','hold','tilt_positive','tilt_negative','azimuth_positive','azimuth_negative','diagonal_positive','diagonal_negative')
 CHANNELS=('dni_norm','dhi_norm','power_norm')
 
 
@@ -103,7 +103,7 @@ def validate_daily_summary(x,days,summary):
             same(np.quantile(y[i],[.05,.5,.95]),[v[k] for k in ('q05','median','q95')],'MC day quantiles')
     if set(summary['methods'])!=set(METHODS):raise ValueError('Incorrect MC methods in summary')
     for j,method in enumerate(METHODS):check(x[:,:,j,2],summary['methods'][method])
-    pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),('mbpo','sun_slew_limited'),('sac','sun_slew_limited')]
+    pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),('mbpo','sun_tracking'),('sac','sun_tracking')]
     if set(summary['paired_net_energy_differences'])!={a+'_minus_'+b for a,b in pairs}:raise ValueError('Incorrect MC paired methods')
     for a,b in pairs:check(x[:,:,METHODS.index(a),2]-x[:,:,METHODS.index(b),2],summary['paired_net_energy_differences'][a+'_minus_'+b])
 

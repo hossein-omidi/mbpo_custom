@@ -101,19 +101,19 @@ def test_angle_wrap_and_pose_parity_dense():
     rem=rng.integers(1,196,n); rem[:2]=1
     a=rng.uniform(-1,1,(n,2)).astype(np.float32); a[:4]=[[1,1],[-1,-1],[1,1],[-1,-1]]
     states=np.stack([build(100,20,12,t,g,70,1,k/195) for t,g,k in zip(tilt0,az0,rem)])
-    tilt,pair,tau,dt,da,done=pose_transition(states,a,5.,10.,195)
-    expected_tilt=np.clip(tilt0+a[:,0].astype(float)*5,0,90)
-    expected_az=(az0+a[:,1].astype(float)*10)%360
+    tilt,pair,tau,dt,da,done=pose_transition(states,a,195)
+    expected_tilt=45*(1+a[:,0].astype(float))
+    expected_az=(az0+a[:,1].astype(float)*180)%360
     np.testing.assert_allclose(tilt*90,expected_tilt,atol=5e-6,rtol=0)
     np.testing.assert_allclose(pair,circular(expected_az),atol=1e-7,rtol=0)
     np.testing.assert_allclose(dt,expected_tilt-tilt0,atol=5e-6,rtol=0)
-    np.testing.assert_allclose(da,a[:,1].astype(float)*10,atol=1e-10,rtol=0)
+    np.testing.assert_allclose(da,a[:,1].astype(float)*180,atol=1e-10,rtol=0)
     np.testing.assert_array_equal(done,rem==1)
     np.testing.assert_allclose(tau,(rem-1)/195,atol=1e-12,rtol=0)
     assert np.linalg.norm(circular(359.999)-circular(.001))<4e-5
     np.testing.assert_allclose(np.linalg.norm(pair,axis=1),1,atol=1e-12)
     cost=30*(abs(dt)/1.5+abs(da)/2)/3.6e6
-    assert (cost>=0).all() and cost.max()<=30*(5/1.5+10/2)/3.6e6+1e-12
+    assert (cost>=0).all() and cost.max()<=30*(90/1.5+180/2)/3.6e6+1e-12
 
 
 def test_budget_arithmetic_and_batch_fraction():
@@ -154,9 +154,9 @@ def test_real_environment_angular_boundaries_when_data_available():
         for i in range(env.horizon):
             # Start at (30,180); move through 360, reverse through 0, repeat.
             direction=1. if (i//20)%2==0 else -1.
-            a=np.array([direction,direction],np.float32)
+            a=np.array([direction,0.4*direction],np.float32)
             old_az=float(u.azimuth)
-            tilt,pair,tau,dt,da,done=pose_transition(s[None,:],a[None,:],u.max_delta_tilt,u.max_delta_azimuth,env.horizon)
+            tilt,pair,tau,dt,da,done=pose_transition(s[None,:],a[None,:],env.horizon)
             n,r,terminal,info=env.step(a)
             np.testing.assert_allclose(n[3:6],np.r_[tilt,pair[0]],atol=4e-5,rtol=0)
             np.testing.assert_allclose(n[TAU],tau[0],atol=1e-7,rtol=0)

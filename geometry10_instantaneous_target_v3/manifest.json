@@ -1,0 +1,26 @@
+{
+  "package": "Geometry10 Instantaneous Target v3 \u2014 branch-independent installer",
+  "patch_version": "v3",
+  "repository_reference": "hossein-omidi/mbpo_custom",
+  "reference_base_commit": "94cbec5c5c86d3e60bfb7c033c433e5205800b63",
+  "base_commit_is_enforced": false,
+  "branch_is_checked_or_modified": false,
+  "git_status_is_used": false,
+  "patch_filename": "Geometry10_Instantaneous_Target_v3.patch",
+  "patch_sha256": "9d50eca571103a07c591bd43f5a347e1fed13f81fb962d50145bef4ab93e03a9",
+  "patch_diff_entries": 30,
+  "installer": "install.py",
+  "modes": [
+    "--dry-run",
+    "--apply"
+  ],
+  "compatibility_check": "git apply --check --whitespace=error-all",
+  "patch_unicode_encoding_repaired": true,
+  "encoding_replacements": {
+    "\u00e2\u02c6\u2019": 8,
+    "\u00c2\u00b1": 5,
+    "\u00c2\u00b0": 2,
+    "\u00e2\u20ac\u201d": 2
+  },
+  "scientific_patch_logic_changed_by_repair": false
+}

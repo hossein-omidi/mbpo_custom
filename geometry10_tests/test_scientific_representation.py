@@ -37,7 +37,7 @@ def mc(tmp_path):
     pd.DataFrame(clock).to_csv(tmp_path/'daily_power_mean_std_by_utc_step.csv',index=False)
     pd.DataFrame(pooled).to_csv(tmp_path/'mc_pooled_power_mean_sd_by_utc_step.csv',index=False)
     pd.DataFrame(clock).query('scenario_id == "2020-01-01"').to_csv(tmp_path/'first_day_power_mean_sd.csv',index=False)
-    pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),('mbpo','sun_slew_limited'),('sac','sun_slew_limited')]
+    pairs=[('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),('mbpo','sun_tracking'),('sac','sun_tracking')]
     dump(tmp_path/'mc_summary.json',dict(methods={a:nested(net[:,:,j],days) for j,a in enumerate(METHODS)},paired_net_energy_differences={a+'_minus_'+b:nested(net[:,:,METHODS.index(a)]-net[:,:,METHODS.index(b)],days) for a,b in pairs}))
     for a in ('sac','mbpo'):
         folder=tmp_path/a; e=folder/'periodic_evaluation';e.mkdir(parents=True);dirs[a]=folder; j=METHODS.index(a)

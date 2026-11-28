@@ -54,7 +54,7 @@ def _validate_raw_mc_file(path:Path,summary:dict,days:set[str]):
     No interpolation, no averaging by episode number, and no unpaired
     Monte Carlo records are accepted.
     """
-    methods=('sac','mbpo','fixed_no_motion','sun_slew_limited')
+    methods=('sac','mbpo','fixed_no_motion','sun_tracking')
     draws=int(summary['draws_per_day'])
     if draws<2:raise ValueError('Monte Carlo summary has fewer than two draws')
     expected={(day,rid) for day in days for rid in range(draws)}
@@ -77,7 +77,7 @@ def _validate_raw_mc_file(path:Path,summary:dict,days:set[str]):
             if old!=weather:
                 raise ValueError(f'{path}: SAC/MBPO/baseline weather realization mismatch {key}')
             by_key[key]=net
-            if method in ('fixed_no_motion','sun_slew_limited'):
+            if method in ('fixed_no_motion','sun_tracking'):
                 baselines[key]=net
     if len(by_key)!=len(expected)*len(methods):
         raise ValueError(f'{path}: missing Monte Carlo day/draw/controller combinations')
@@ -89,8 +89,8 @@ def _validate_raw_mc_file(path:Path,summary:dict,days:set[str]):
         if not math.isclose(mean,reported,rel_tol=1e-8,abs_tol=1e-8):
             raise ValueError(f'{path}: {method} MC summary mean disagrees with raw transitions')
     for label in ('mbpo_minus_sac','mbpo_minus_fixed_no_motion',
-                  'sac_minus_fixed_no_motion','mbpo_minus_sun_slew_limited',
-                  'sac_minus_sun_slew_limited'):
+                  'sac_minus_fixed_no_motion','mbpo_minus_sun_tracking',
+                  'sac_minus_sun_tracking'):
         left,right=label.split('_minus_')
         mean=statistics.fmean(by_key[(sid,rid,left)]-by_key[(sid,rid,right)]
                               for sid,rid in sorted(expected))
@@ -174,7 +174,7 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
         return
     out.mkdir(parents=True,exist_ok=True)
     metric_rows=[]
-    for alg in ('sac','mbpo','fixed_no_motion','sun_slew_limited'):
+    for alg in ('sac','mbpo','fixed_no_motion','sun_tracking'):
         vals=[float(data['methods'][alg]['mean_net_kwh']) for _,_,data in inputs]
         mu,sd=summary_statistics(vals)
         metric_rows.append({'method':alg,'n_training_seeds':len(seeds),
@@ -184,7 +184,7 @@ def report_mc(cfg,seeds,stage,root=PROJECT_ROOT,dry_run=False):
             'weather_draws_per_day':inputs[0][2]['draws_per_day']})
     differences=[]
     for key in ('mbpo_minus_sac','mbpo_minus_fixed_no_motion','sac_minus_fixed_no_motion',
-                'mbpo_minus_sun_slew_limited','sac_minus_sun_slew_limited'):
+                'mbpo_minus_sun_tracking','sac_minus_sun_tracking'):
         vals=[float(data['paired_net_energy_differences'][key]['mean_net_kwh']) for _,_,data in inputs]
         mu,sd=summary_statistics(vals)
         differences.append({'paired_method_difference':key,'n_training_seeds':len(seeds),

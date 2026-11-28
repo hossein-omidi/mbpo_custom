@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from .statistics import METHODS,ORACLE,LABELS,COLORS,clock_grid,check_close,finite,from_day_moments,circular_stats,season,trajectory_clock,cumulative_plot_series
 from .common import Figures,save_csv,write_json,atomic_json,read_json,sha,style,line,plt
+from mbpo.geometry10 import (ACTION_SEMANTICS, hold_action,
+    action_for_target_orientation, target_orientation_from_action)
 
 FIELDS=('power_w','gross_kwh','movement_kwh','net_kwh','tilt_deg','azimuth_deg','action_tilt','action_azimuth','delta_tilt_deg','delta_azimuth_deg','poa_wm2','cell_temp_c')
 WEATHER=('dni_wm2','ghi_wm2','dhi_wm2','ambient_temperature_c','wind_speed_m_s','surface_albedo','solar_zenith_deg','solar_azimuth_deg')
@@ -33,29 +35,62 @@ class Recorder:
         self.records=[];self.info=[];obs=self.env.reset(*args,**kw);u=self.unwrapped
         self.pose=(float(u.tilt),float(u.azimuth));return obs
     def step(self,action):
-        u=self.unwrapped; previous=(float(u.tilt),float(u.azimuth)); a=finite(action)
-        if a.shape!=(2,) or (np.abs(a)>1.00001).any():raise ValueError('Invalid command')
-        if self.method=='fixed_no_motion':check_close(a,[0,0],'Fixed baseline action')
-        if self.method=='sun_slew_limited':
+        u=self.unwrapped
+        previous=(float(u.tilt),float(u.azimuth))
+        a=finite(action)
+        if a.shape!=(2,) or (np.abs(a)>1.0).any():
+            raise ValueError('Invalid command')
+        if self.method=='fixed_no_motion':
+            check_close(a,hold_action(previous[0]),'Fixed baseline hold action')
+        if self.method=='sun_tracking':
             sp=u._solar_position(u.current_time)
-            expected=[0.,0.] if sp.zenith>=90 else [np.clip((np.clip(sp.zenith,0,90)-previous[0])/u.max_delta_tilt,-1,1),np.clip(shortest(sp.azimuth,previous[1])/u.max_delta_azimuth,-1,1)]
-            check_close(a,expected,'Astronomical current-time command',atol=1e-6)
+            if sp.zenith>=90:
+                expected=hold_action(previous[0])
+            else:
+                from mbpo.env.pvlib_physics import dual_axis_tracking_targets
+                target_tilt,target_azimuth=dual_axis_tracking_targets(
+                    float(sp.zenith),float(sp.azimuth))
+                expected=action_for_target_orientation(
+                    previous[0],previous[1],float(target_tilt),float(target_azimuth))
+            check_close(a,expected,'Astronomical instantaneous target command',atol=1e-6)
+
         obs,reward,done,info=self.env.step(action)
-        dt=float(info['delta_tilt_deg']);da=float(info['delta_azimuth_deg']); tilt=float(info['tilt']);az=float(info['azimuth'])
-        if not (0<=tilt<=90 and 0<=az<360):raise ValueError('Panel orientation outside valid domain')
-        check_close([dt,da],[tilt-previous[0],shortest(az,previous[1])],'Executed movement')
-        check_close([tilt,shortest(az,(previous[1]+a[1]*u.max_delta_azimuth)%360)],[np.clip(previous[0]+a[0]*u.max_delta_tilt,0,90),0.],'Command to physical pose',atol=1e-5)
-        if abs(dt)>u.max_delta_tilt+1e-6 or abs(da)>u.max_delta_azimuth+1e-6:raise ValueError('Slew limits violated')
+        if info.get('action_semantics')!=ACTION_SEMANTICS:
+            raise ValueError('Physical transition used an unexpected action contract')
+        dt=float(info['delta_tilt_deg'])
+        da=float(info['delta_azimuth_deg'])
+        tilt=float(info['tilt'])
+        az=float(info['azimuth'])
+        if not (0<=tilt<=90 and 0<=az<360):
+            raise ValueError('Panel orientation outside valid domain')
+
+        target_tilt,target_azimuth,expected_dt,expected_da=target_orientation_from_action(
+            previous[0],previous[1],a)
+        check_close([dt,da],[expected_dt,expected_da],'Executed target displacement')
+        check_close([tilt,shortest(az,target_azimuth)],[target_tilt,0.],
+                    'Action-to-target pose mapping',atol=1e-5)
+
+        # The target is instantaneous in the MDP; motor energy still reflects
+        # physical travel time. The maximum possible sequential travel is
+        # 90/tilt_rate + 180/azimuth_rate and must fit the five-minute interval.
         seconds=abs(dt)/u.slew_rate_tilt_deg_s+abs(da)/u.slew_rate_azimuth_deg_s
-        if seconds>u.interval_hours*3600+1e-7:raise ValueError('Sequential actuator time exceeds interval')
+        if seconds>u.interval_hours*3600+1e-7:
+            raise ValueError('Sequential actuator time exceeds interval')
         cost=u.movement_penalty*u.actuator_power_w*seconds/3.6e6
-        if u.movement_cost_mode!='geometry':raise ValueError('Nonphysical movement cost mode')
+        if u.movement_cost_mode!='geometry':
+            raise ValueError('Nonphysical movement cost mode')
         check_close(info['movement_cost'],cost,'Actuator energy',atol=1e-10)
-        check_close(info['energy_kwh'],info['power_dc_w']*u.interval_hours/1000,'Physical power integration',atol=1e-10)
+        check_close(info['energy_kwh'],info['power_dc_w']*u.interval_hours/1000,
+                    'Physical power integration',atol=1e-10)
         check_close(reward,info['energy_kwh']-cost,'Net reward',atol=1e-10)
-        if self.method=='fixed_no_motion':check_close([tilt,az,dt,da,cost],[*self.pose,0,0,0],'Fixed pose and cost')
-        self.records.append([info['power_dc_w'],info['energy_kwh'],cost,reward,tilt,az,a[0],a[1],dt,da,info['poa_global'],info['cell_temperature_c']]);self.info.append(dict(info))
+        if self.method=='fixed_no_motion':
+            check_close([tilt,az,dt,da,cost],[*self.pose,0,0,0],
+                        'Fixed pose and cost', atol=3e-6)
+        self.records.append([info['power_dc_w'],info['energy_kwh'],cost,reward,
+            tilt,az,a[0],a[1],dt,da,info['poa_global'],info['cell_temperature_c']])
+        self.info.append(dict(info))
         return obs,reward,done,info
+
 
 
 def oracle_from_weather(u,infos):
@@ -91,7 +126,7 @@ def collect(cfg,split,data,stage,scope,root,out):
     mc=importlib.import_module('MBPO_workspace.workflows.09_monte_carlo_evaluate')
     if tuple(mc.METHODS)!=METHODS:raise ValueError('Current evaluation registry differs from audited representation contract')
     phys=load_physics_config(cfg,root); days=data['days'] if scope=='full' else representative_days(data['days']);M=data['draws'];
-    plan=dict(schema=1,stage=stage,scope=scope,days=days,draws=M,seeds=data['seeds'],fields=list(FIELDS),weather_fields=list(WEATHER),oracle_fields=list(ORACLE_FIELDS),methods=list(METHODS),sources=data['sources'],collector_sha256=sha(Path(__file__)))
+    plan=dict(schema=1,stage=stage,scope=scope,days=days,draws=M,seeds=data['seeds'],fields=list(FIELDS),weather_fields=list(WEATHER),oracle_fields=list(ORACLE_FIELDS),methods=list(METHODS),action_semantics=ACTION_SEMANTICS,sources=data['sources'],collector_sha256=sha(Path(__file__)))
     planfile=out/'collection_plan.json';progress=out/'collection_progress.json'
     if planfile.exists():
         if read_json(planfile)!=plan:raise ValueError('Existing collection inputs or code changed; select a new trajectory tag')
@@ -145,13 +180,13 @@ def collect(cfg,split,data,stage,scope,root,out):
                 finally:
                     if os.path.exists(tmp):os.unlink(tmp)
                 u=env.unwrapped
-                audit=dict(min_oracle_margin_w=float((oracle[:,None,:,0]-raw[:,:,:,0]).min()),max_actuator_seconds=float((np.abs(raw[:,:,:,8])/u.slew_rate_tilt_deg_s+np.abs(raw[:,:,:,9])/u.slew_rate_azimuth_deg_s).max()),max_fixed_movement_kwh=float(raw[:,0,:,2].max()),checked_feasible_steps=int(M*len(METHODS)*195),actuator_parameters=dict(power_w=float(u.actuator_power_w),tilt_rate_deg_s=float(u.slew_rate_tilt_deg_s),azimuth_rate_deg_s=float(u.slew_rate_azimuth_deg_s),cost_gain=float(u.movement_penalty),max_delta_tilt_deg=float(u.max_delta_tilt),max_delta_azimuth_deg=float(u.max_delta_azimuth)))
+                audit=dict(min_oracle_margin_w=float((oracle[:,None,:,0]-raw[:,:,:,0]).min()),max_actuator_seconds=float((np.abs(raw[:,:,:,8])/u.slew_rate_tilt_deg_s+np.abs(raw[:,:,:,9])/u.slew_rate_azimuth_deg_s).max()),max_fixed_movement_kwh=float(raw[:,0,:,2].max()),checked_feasible_steps=int(M*len(METHODS)*195),actuator_parameters=dict(power_w=float(u.actuator_power_w),tilt_rate_deg_s=float(u.slew_rate_tilt_deg_s),azimuth_rate_deg_s=float(u.slew_rate_azimuth_deg_s),cost_gain=float(u.movement_penalty)))
                 files[name]=dict(sha256=sha(p),audit=audit);atomic_json(progress,files);print(f'Collected {stage} seed {seed} {sid} ({M} paired draws)',flush=True)
         finally:env.close()
     if set(files)!=expected:raise ValueError('Incomplete rich trajectory collection')
     audits=[v['audit'] for v in files.values()]
     if any(a['actuator_parameters']!=audits[0]['actuator_parameters'] for a in audits):raise ValueError('Actuator parameters changed across collection')
-    atomic_json(out/'baseline_audit.json',dict(scope=scope,stage=stage,days=days,seeds=data['seeds'],draws=M,checked_feasible_steps=sum(a['checked_feasible_steps'] for a in audits),min_oracle_margin_w=min(a['min_oracle_margin_w'] for a in audits),max_actuator_seconds=max(a['max_actuator_seconds'] for a in audits),max_fixed_movement_kwh=max(a['max_fixed_movement_kwh'] for a in audits),fixed_pose_deg=[30,180],actuator_parameters=audits[0]['actuator_parameters'],oracle='isotropic POA maximizer, DC monotonicity certified for each exact perturbed weather row; no movement or net energy',astronomical='current decision-time sun position, same slew bounds, darkness holds; no future-weather access',cost='executed angular movement, sequential motors; excludes overnight reset, holding/idle and other losses'))
+    atomic_json(out/'baseline_audit.json',dict(scope=scope,stage=stage,days=days,seeds=data['seeds'],draws=M,checked_feasible_steps=sum(a['checked_feasible_steps'] for a in audits),min_oracle_margin_w=min(a['min_oracle_margin_w'] for a in audits),max_actuator_seconds=max(a['max_actuator_seconds'] for a in audits),max_fixed_movement_kwh=max(a['max_fixed_movement_kwh'] for a in audits),fixed_pose_deg=[30,180],action_semantics=ACTION_SEMANTICS,actuator_parameters=audits[0]['actuator_parameters'],oracle='isotropic POA maximizer, DC monotonicity certified for each exact perturbed weather row; no movement or net energy',astronomical='current decision-time sun position, instantaneous dual-axis target, darkness holds; no future-weather access',cost='executed angular movement, sequential motors; excludes overnight reset, holding/idle and other losses'))
     atomic_json(out/'trajectory_manifest.json',dict(**plan,files={k:v['sha256'] for k,v in files.items()},note='Full paired physical replay on selected days; oracle is gross only and unconstrained. No simulated net oracle.'))
 
 
@@ -180,7 +215,7 @@ def load_rich_day(directory,manifest,data,sid):
 
 def render_rich(directory,data,stage,scope,out):
     directory=Path(directory);m=read_json(directory/'trajectory_manifest.json');days=data['days'] if scope=='full' else representative_days(data['days']);M=data['draws'];S=len(data['seeds']);
-    required={'schema':1,'stage':stage,'scope':scope,'days':days,'draws':M,'seeds':data['seeds'],'fields':list(FIELDS),'weather_fields':list(WEATHER),'oracle_fields':list(ORACLE_FIELDS),'methods':list(METHODS),'sources':data['sources']}
+    required={'schema':1,'stage':stage,'scope':scope,'days':days,'draws':M,'seeds':data['seeds'],'fields':list(FIELDS),'weather_fields':list(WEATHER),'oracle_fields':list(ORACLE_FIELDS),'methods':list(METHODS),'action_semantics':ACTION_SEMANTICS,'sources':data['sources']}
     if any(m.get(k)!=v for k,v in required.items()):raise ValueError('Rich collection is stale or not the requested scope')
     if set(m['files'])!={f'seed{s}/{d}.npz' for s in data['seeds'] for d in days}:raise ValueError('Rich collection coverage mismatch')
     figs=Figures(out); moments={}; effort=[]; occupancy={method:np.zeros((18,36),dtype=float) for method in METHODS}; circ=[]; gap_heat=[]; selected=set(representative_days(days)); clock=8.75+np.arange(1,196)/12
@@ -197,10 +232,10 @@ def render_rich(directory,data,stage,scope,out):
                 for draw in range(M):effort.append(dict(seed=seed,scenario_id=sid,draw=draw,method=method,tilt_travel_deg=np.abs(p[si,draw,:,8]).sum(),azimuth_travel_deg=np.abs(p[si,draw,:,9]).sum(),movement_kwh=p[si,draw,:,2].sum(),gross_kwh=p[si,draw,:,1].sum(),net_kwh=p[si,draw,:,3].sum(),diffuse_fraction=w[draw,:,2].sum()/w[draw,:,1].sum() if w[draw,:,1].sum()>0 else np.nan,oracle_gross_kwh=oracle[draw,:,1].sum()))
         for name,a in [('power_w',oracle[:,:,0]),('cumulative_gross_kwh',np.cumsum(oracle[:,:,1],axis=-1))]:
             a=np.broadcast_to(a,(S,)+a.shape);moments.setdefault((ORACLE,name),[]).append((a.mean(axis=1),a.std(axis=1,ddof=1)))
-        for a,b in [('mbpo','sac'),('mbpo','sun_slew_limited')]:
+        for a,b in [('mbpo','sac'),('mbpo','sun_tracking')]:
             x=raw[:,:,METHODS.index(a)];y=raw[:,:,METHODS.index(b)]
             for key,v in [('power_difference_w',x[:,:,:,0]-y[:,:,:,0]),('cumulative_net_difference_kwh',np.cumsum(x[:,:,:,3]-y[:,:,:,3],axis=-1))]:moments.setdefault((f'{a}_minus_{b}',key),[]).append((v.mean(axis=1),v.std(axis=1,ddof=1)))
-        for method in ('sac','mbpo','sun_slew_limited','fixed_no_motion'):
+        for method in ('sac','mbpo','sun_tracking','fixed_no_motion'):
             gap=oracle[None,:,:,0]-raw[:,:,METHODS.index(method),:,0];moments.setdefault((method,'oracle_gross_power_gap_w'),[]).append((gap.mean(axis=1),gap.std(axis=1,ddof=1)))
         if sid in selected:
             # Deterministic, outcome-blind selected seed/draw, no averaged circular coordinates.
@@ -217,13 +252,13 @@ def render_rich(directory,data,stage,scope,out):
                     a=p[:,:,:,field].reshape(S*M,195);line(ax,trajectory_clock('action_tilt')[0],a.mean(axis=0),method,a.std(axis=0,ddof=0))
             axes[0].set_ylabel('Normalized tilt command');axes[1].set(ylabel='Normalized azimuth command',xlabel='Decision UTC hour (unwrapped)');axes[0].legend(ncol=2,fontsize=8)
             for ax in axes:style(ax)
-            fig.suptitle(f'{sid} — signed commands, mean ± empirical seed/draw SD');figs.save(fig,f'R02_daily_actions_{sid}','What are the signed control commands during the day?','Same historical day; equal seed/draw empirical mean ± population SD. Commands timestamped at decision time; normalized requested increments, not executed angles.',f'{sid}.npz')
+            fig.suptitle(f'{sid} — signed commands, mean ± empirical seed/draw SD');figs.save(fig,f'R02_daily_actions_{sid}','What are the signed control commands during the day?','Same historical day; equal seed/draw empirical mean ± population SD. Commands timestamped at decision time; normalized tilt-target and relative-azimuth coordinates, not executed angles.',f'{sid}.npz')
     # Compact sufficient statistics over all collected historical days.
     summary={}; rows=[]
     for (method,key),pairs in moments.items():
         mu=np.stack([p[0] for p in pairs],axis=1); sd=np.stack([p[1] for p in pairs],axis=1);s=from_day_moments(mu,sd,M);summary[(method,key)]=s; times,basis=trajectory_clock(key);rows.extend(dict(method=method,quantity=key,step=i+1,utc_hour_unwrapped=times[i],clock_basis=basis,n_days=len(days),**{k:v[i] for k,v in s.items()}) for i in range(195))
     save_csv(out,'rich_curve_statistics.csv',rows);save_csv(out,'circular_azimuth_statistics.csv',circ);eff=pd.DataFrame(effort);save_csv(out,'daily_effort_and_oracle.csv',eff)
-    for names,keys,filename,question in [((METHODS+(ORACLE,)),('cumulative_gross_kwh','cumulative_net_kwh','cumulative_actuator_kwh'),'R03_cumulative_energy','Where during the day do gross gains and movement costs accumulate?'),(('mbpo_minus_sac','mbpo_minus_sun_slew_limited'),('power_difference_w','cumulative_net_difference_kwh'),'R04_paired_response','When does MBPO gain or lose relative to competing feasible controllers?'),(METHODS,('oracle_gross_power_gap_w',),'R05_oracle_gap','How far are feasible controllers from instantaneous gross generation capacity?')]:
+    for names,keys,filename,question in [((METHODS+(ORACLE,)),('cumulative_gross_kwh','cumulative_net_kwh','cumulative_actuator_kwh'),'R03_cumulative_energy','Where during the day do gross gains and movement costs accumulate?'),(('mbpo_minus_sac','mbpo_minus_sun_tracking'),('power_difference_w','cumulative_net_difference_kwh'),'R04_paired_response','When does MBPO gain or lose relative to competing feasible controllers?'),(METHODS,('oracle_gross_power_gap_w',),'R05_oracle_gap','How far are feasible controllers from instantaneous gross generation capacity?')]:
         fig,axes=plt.subplots(len(keys),1,figsize=(9,3.3*len(keys)),sharex=True,squeeze=False)
         for ax,key in zip(axes[:,0],keys):
             for name in names:
@@ -238,7 +273,7 @@ def render_rich(directory,data,stage,scope,out):
     # Magnitudes expose cancellation in signed command averages. Executed motion
     # is shown at the resulting response timestamp, not assumed equal to request.
     fig,axes=plt.subplots(2,2,figsize=(10,7),sharex=False)
-    for ax,key,label in zip(axes.flat,('abs_action_tilt','abs_action_azimuth','abs_delta_tilt_deg','abs_delta_azimuth_deg'),('Absolute tilt command','Absolute azimuth command','Absolute executed tilt (deg)','Absolute executed azimuth (deg)')):
+    for ax,key,label in zip(axes.flat,('abs_action_tilt','abs_action_azimuth','abs_delta_tilt_deg','abs_delta_azimuth_deg'),('Absolute normalized tilt coordinate','Absolute normalized azimuth coordinate','Absolute executed tilt (deg)','Absolute executed azimuth (deg)')):
         tx,basis=trajectory_clock(key)
         for name in METHODS:
             z=summary[(name,key)];line(ax,tx,z['mean'],name,z['sd_total'])

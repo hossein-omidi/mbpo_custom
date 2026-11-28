@@ -117,7 +117,7 @@ def audit_checkpoint(root,cfg,meta,summary):
         s=check_batch(data['states']); t=check_batch(data['next_states']); a=np.asarray(data['actions']);r=np.asarray(data['rewards']);d=np.asarray(data['dones']);require(s.shape==(n,10) and t.shape==s.shape and a.shape==(n,2) and r.shape==d.shape==(n,1),'Replay tensor shape mismatch')
         require(np.isfinite(r).all() and np.isin(d,[0,1]).all(),'Invalid replay reward/done')
         if n:
-            tilt,pair,tau,dt,da,done=pose_transition(s,a,float(mdp['max_delta_tilt']),float(mdp['max_delta_azimuth']),h)
+            tilt,pair,tau,dt,da,done=pose_transition(s,a,h)
             require(np.allclose(t[:,3],tilt,atol=1e-6,rtol=0) and np.allclose(t[:,4:6],pair,atol=2e-6,rtol=0),'Replay executed geometry mismatch')
             require(np.allclose(t[:,9],tau,atol=1e-6,rtol=0) and np.array_equal(d[:,0].astype(bool),done),'Replay terminal/time mismatch')
             expected=t[:,2].astype(float)/6-scale*power*(abs(dt)/vt+abs(da)/va)/3.6e6

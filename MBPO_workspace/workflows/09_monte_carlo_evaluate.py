@@ -18,27 +18,23 @@ from datetime import datetime
 from pathlib import Path
 import numpy as np
 from mbpo.env.trajectory_uncertainty import normalized_spec,spec_fingerprint
+from mbpo.env.baseline_contract import astronomical_action
+from mbpo.geometry10 import hold_action
 
-METHODS=('fixed_no_motion','sun_slew_limited','sac','mbpo')
+METHODS=('fixed_no_motion','sun_tracking','sac','mbpo')
 PAIR_NAMES=(('mbpo','sac'),('mbpo','fixed_no_motion'),('sac','fixed_no_motion'),
-            ('mbpo','sun_slew_limited'),('sac','sun_slew_limited'))
+            ('mbpo','sun_tracking'),('sac','sun_tracking'))
 
 
 def action_for(method,env,obs,agent):
-    if method=='fixed_no_motion':return np.zeros(2,dtype=np.float32)
-    if method in ('mbpo','sac'):return agent.act(obs,deterministic=True)
-    if method!='sun_slew_limited':raise ValueError(method)
-    from mbpo.env.pvlib_physics import dual_axis_tracking_targets
     u=env.unwrapped
-    # Match the existing PeriodicEvaluator astronomical baseline: the
-    # sun position at the CURRENT decision timestamp determines the action.
-    # The plant then advances to t+1 and computes the resulting power.
-    sp=u._solar_position(u.current_time)
-    if float(sp.zenith)>=90.:return np.zeros(2,dtype=np.float32)
-    tilt,az=dual_axis_tracking_targets(float(sp.zenith),float(sp.azimuth))
-    dt=np.clip((tilt-u.tilt)/u.max_delta_tilt,-1,1)
-    da=((az-u.azimuth+180)%360-180)/u.max_delta_azimuth
-    return np.array([dt,np.clip(da,-1,1)],dtype=np.float32)
+    if method=='fixed_no_motion':
+        return hold_action(float(u.tilt))
+    if method in ('mbpo','sac'):
+        return agent.act(obs,deterministic=True)
+    if method!='sun_tracking':
+        raise ValueError(method)
+    return astronomical_action(u)
 
 
 def run_one(env,method,sid,draw,policy=None):

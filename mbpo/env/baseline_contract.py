@@ -21,6 +21,18 @@ _PVW = (
 )
 
 
+def astronomical_action(env):
+    """Point at the decision-time sun, holding the panel in darkness."""
+    from mbpo.geometry10 import action_for_target_orientation, hold_action
+    from mbpo.env.pvlib_physics import dual_axis_tracking_targets
+
+    sun = env._solar_position(env.current_time)
+    if sun.zenith >= 90.0:
+        return hold_action(env.tilt)
+    tilt, azimuth = dual_axis_tracking_targets(sun.zenith, sun.azimuth)
+    return action_for_target_orientation(env.tilt, env.azimuth, tilt, azimuth)
+
+
 def isotropic_max_poa_tilt(
         solar_zenith_deg, dni_wm2, ghi_wm2, dhi_wm2,
         albedo=_DEFAULT_ALBEDO):
@@ -102,6 +114,9 @@ def validate_paired_reference_group(group, *, require_oracle=False):
     if initial.shape != (2,) or not np.isfinite(initial).all():
         raise ValueError('Invalid fixed-mount orientation')
 
+    from mbpo.geometry10 import ACTION_SEMANTICS, hold_action
+    command = (hold_action(initial[0]) if fixed['infos'][0].get('action_semantics') == ACTION_SEMANTICS
+               else np.zeros(2))
     for t in range(n):
         if not np.allclose(
                 [fixed['tilt'][t], fixed['azimuth'][t]], initial, rtol=0, atol=1e-7):
@@ -109,8 +124,8 @@ def validate_paired_reference_group(group, *, require_oracle=False):
         if not np.allclose(
                 [fixed['action_tilt'][t], fixed['action_azimuth'][t],
                  fixed['delta_tilt_deg'][t], fixed['delta_azimuth_deg'][t]],
-                0., rtol=0, atol=1e-7):
-            raise ValueError('Fixed-mount action or movement was nonzero')
+                [*command, 0., 0.], rtol=0, atol=1e-7):
+            raise ValueError('Fixed-mount hold command or movement mismatch')
         if abs(float(fixed['cost'][t])) > 1e-10:
             raise ValueError('Fixed-mount movement cost was nonzero')
 
